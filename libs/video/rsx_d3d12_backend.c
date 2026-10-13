@@ -4886,17 +4886,20 @@ static void zconv_plan(void)
 {
     s_zview_off = 0; s_zview_slot = -1; s_zconv_at = 0xFFFFFFFFu;
     if (getenv("ZCONV_OFF")) return;
+    /* One pass: the zeta surfaces drawn with so far and the last op that used
+     * each. Rescanning every earlier op for every bound texture was
+     * O(draws^2 x units) -- ~300M compares a frame in Code Veronica's lighter
+     * scene (6500 draws), most of the render thread's time. */
+    enum { ZSEEN_MAX = 16 };
+    u32 zs_off[ZSEEN_MAX]; int zs_last[ZSEEN_MAX]; int nzs = 0;
     for (u32 d = 0; d < s_rb.count && d < MAX_DRAWS; d++) {
         const D3D12DrawRecord* dr = &s_rb.draws[d];
         if (!dr->is_vp || dr->is_clear || dr->is_copy) continue;
-        for (int u = 0; u < 4 && !s_zview_off; u++) {
+        for (int u = 0; u < 4 && !s_zview_off && nzs; u++) {
             if (!dr->tex[u].set || !dr->tex[u].raw) continue;
             u32 z = dr->tex[u].raw;
             int last = -1;
-            for (u32 e = 0; e < d; e++) {
-                const D3D12DrawRecord* q = &s_rb.draws[e];
-                if (q->is_vp && !q->is_clear && !q->is_copy && q->zeta_off == z) last = (int)e;
-            }
+            for (int k = 0; k < nzs; k++) if (zs_off[k] == z) { last = zs_last[k]; break; }
             if (last < 0) continue;
             int slot = off_rt_get(z, dr->tex[u].w, dr->tex[u].h, 8);
             if (slot < 0 || !zconv_init()) return;
@@ -4906,6 +4909,12 @@ static void zconv_plan(void)
                         z, d, dr->tex[u].w, dr->tex[u].h, s_zconv_at, 10); }
         }
         if (s_zview_off) return;
+        if (dr->zeta_off) {   /* this op now counts as a use for later ones */
+            int k = 0;
+            while (k < nzs && zs_off[k] != dr->zeta_off) k++;
+            if (k == nzs && nzs < ZSEEN_MAX) zs_off[nzs++] = dr->zeta_off;
+            if (k < nzs) zs_last[k] = (int)d;
+        }
     }
 }
 
