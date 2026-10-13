@@ -7071,9 +7071,18 @@ static void d3d12_clear(void* ud, u32 flags, u32 color, float depth, u8 stencil)
              * in one present. Gauged against the running MAX frame size (not
              * the last, which a leaked tiny batch would poison), so it
              * self-scales per title with no fixed threshold. */
-            if (s_frame_draws_max > 16 && s_d3d.draw_count < s_frame_draws_max / 4)
+            /* Two or more flips since the last present: a whole guest frame
+             * went by, so this is a real boundary whatever its size. The max
+             * never decayed either -- after Code Veronica's 10k-draw lighter
+             * scene, its few-hundred-draw menus sat under max/4 and presented
+             * once every 12k accumulated draws (0.2 fps, 120 flips per
+             * present), fast or slow depending on what was played before. */
+            if (s_frame_draws_max > 16 && s_d3d.draw_count < s_frame_draws_max / 4 &&
+                fc - s_last_present_flip < 2)
                 return;   /* intermediate: keep accumulating, flip stays pending */
             s_last_present_flip = fc;
+            s_frame_draws_max -= s_frame_draws_max / 16;   /* follow the current scene */
+            if (s_d3d.draw_count > s_frame_draws_max) s_frame_draws_max = s_d3d.draw_count;
         }
     }
 
