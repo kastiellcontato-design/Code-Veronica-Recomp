@@ -153,6 +153,12 @@ typedef struct {
     int is_copy;
     u32 copy_src, copy_sx, copy_sy, copy_dx, copy_dy, copy_w, copy_h;
     float cc[4];
+    /* CLEAR_SURFACE mask (bit0 Z, bit1 stencil, bits4-7 RGBA) and the
+     * depth it clears to. Code Veronica clears depth (0x3) and colour
+     * (0xF0) separately. */
+    u32 clr_flags;
+    float clr_depth;
+    u8 clr_stencil;
     /* Depth state at record time, for rsxcap manifests: the zeta surface
      * offset and whether/how the draw tests against it. */
     u32 zeta_off;
@@ -1305,7 +1311,7 @@ static int init_d3d12(u32 width, u32 height)
         rp[3].DescriptorTable.pDescriptorRanges = &vtex_range;
         rp[3].ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
 
-        D3D12_STATIC_SAMPLER_DESC samp[FP_TEX_UNITS + 4] = {0};
+        D3D12_STATIC_SAMPLER_DESC samp[FP_TEX_UNITS + 5] = {0};
         for (int _s = 0; _s < FP_TEX_UNITS; _s++) {
             samp[_s].Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
             samp[_s].AddressU = samp[_s].AddressV = samp[_s].AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
@@ -1313,10 +1319,21 @@ static int init_d3d12(u32 width, u32 height)
             samp[_s].MaxLOD = D3D12_FLOAT32_MAX;
             samp[_s].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
         }
-        /* s0 keeps point/clamp: the dbgfont atlas PS samples glyph cells and
-         * linear filtering bleeds neighbouring glyphs. */
-        samp[0].Filter = D3D12_FILTER_MIN_MAG_MIP_POINT;
-        samp[0].AddressU = samp[0].AddressV = samp[0].AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+        /* s0 is linear like s1-s7: guest programs sample unit 0 too, and a
+         * point s0 drew Code Veronica's 256x256 lighter flame as blocks.
+         * The dbgfont atlas PS, whose glyph cells bleed under linear
+         * filtering, has its own point/clamp sampler at s(FP_TEX_UNITS + 4)
+         * below. S0_POINT=1 restores the old point s0. */
+        if (getenv("S0_POINT")) {
+            samp[0].Filter = D3D12_FILTER_MIN_MAG_MIP_POINT;
+            samp[0].AddressU = samp[0].AddressV = samp[0].AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+        }
+        samp[FP_TEX_UNITS + 4].Filter = D3D12_FILTER_MIN_MAG_MIP_POINT;
+        samp[FP_TEX_UNITS + 4].AddressU = samp[FP_TEX_UNITS + 4].AddressV =
+            samp[FP_TEX_UNITS + 4].AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+        samp[FP_TEX_UNITS + 4].ShaderRegister = (UINT)(FP_TEX_UNITS + 4);
+        samp[FP_TEX_UNITS + 4].MaxLOD = D3D12_FLOAT32_MAX;
+        samp[FP_TEX_UNITS + 4].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
         /* s0-s3 again for the vertex stage: vertex textures are fetched
          * unfiltered. Same registers, disjoint visibility. */
         for (int _s = FP_TEX_UNITS; _s < FP_TEX_UNITS + 4; _s++) {
@@ -1329,7 +1346,7 @@ static int init_d3d12(u32 width, u32 height)
 
         D3D12_ROOT_SIGNATURE_DESC rd = {0};
         rd.NumParameters = 4; rd.pParameters = rp;
-        rd.NumStaticSamplers = FP_TEX_UNITS + 4; rd.pStaticSamplers = samp;
+        rd.NumStaticSamplers = FP_TEX_UNITS + 5; rd.pStaticSamplers = samp;
         rd.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
 
         ID3DBlob* sig = NULL; ID3DBlob* err = NULL;
@@ -2076,7 +2093,7 @@ static void compile_vp(void)
     /* Pixel shader mirrors dbgfont's FP: sample the atlas coverage at TEXCOORD0
      * (VP output o[7]), alpha-test at 0.5, output the vertex color (o[1]). */
     static const char ps[] =
-        "Texture2D tex : register(t0); SamplerState smp : register(s0);\n"
+        "Texture2D tex : register(t0); SamplerState smp : register(s12);\n"   /* point: s(FP_TEX_UNITS + 4) */
         "struct PSIn{ float4 pos:SV_Position; float4 col0:COLOR0; float4 col1:COLOR1; float4 fog:FOG;\n"
         "  float4 t0:TEXCOORD0; float4 t1:TEXCOORD1; float4 t2:TEXCOORD2; float4 t3:TEXCOORD3;\n"
         "  float4 t4:TEXCOORD4; float4 t5:TEXCOORD5; float4 t6:TEXCOORD6; float4 t7:TEXCOORD7; };\n"
@@ -5941,6 +5958,7 @@ static void render_frame_impl(void)
             memset(&last_vp, 0, sizeof last_vp);
             double _rec0 = perf_on() ? perf_now() : 0.0;
             int seen_small_vp = 0, captured = 0;
+            u32 cur_zeta = 0;   /* guest zeta surface the host depth buffer holds */
             for (u32 d = 0; d < s_rb.count && d < MAX_DRAWS; d++) {
                 const D3D12DrawRecord* dr = &s_rb.draws[d];
                 if (d == s_zconv_at) {
@@ -6039,8 +6057,19 @@ static void render_frame_impl(void)
                     s_d3d.cmd_list->lpVtbl->OMSetRenderTargets(s_d3d.cmd_list, nrt, rh, FALSE, &dsv_handle);
                     s_d3d.cmd_list->lpVtbl->RSSetViewports(s_d3d.cmd_list, 1, &vp);
                     s_d3d.cmd_list->lpVtbl->RSSetScissorRects(s_d3d.cmd_list, 1, &sc);
-                    s_d3d.cmd_list->lpVtbl->ClearDepthStencilView(s_d3d.cmd_list, dsv_handle,
-                        D3D12_CLEAR_FLAG_DEPTH | D3D12_CLEAR_FLAG_STENCIL, 1.0f, 0, 0, NULL);
+                    /* One host depth buffer stands in for every guest zeta
+                     * surface, so it is reset when a different zeta comes into
+                     * use -- not on every colour-target switch. Clearing per
+                     * switch wiped the scene's depth when Code Veronica went
+                     * back to its main target after a 320x180 pass, and the
+                     * lighter flame then drew through Claire. DEPTH_CLEAR_ON_SWITCH=1
+                     * restores the old behaviour. */
+                    { static int dcs = -1; if (dcs < 0) dcs = getenv("DEPTH_CLEAR_ON_SWITCH") ? 1 : 0;
+                      if (dcs || (dr->zeta_off && dr->zeta_off != cur_zeta)) {
+                          s_d3d.cmd_list->lpVtbl->ClearDepthStencilView(s_d3d.cmd_list, dsv_handle,
+                              D3D12_CLEAR_FLAG_DEPTH | D3D12_CLEAR_FLAG_STENCIL, 1.0f, 0, 0, NULL);
+                          if (dr->zeta_off) cur_zeta = dr->zeta_off;
+                      } }
                     /* RT_CLEARDBG=2: magenta-clear the surface the DRAWS bind,
                      * at the moment they bind it. The guest's own clears may go
                      * to a different surface entirely (they do here: clears to
@@ -6096,6 +6125,18 @@ static void render_frame_impl(void)
                 if (dr->is_clear) {
                     D3D12_CPU_DESCRIPTOR_HANDLE rh =
                         (cur_rt >= 0) ? off_rt_rtv(cur_rt) : rtv_handle;
+                    /* Honour the CLEAR_SURFACE mask: a depth-only clear (0x3)
+                     * must not wipe the colour target, and vice versa. A
+                     * zero mask keeps the old colour-only behaviour. */
+                    if (dr->clr_flags & 0x3u) {
+                        D3D12_CLEAR_FLAGS zf = (D3D12_CLEAR_FLAGS)0;
+                        if (dr->clr_flags & 1u) zf |= D3D12_CLEAR_FLAG_DEPTH;
+                        if (dr->clr_flags & 2u) zf |= D3D12_CLEAR_FLAG_STENCIL;
+                        s_d3d.cmd_list->lpVtbl->ClearDepthStencilView(s_d3d.cmd_list, dsv_handle,
+                            zf, dr->clr_depth, dr->clr_stencil, 0, NULL);
+                        if (dr->zeta_off) cur_zeta = dr->zeta_off;
+                    }
+                    if (dr->clr_flags && !(dr->clr_flags & 0xF0u)) continue;
                     /* RT_CLEARDBG=1: clear offscreen targets to magenta rather
                      * than the guest colour. "0.000% nonzero" cannot tell an
                      * untouched surface from one written black, and that
@@ -6948,9 +6989,6 @@ static void d3d12_present(void* ud, u32 buffer_id)
 static void d3d12_clear(void* ud, u32 flags, u32 color, float depth, u8 stencil)
 {
     (void)ud;
-    (void)flags;
-    (void)depth;
-    (void)stencil;
 
     /* Convert RSX ARGB u32 to float[4] RGBA */
     float cc[4];
@@ -6983,6 +7021,7 @@ static void d3d12_clear(void* ud, u32 flags, u32 color, float depth, u8 stencil)
             dr->rt_fmt = s_d3d.current_rsx_state ? s_d3d.current_rsx_state->surface_format : 0;
             if (s_d3d.current_rsx_state) { dr->zeta_off = s_d3d.current_rsx_state->surface_zeta_offset; dr->dtest = s_d3d.current_rsx_state->depth_test_enable; dr->dfunc = s_d3d.current_rsx_state->depth_func; }
             memcpy(dr->cc, cc, sizeof(cc));
+            dr->clr_flags = flags; dr->clr_depth = depth; dr->clr_stencil = stencil;
         }
         return;
     }
