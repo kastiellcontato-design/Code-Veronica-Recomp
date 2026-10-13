@@ -551,8 +551,47 @@ static void samp_rva_hit(uintptr_t rip)
     }
 }
 
+/* PS3_SAMPLE_MAIN: when RIP is outside the exe (ntdll/kernelbase -- a wait,
+ * yield or sleep), the first exe return address on the stack: which runtime
+ * call put the thread there. */
+#define SAMP_CALLERS 1024
+static uint32_t s_caller_key[SAMP_CALLERS];
+static uint64_t s_caller_ct[SAMP_CALLERS];
+static void samp_caller_hit(const CONTEXT* c)
+{
+    static uintptr_t base, end;
+    if (!base) {
+        base = (uintptr_t)GetModuleHandleA(NULL);
+        const IMAGE_NT_HEADERS* nt = (const IMAGE_NT_HEADERS*)(base + ((const IMAGE_DOS_HEADER*)base)->e_lfanew);
+        end = base + nt->OptionalHeader.SizeOfImage;
+    }
+    if (c->Rip >= base && c->Rip < end) return;
+    const uintptr_t* sp = (const uintptr_t*)c->Rsp;
+    for (int i = 0; i < 256; i++) {
+        uintptr_t v;
+        __try { v = sp[i]; } __except (1) { return; }
+        if (v < base || v >= end) continue;
+        uint32_t key = (uint32_t)(v - base) + 1;   /* exact return address */
+        for (uint32_t j = (key * 2654435761u) % SAMP_CALLERS, n = 0; n < SAMP_CALLERS; n++, j = (j + 1) % SAMP_CALLERS) {
+            if (s_caller_key[j] == key) { s_caller_ct[j]++; return; }
+            if (!s_caller_key[j]) { s_caller_key[j] = key; s_caller_ct[j] = 1; return; }
+        }
+        return;
+    }
+}
+
 static void samp_report(void)
 {
+    for (int rank = 0; rank < 15; rank++) {
+        uint64_t best = 0; int bi = -1;
+        for (int k = 0; k < SAMP_CALLERS; k++)
+            if (s_caller_ct[k] > best) { best = s_caller_ct[k]; bi = k; }
+        if (bi < 0 || !best) break;
+        fprintf(stderr, "[samp] caller ret 0x%08X (%llu)\n", s_caller_key[bi] - 1,
+                (unsigned long long)best);
+        s_caller_ct[bi] = 0;
+    }
+    memset(s_caller_key, 0, sizeof s_caller_key); memset(s_caller_ct, 0, sizeof s_caller_ct);
     fprintf(stderr, "[samp] %llu samples, %llu in guest code (%.1f%%)\n",
             (unsigned long long)s_samp_total, (unsigned long long)s_samp_guest,
             s_samp_total ? 100.0 * (double)s_samp_guest / (double)s_samp_total : 0.0);
@@ -646,10 +685,19 @@ static DWORD WINAPI samp_thread(LPVOID p)
     unsigned long long next_report = t0 + early[0];
     samp_build_map();
     for (;;) {
-        HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
-        if (snap != INVALID_HANDLE_VALUE) {
-            THREADENTRY32 te; te.dwSize = sizeof te;
-            if (Thread32First(snap, &te)) do {
+        /* PS3_SAMPLE_MAIN samples one known thread: skip the system-wide
+         * snapshot, which alone held the rate to ~25 samples/s. */
+        HANDLE snap = INVALID_HANDLE_VALUE;
+        THREADENTRY32 te; te.dwSize = sizeof te;
+        BOOL more;
+        if (s_samp_main > 0) {
+            te.th32ThreadID = s_samp_boot_tid; te.th32OwnerProcessID = pid; more = TRUE;
+        } else {
+            snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+            more = snap != INVALID_HANDLE_VALUE && Thread32First(snap, &te);
+        }
+        {
+            for (; more; more = snap != INVALID_HANDLE_VALUE && Thread32Next(snap, &te)) {
                 if (te.th32OwnerProcessID != pid || te.th32ThreadID == self) continue;
                 if (s_samp_main > 0 && te.th32ThreadID != s_samp_boot_tid) continue;
                 HANDLE h = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT,
@@ -660,6 +708,14 @@ static DWORD WINAPI samp_thread(LPVOID p)
                     if (GetThreadContext(h, &c)) {
                         s_samp_total++;
                         uint32_t g = samp_lookup((uintptr_t)c.Rip);
+                        /* The stack walk below credits the first lifted-looking
+                         * word on the stack, often a stale return address of a
+                         * hot leaf (Code Veronica: a 4-instruction matrix pop at
+                         * "50%"). Keep the raw RIP too and resolve it against
+                         * the link map: that one cannot lie. */
+                        if (s_samp_main > 0) { samp_rva_hit((uintptr_t)c.Rip);
+                                               samp_mod_hit((uintptr_t)c.Rip);
+                                               samp_caller_hit(&c); }
                         if (!g && s_samp_main > 0) g = samp_stack_guest(h, &c);
                         if (g) { s_samp_guest++; samp_hit(g); samp_tid_hit(te.th32ThreadID);
                                  samp_tid2(te.th32ThreadID, 1, 0); }
@@ -670,8 +726,8 @@ static DWORD WINAPI samp_thread(LPVOID p)
                     ResumeThread(h);
                 }
                 CloseHandle(h);
-            } while (Thread32Next(snap, &te));
-            CloseHandle(snap);
+            }
+            if (snap != INVALID_HANDLE_VALUE) CloseHandle(snap);
         }
         Sleep(period);
         if (GetTickCount64() >= next_report) {

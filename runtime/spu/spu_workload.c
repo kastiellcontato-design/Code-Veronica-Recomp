@@ -18,6 +18,7 @@
 #include <errno.h>
 #include "../platform/win32_compat.h"   /* LONG, InterlockedExchange, Sleep */
 #endif
+#include "../platform/host_thread_name.h"
 
 /* Set by the MFC DMA engine (spu_dma.h) when the cri task (image 22) issues a
  * real video-payload GET (>256B from a non-context EA) = it actually decoded,
@@ -1291,6 +1292,7 @@ int spu_workload_dispatch_task_async(const uint8_t* image, uint32_t image_size,
     HANDLE th = CreateThread(NULL, 256u << 20, spu_async_thread, j,
                              STACK_SIZE_PARAM_IS_A_RESERVATION, NULL);
     if (!th) { spu_taskset_mark(taskset_ea,taskid,0); free(j); return 0; }
+    ps3_host_thread_name(th, "spu:task %u", (unsigned)taskid);
     CloseHandle(th);   /* detached */
 #else
     /* Same 256 MB reservation, for the same reason: pthread stacks are

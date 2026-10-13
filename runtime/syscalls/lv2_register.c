@@ -14,6 +14,7 @@
 #include "ps3emu/nid.h"   /* ps3_compute_nid (static inline) */
 #include "lv2_syscall_table.h"
 #include "sys_ppu_thread.h"
+#include "../platform/host_thread_name.h"
 #include "sys_mutex.h"
 #include "sys_cond.h"
 #include "sys_semaphore.h"
@@ -991,6 +992,7 @@ static int64_t sys_spu_thread_group_start_handler(ppu_context* ctx)
                 t->host_thread = CreateThread(NULL, spu_host_stack_bytes(),
                                               spu_exec_thread_proc, t,
                                               STACK_SIZE_PARAM_IS_A_RESERVATION, NULL);
+                ps3_host_thread_name(t->host_thread, "spu:lifted %08X", (unsigned)t->entry_point);
 #else
                 pthread_mutex_init(&t->finish_event.mu, NULL);
                 pthread_cond_init(&t->finish_event.cv, NULL);
@@ -1112,6 +1114,7 @@ static int64_t sys_spu_thread_group_start_handler(ppu_context* ctx)
         t->host_thread = CreateThread(NULL, spu_host_stack_bytes(),
                                       spu_fallback_thread_proc, t,
                                       STACK_SIZE_PARAM_IS_A_RESERVATION, NULL);
+        ps3_host_thread_name(t->host_thread, "spu:interp %08X", (unsigned)t->entry_point);
 #else
         pthread_mutex_init(&t->finish_event.mu, NULL);
         pthread_cond_init(&t->finish_event.cv, NULL);

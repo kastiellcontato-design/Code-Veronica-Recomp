@@ -515,6 +515,61 @@ static int perf_on(void)
     if (v < 0) { const char* e = getenv("PERF"); v = e ? atoi(e) : 0; }
     return v;
 }
+/* [PERF-THREADS]: CPU each host thread burned since the last report, busiest
+ * first, by the names ps3_host_thread_name() gave them (ppu:<guest name>,
+ * spu:..., spurs:...). "guest 64%" says the game side is the bottleneck;
+ * this says which thread. */
+#include <tlhelp32.h>
+static void perf_thread_report(double wall)
+{
+    typedef HRESULT (WINAPI *get_desc_fn)(HANDLE, PWSTR*);
+    static get_desc_fn gd = NULL; static int looked = 0;
+    if (!looked) { HMODULE k = GetModuleHandleA("kernel32.dll");
+                   gd = k ? (get_desc_fn)(void*)GetProcAddress(k, "GetThreadDescription") : NULL;
+                   looked = 1; }
+    enum { MAXT = 256 };
+    static DWORD prev_tid[MAXT]; static unsigned long long prev_t[MAXT]; static int nprev = 0;
+    DWORD tid[MAXT]; unsigned long long tot[MAXT]; double dt[MAXT]; char name[MAXT][48];
+    int n = 0;
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+    if (snap == INVALID_HANDLE_VALUE) return;
+    THREADENTRY32 te; te.dwSize = sizeof te;
+    DWORD pid = GetCurrentProcessId();
+    for (BOOL ok = Thread32First(snap, &te); ok && n < MAXT; ok = Thread32Next(snap, &te)) {
+        if (te.th32OwnerProcessID != pid) continue;
+        HANDLE h = OpenThread(THREAD_QUERY_LIMITED_INFORMATION, FALSE, te.th32ThreadID);
+        if (!h) continue;
+        FILETIME c, e, k, u;
+        if (GetThreadTimes(h, &c, &e, &k, &u)) {
+            unsigned long long t = ((unsigned long long)k.dwHighDateTime << 32 | k.dwLowDateTime)
+                                 + ((unsigned long long)u.dwHighDateTime << 32 | u.dwLowDateTime);
+            unsigned long long p = 0;
+            for (int i = 0; i < nprev; i++) if (prev_tid[i] == te.th32ThreadID) { p = prev_t[i]; break; }
+            tid[n] = te.th32ThreadID; tot[n] = t; dt[n] = (double)(t - p) / 1e7;
+            snprintf(name[n], sizeof name[n], "tid%lu", (unsigned long)te.th32ThreadID);
+            PWSTR w = NULL;
+            if (gd && SUCCEEDED(gd(h, &w)) && w) {
+                if (w[0]) { int i = 0; for (; w[i] && i < 47; i++) name[n][i] = (char)w[i]; name[n][i] = 0; }
+                LocalFree(w);
+            }
+            n++;
+        }
+        CloseHandle(h);
+    }
+    CloseHandle(snap);
+    for (int i = 0; i < n; i++) { prev_tid[i] = tid[i]; prev_t[i] = tot[i]; }
+    int first = (nprev == 0); nprev = n;
+    if (first || wall <= 0.0) return;
+    fprintf(stderr, "[PERF-THREADS] %.1fs wall, %% of one core:", wall);
+    for (int shown = 0; shown < 10; shown++) {
+        int b = -1;
+        for (int i = 0; i < n; i++) if (dt[i] >= 0 && (b < 0 || dt[i] > dt[b])) b = i;
+        if (b < 0 || dt[b] < 0.02 * wall) break;
+        fprintf(stderr, " | %s %.0f%%", name[b], 100.0 * dt[b] / wall);
+        dt[b] = -1;
+    }
+    fprintf(stderr, "%c", 10);
+}
 /* DBG_LOCK: running clip-space centroid of the tracked mesh (RSX_DBG_VTX's
  * texture), so the debug camera can follow it. The ducks are driven by the
  * physics sim and drift every frame, so a fixed DBG_CENTER loses them as soon
@@ -6100,6 +6155,8 @@ static void render_frame(void)
                     s_perf_pso, 100.0 * s_perf_pso / fr,
                     s_perf_pso_calls, s_perf_pso_miss, s_perf_pso_hashbytes / 1024,
                     fr - s_perf_rf, 100.0 * (fr - s_perf_rf) / fr, 10);
+            perf_thread_report(fr);
+            { extern void spu_coh_stats_report(void*); spu_coh_stats_report(stderr); }
             s_perf_frame = 0.0; s_perf_tex = 0.0; s_perf_vtx = 0.0; s_perf_rf = 0.0;
             s_perf_gpu = 0.0; s_perf_pre = 0.0; s_perf_srv = 0.0; s_perf_pso = 0.0;
             s_perf_pso_calls = 0; s_perf_pso_miss = 0; s_perf_pso_hashbytes = 0;

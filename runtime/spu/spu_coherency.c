@@ -38,15 +38,19 @@ static volatile long g_lockline = 0;
  * pause, and yield after a long wait. The bare exchange loop let GH3's four
  * idle job-policy pollers saturate the line and delay every other SPU atomic
  * -- FMOD's mixer task among them, 25-40 ms at a time. */
+/* Contention counters for the [PERF] coherence line (spu_coh_stats_report). */
+static volatile long s_ll_contended, s_ll_yields;
 void spu_lockline_lock(void)
 {
     unsigned spins = 0;
-    while (_InterlockedExchange(&g_lockline, 1)) {
+    if (!_InterlockedExchange(&g_lockline, 1)) return;
+    _InterlockedIncrement(&s_ll_contended);
+    do {
         do {
             _mm_pause();
-            if (++spins >= 4096) { spins = 0; SwitchToThread(); }
+            if (++spins >= 4096) { spins = 0; _InterlockedIncrement(&s_ll_yields); SwitchToThread(); }
         } while (g_lockline);
-    }
+    } while (_InterlockedExchange(&g_lockline, 1));
 }
 void spu_lockline_unlock(void) { _InterlockedExchange(&g_lockline, 0); }
 #else
@@ -187,9 +191,41 @@ void spu_coh_notify_write_except(uint32_t ea, const void* self)
     }
 }
 
+/* Locked PPU stores, and the lines they hit most (racy counters, diagnostics). */
+static volatile long s_coh_stores, s_coh_wakes;
+#define SPU_COH_HOT 16
+static uint32_t s_coh_hot_line[SPU_COH_HOT];
+static unsigned s_coh_hot_ct[SPU_COH_HOT];
+
+void spu_coh_stats_report(void* fp)
+{
+    FILE* f = (FILE*)fp;
+#if defined(_MSC_VER)
+    long c = _InterlockedExchange(&s_ll_contended, 0), y = _InterlockedExchange(&s_ll_yields, 0);
+#else
+    long c = 0, y = 0;
+#endif
+    fprintf(f, "[PERF-COH] locked PPU stores %ld, SPU wakes %ld, lock contended %ld, yields %ld | hot lines:",
+            s_coh_stores, s_coh_wakes, c, y);
+    s_coh_stores = 0; s_coh_wakes = 0;
+    for (int r = 0; r < 6; r++) {
+        int b = -1;
+        for (int i = 0; i < SPU_COH_HOT; i++)
+            if (s_coh_hot_ct[i] && (b < 0 || s_coh_hot_ct[i] > s_coh_hot_ct[b])) b = i;
+        if (b < 0) break;
+        fprintf(f, " %08X x%u", s_coh_hot_line[b], s_coh_hot_ct[b]);
+        s_coh_hot_ct[b] = 0;
+    }
+    for (int i = 0; i < SPU_COH_HOT; i++) { s_coh_hot_ct[i] = 0; s_coh_hot_line[i] = 0; }
+    fprintf(f, "\n");
+}
+
 void spu_coh_notify_write(uint32_t ea)
 {
     uint32_t line = ea & ~127u;
+    s_coh_stores++;
+    { int i = (int)((line >> 7) * 2654435761u >> 28) & (SPU_COH_HOT - 1);
+      if (s_coh_hot_line[i] == line || !s_coh_hot_ct[i]) { s_coh_hot_line[i] = line; s_coh_hot_ct[i]++; } }
     for (int i = 0; i < SPU_COH_MAX_CTX; i++) {
         spu_context* c = s_coh_ctxs[i];
         if (!c) continue;
@@ -206,6 +242,7 @@ void spu_coh_notify_write(uint32_t ea)
                       fprintf(stderr, "[resv-lost] %llu: line 0x%08X taken from img=%d ctx=%p\n",
                               n, line, c->image_id, (void*)c); } }
             g_spu_lr_raise++;
+            s_coh_wakes++;
             /* The event_status store has to be visible before the wake. The
              * waiter re-polls its predicate on a timeout as well, so a
              * straggling store costs latency and not the wakeup itself. */

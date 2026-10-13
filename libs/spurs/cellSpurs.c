@@ -11,6 +11,7 @@
 
 #include "cellSpurs.h"
 #include "../../runtime/platform/win32_compat.h"
+#include "../../runtime/platform/host_thread_name.h"
 #include "../../runtime/ps3_log.h"
 #include "spu_workload.h"   /* SPU image -> lifted-entry dispatch (runtime/spu) */
 #include "spurs_taskset.h"  /* REAL BE CellSpursTaskset layout builders (fork Option-B) */
@@ -491,7 +492,8 @@ static s32 spurs_initialize_common(u32 spurs_ea, u32 nspus, const char* prefix)
 
     if (!si->kernel_live) {
         si->kernel_live = 1;
-        CreateThread(NULL, 1u << 20, spurs_kernel_thread, si, 0, NULL);
+        { HANDLE kh = CreateThread(NULL, 1u << 20, spurs_kernel_thread, si, 0, NULL);
+          ps3_host_thread_name(kh, "spurs:kernel"); }
     }
     printf("[cellSpurs] Initialize \"%s\" ea=0x%08X nSpus=%u (real BE instance + kernel poll)\n",
            si->prefix, spurs_ea, si->nspus);
@@ -1840,6 +1842,7 @@ static DWORD WINAPI spurs_kernel_thread(LPVOID p)
                         wa[nth].arg = arg; wa[nth].wid = wid; wa[nth].ea = ea;
                         wa[nth].spu_num = sn;
                         th[nth] = CreateThread(NULL, 1u << 20, spurs_pm_worker, &wa[nth], 0, NULL);
+                        ps3_host_thread_name(th[nth], "spurs:pm spu%u", (unsigned)sn);
                     }
                     spu_run_policy_module(r->fn, r->image_id, pm, sz, arg, wid, ea, 0);
                     if (nth) {
@@ -2902,6 +2905,7 @@ static s32 jc_start(u64 jc_ea, const char* who)
             s_jobchains[i].running = 1;
             s_jobchains[i].pending = 0;
             HANDLE th = CreateThread(NULL, 1u << 20, jc_thread, (LPVOID)(intptr_t)i, 0, NULL);
+            ps3_host_thread_name(th, "spurs:jobchain %d", i);
             if (th) CloseHandle(th);
             else s_jobchains[i].running = 0;
         }

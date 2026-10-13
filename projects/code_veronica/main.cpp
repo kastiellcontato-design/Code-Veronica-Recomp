@@ -37,6 +37,7 @@
  * passthrough to <windows.h>; off Windows the toolkit's shim supplies the same
  * names over pthreads and mmap, so the call sites below are written once. */
 #include "win32_compat.h"
+#include "host_thread_name.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -439,7 +440,9 @@ int main(int argc, char** argv)
     /* Install the guest-callback hook, then start the frame clock. It no-ops
      * until the title registers its vblank and flip handlers during init. */
     g_ps3_guest_caller = harness_guest_caller;
-    CreateThread(NULL, 4u * 1024 * 1024, frame_clock, NULL, 0, NULL);
+    ps3_host_thread_name(CreateThread(NULL, 4u * 1024 * 1024, frame_clock, NULL, 0, NULL),
+                         "frame_clock (vblank+render)");
+    ps3_host_thread_name(GetCurrentThread(), "ppu:main");
 
     printf("\n[boot] dispatching entry OPD 0x%08X (stack top 0x%08X)\n\n",
            entry, STACK_TOP);

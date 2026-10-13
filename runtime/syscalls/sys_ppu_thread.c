@@ -21,6 +21,7 @@ static PPU_TLS int     s_exit_requested = 0;
 #include <stddef.h>
 #include "sys_ppu_thread.h"
 #include "../platform/win32_compat.h"   /* GetCurrentThreadId on POSIX */
+#include "../platform/host_thread_name.h"
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>   /* getenv (else return value truncated to int on x64) */
@@ -453,6 +454,7 @@ int64_t sys_ppu_thread_create(ppu_context* ctx)
         table_unlock();
         return (int64_t)(int32_t)CELL_EAGAIN;
     }
+    ps3_host_thread_name(t->host_thread, "ppu:%s", t->name[0] ? t->name : "?");
     if (_gate_this && g_gate_n < 256) g_gate_pending[g_gate_n++] = t->host_thread;
     /* The guest's top priorities (0 is highest, 3071 lowest) are its audio and
      * I/O pollers. At normal host priority they wake late under a busy frame:
