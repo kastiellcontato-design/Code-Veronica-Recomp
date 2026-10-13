@@ -56,14 +56,15 @@
 #define FRAME_COUNT         2   /* double buffering */
 #define MAX_VERTICES    393216  /* per-frame vertex buffer (dbgfont submits
                                  * ~7.5k verts/frame; leave generous headroom) */
-#define MAX_DRAWS         6144  /* per-frame draw records. Code Veronica's
+#define MAX_DRAWS        12288  /* per-frame draw records. Code Veronica's
                                  * gameplay frames run past 2048; the overflow
                                  * cut off post-processing and the copy to the
                                  * display, so every such frame was black.
-                                 * Was sized from wave's worst case (~1841);
-                                 * the per-draw constant buffer is
-                                 * VP_CB_STRIDE * MAX_DRAWS * 2 bytes, so 16384
-                                 * asked for a 264 MB upload allocation. */
+                                 * Its in-engine cutscenes (the lighter scene)
+                                 * then hit 6144 and dropped the frame's tail.
+                                 * The per-draw constant buffer is
+                                 * VP_CB_STRIDE * MAX_DRAWS * 2 bytes: ~207 MB
+                                 * of upload heap here; 16384 would be 276 MB. */
 /* Per-draw VP constant-buffer slot: vp_c[512] + posscale + posoffset
  * (514 vec4 = 8224 B) rounded up to D3D12's 256-byte CBV alignment.
  * Constants are snapshotted at RECORD time -- wave's passes each set their
@@ -2667,6 +2668,48 @@ static u32 dr_cube_mask(const D3D12DrawRecord* dr)
  * must be dropped rather than drawn with the fallback colour shader. */
 static int s_fp_skip_draw = 0;
 
+/* Open-addressed index over s_d3d.vp_fp: slot -> entry index + 1 (0 = empty).
+ * The key is every field the cache matches on (fp_addr is not one: programs
+ * are identified by content). */
+#define FP_INDEX_SIZE 16384u   /* power of two, > 2 x VP_FP_CACHE */
+static int s_fp_index[FP_INDEX_SIZE];
+static u32 fp_key_hash(const VPFPEntry* e)
+{
+    u32 h = 2166136261u;
+    const u32 f[11] = { (u32)e->vs_idx, e->vs_hash, e->gen, e->blend, (u32)e->nrt, e->rtfmt,
+                        (u32)e->exp32, e->ucode_hash, e->cmask, e->cull, e->cube_mask };
+    for (int i = 0; i < 11; i++) { h ^= f[i]; h *= 16777619u; h ^= h >> 15; }
+    return h;
+}
+static int fp_key_eq(const VPFPEntry* a, const VPFPEntry* b)
+{
+    return a->ucode_hash == b->ucode_hash && a->vs_idx == b->vs_idx &&
+           a->vs_hash == b->vs_hash && a->gen == b->gen && a->blend == b->blend &&
+           a->nrt == b->nrt && a->rtfmt == b->rtfmt && a->exp32 == b->exp32 &&
+           a->cmask == b->cmask && a->cull == b->cull && a->cube_mask == b->cube_mask;
+}
+static int fp_index_find(const VPFPEntry* key)
+{
+    for (u32 i = fp_key_hash(key) & (FP_INDEX_SIZE - 1), n = 0; n < FP_INDEX_SIZE;
+         n++, i = (i + 1) & (FP_INDEX_SIZE - 1)) {
+        int v = s_fp_index[i];
+        if (!v) return -1;
+        if (fp_key_eq(&s_d3d.vp_fp[v - 1], key)) return v - 1;
+    }
+    return -1;
+}
+static void fp_index_insert(int idx)
+{
+    for (u32 i = fp_key_hash(&s_d3d.vp_fp[idx]) & (FP_INDEX_SIZE - 1), n = 0; n < FP_INDEX_SIZE;
+         n++, i = (i + 1) & (FP_INDEX_SIZE - 1))
+        if (!s_fp_index[i]) { s_fp_index[i] = idx + 1; return; }
+}
+static void fp_index_rebuild(void)
+{
+    memset(s_fp_index, 0, sizeof s_fp_index);
+    for (int i = 0; i < s_d3d.vp_fp_n; i++) fp_index_insert(i);
+}
+
 static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, int nrt,
                                           DXGI_FORMAT rtfmt, int exp32, u32 cmask, u32 cull,
                                           u32 cube_mask, const u8* snap)
@@ -2723,16 +2766,17 @@ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, in
      * through a ring, so the same shader lands at a new address every frame
      * and an address key recompiled it each time (PSO creation was 60-90%
      * of the frame, 0.3-4 fps in gameplay). */
-    for (int i = 0; i < s_d3d.vp_fp_n; i++)
-        if (s_d3d.vp_fp[i].ucode_hash != uhash) continue;   /* cheap reject first */
-        else if (s_d3d.vp_fp[i].vs_idx == vs_idx &&
-            s_d3d.vp_fp[i].vs_hash == vs_hash && s_d3d.vp_fp[i].gen == s_d3d.vp_gen &&
-            s_d3d.vp_fp[i].blend == blend && s_d3d.vp_fp[i].nrt == nrt &&
-            s_d3d.vp_fp[i].rtfmt == (u32)rtfmt && s_d3d.vp_fp[i].exp32 == exp32 &&
-            s_d3d.vp_fp[i].ucode_hash == uhash && s_d3d.vp_fp[i].cmask == cmask &&
-            s_d3d.vp_fp[i].cull == cull &&
-            s_d3d.vp_fp[i].cube_mask == cube_mask)
-            return s_d3d.vp_fp[i].pso;
+    /* Hash index over the cache: the linear scan walked up to 4096 entries
+     * twice per draw (~4600 lookups a Code Veronica frame). */
+    {
+        VPFPEntry key;
+        memset(&key, 0, sizeof key);
+        key.vs_idx = vs_idx; key.vs_hash = vs_hash; key.gen = s_d3d.vp_gen;
+        key.blend = blend; key.nrt = nrt; key.rtfmt = (u32)rtfmt; key.exp32 = exp32;
+        key.ucode_hash = uhash; key.cmask = cmask; key.cull = cull; key.cube_mask = cube_mask;
+        int hit = fp_index_find(&key);
+        if (hit >= 0) return s_d3d.vp_fp[hit].pso;
+    }
     s_perf_pso_miss++;      /* falls through to a full decompile + D3DCompile */
     /* PSOMISSDBG=1: on a miss, name the key field that differs from an existing
      * entry for the same program. "the cache misses" is not actionable; "it
@@ -3154,7 +3198,33 @@ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, in
         static int _e2=0; if (_e2++<16)
             printf("[FP] PS compile FAIL (fp=0x%08X): %s\n", fp_addr,
                    e ? (const char*)e->lpVtbl->GetBufferPointer(e) : "?");
+        /* Keep the failing source: the error names a line of THIS text. */
+        { static int _dumped = 0;
+          if (_dumped < 8) {
+              char pn[64]; snprintf(pn, sizeof pn, "fpfail_%d_%08X.hlsl", _dumped, uhash);
+              FILE* f = fopen(pn, "w");
+              if (f) { fprintf(f, "/* fp=0x%08X: %s */\n%s", fp_addr,
+                               e ? (const char*)e->lpVtbl->GetBufferPointer(e) : "?", hlsl);
+                       fclose(f); _dumped++; } } }
         if (e) e->lpVtbl->Release(e);
+        /* Negative cache: remember the failure under the full key, or every
+         * draw using this program recompiles it. Code Veronica's lighter
+         * cutscene hit ~225 failing compiles per 20 frames (0.3 fps). The
+         * draw falls back exactly as before (NULL pipeline). */
+        if (s_d3d.vp_fp_n >= VP_FP_CACHE) {
+            if (s_d3d.vp_fp[0].pso) s_d3d.vp_fp[0].pso->lpVtbl->Release(s_d3d.vp_fp[0].pso);
+            memmove(&s_d3d.vp_fp[0], &s_d3d.vp_fp[1], sizeof(VPFPEntry) * (VP_FP_CACHE - 1));
+            s_d3d.vp_fp_n = VP_FP_CACHE - 1;
+            fp_index_rebuild();
+        }
+        { VPFPEntry* ne = &s_d3d.vp_fp[s_d3d.vp_fp_n];
+          memset(ne, 0, sizeof *ne);
+          ne->fp_addr = fp_addr; ne->vs_idx = vs_idx; ne->vs_hash = vs_hash; ne->gen = s_d3d.vp_gen;
+          ne->blend = blend; ne->nrt = nrt; ne->rtfmt = (u32)rtfmt; ne->exp32 = exp32;
+          ne->ucode_hash = uhash; ne->cmask = cmask; ne->cull = cull; ne->cube_mask = cube_mask;
+          ne->pso = NULL;
+          fp_index_insert(s_d3d.vp_fp_n);
+          s_d3d.vp_fp_n++; }
         return NULL;
     }
     if (e) e->lpVtbl->Release(e);
@@ -3256,6 +3326,7 @@ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, in
         if (s_d3d.vp_fp[0].pso) s_d3d.vp_fp[0].pso->lpVtbl->Release(s_d3d.vp_fp[0].pso);
         memmove(&s_d3d.vp_fp[0], &s_d3d.vp_fp[1], sizeof(VPFPEntry) * (VP_FP_CACHE - 1));
         s_d3d.vp_fp_n = VP_FP_CACHE - 1;
+        fp_index_rebuild();   /* every entry moved down one slot */
     }
     s_d3d.vp_fp[s_d3d.vp_fp_n].fp_addr = fp_addr;
     s_d3d.vp_fp[s_d3d.vp_fp_n].vs_idx  = vs_idx;
@@ -3270,6 +3341,7 @@ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, in
     s_d3d.vp_fp[s_d3d.vp_fp_n].cull    = cull;
     s_d3d.vp_fp[s_d3d.vp_fp_n].cube_mask = cube_mask;
     s_d3d.vp_fp[s_d3d.vp_fp_n].pso     = pso;
+    fp_index_insert(s_d3d.vp_fp_n);
     s_d3d.vp_fp_n++;
     return pso;
 }
@@ -5820,6 +5892,12 @@ static void render_frame_impl(void)
             float vp_last_w = 0, vp_last_h = 0;    /* for DRAWARGS */
             float dvp_x = 0, dvp_y = 0, dvp_w = 0, dvp_h = 0;  /* per-draw, for DRAWARGS */
             int cur_m[3] = {-1, -1, -1};           /* MRT B/C/D: -1 = unbound   */
+            /* Last pipeline / viewport handed to the command list, so a run of
+             * draws with the same state does not re-set it (most of a frame).
+             * Anything else that touches them resets these to "unknown". */
+            ID3D12PipelineState* last_pso = NULL;
+            D3D12_VIEWPORT last_vp; int have_vp = 0;
+            memset(&last_vp, 0, sizeof last_vp);
             double _rec0 = perf_on() ? perf_now() : 0.0;
             int seen_small_vp = 0, captured = 0;
             for (u32 d = 0; d < s_rb.count && d < MAX_DRAWS; d++) {
@@ -5827,6 +5905,7 @@ static void render_frame_impl(void)
                 if (d == s_zconv_at) {
                     zconv_run(gh_base);
                     cur_rt = -2; for (int m = 0; m < 3; m++) cur_m[m] = -2;
+                    last_pso = NULL; have_vp = 0;
                 }
                 if (!dr->is_vp) continue;
                 if(dr->is_copy) {
@@ -5881,6 +5960,7 @@ static void render_frame_impl(void)
                         captured = 1;
                         screen_copy_capture(fi);
                         subvp_capture(fi);
+                        last_pso = NULL; have_vp = 0;
                         s_d3d.cmd_list->lpVtbl->OMSetRenderTargets(
                             s_d3d.cmd_list, 1, &rtv_handle, FALSE, &dsv_handle);
                     }
@@ -5964,6 +6044,8 @@ static void render_frame_impl(void)
                       } }
                     cur_rt = want;
                     for (int _m = 0; _m < 3; _m++) cur_m[_m] = wantm[_m];
+                    have_vp = 0;   /* the switch above set its own viewport/scissor */
+                    last_pso = NULL;   /* VP_TESTTRI may have drawn with another */
                 }
                 /* rsxcap: the post chain rewrites one target over and over;
                  * photograph it before each of the last 40 ops. */
@@ -6005,8 +6087,11 @@ static void render_frame_impl(void)
                                                 dr->cull | ((dr->topology == RSX_TOPOLOGY_LINES) ? 0x100u : 0u),
                                                 dr_cube_mask(dr), fp_snap_ptr(dr)) : NULL;
                 if (!dpso && dr->fp_addr && s_fp_skip_draw) continue;
-                s_d3d.cmd_list->lpVtbl->SetPipelineState(s_d3d.cmd_list,
-                                                         dpso ? dpso : vpso);
+                { ID3D12PipelineState* use = dpso ? dpso : vpso;
+                  if (use != last_pso) {
+                      s_d3d.cmd_list->lpVtbl->SetPipelineState(s_d3d.cmd_list, use);
+                      last_pso = use;
+                  } }
                 /* Per-draw viewport: the guest rect when sane, else the
                  * full target. Scissor tracks the same rect. */
                 {
@@ -6026,8 +6111,11 @@ static void render_frame_impl(void)
                                       (LONG)(dvp.TopLeftY + dvp.Height)};
                     dvp_x = dvp.TopLeftX; dvp_y = dvp.TopLeftY;
                     dvp_w = dvp.Width;    dvp_h = dvp.Height;
-                    s_d3d.cmd_list->lpVtbl->RSSetViewports(s_d3d.cmd_list, 1, &dvp);
-                    s_d3d.cmd_list->lpVtbl->RSSetScissorRects(s_d3d.cmd_list, 1, &dsc);
+                    if (!have_vp || memcmp(&dvp, &last_vp, sizeof dvp) != 0) {
+                        s_d3d.cmd_list->lpVtbl->RSSetViewports(s_d3d.cmd_list, 1, &dvp);
+                        s_d3d.cmd_list->lpVtbl->RSSetScissorRects(s_d3d.cmd_list, 1, &dsc);
+                        last_vp = dvp; have_vp = 1;
+                    }
                 }
                 /* Per-draw textures: bind this draw's t0-t3 SRV window.
                  * Any sampled offscreen RT transitions to PSR first (never
