@@ -1126,7 +1126,32 @@ int64_t sys_event_flag_wait(ppu_context* ctx)
     { static int n=0; if(n++<30) fprintf(stderr,"[WAIT] event_flag_wait(flag=%u pat=0x%llX mode=%u)\n", flag_id,(unsigned long long)bitpat,mode); }
     uint64_t timeout_us = LV2_ARG_U64(ctx, 4);
     { static int _w=0; if (_w++ < 40) fprintf(stderr, "[WAIT] event_flag_wait(flag=%u bits=0x%llX timeout=%llu)\n", flag_id, (unsigned long long)bitpat, (unsigned long long)timeout_us); }
-    /* SPU-completion shim (targeted): the main thread spins in func_003319D0 until
+    /* PS3_EVT_STACK=1: identify game callsites blocked on the physics startup flag. */
+    if (flag_id == 1 && getenv("PS3_EVT_STACK")) {
+        static int _stack_count = 0;
+        if (_stack_count++ < 4) {
+            char _tag[64];
+            fprintf(stderr, "[evt-trace] flag=1 tid=%u cia=0x%08X lr=0x%08X bits=0x%llX mode=%u\n",
+                    (unsigned)ctx->thread_id, (unsigned)ctx->cia, (unsigned)ctx->lr,
+                    (unsigned long long)bitpat, mode);
+            snprintf(_tag, sizeof(_tag), "event-flag-1-tid-%u", (unsigned)ctx->thread_id);
+            extern void ppu_dump_guest_stack(ppu_context*, const char*);
+            ppu_dump_guest_stack(ctx, _tag);
+        }
+    }
+    /* Temporary diagnostic: capture the non-SPURS startup wait observed after fiber entry. */
+    if (flag_id == 2 && bitpat == 4 && getenv("PS3_EVT_STACK")) {
+        static int _stack_count2 = 0;
+        if (_stack_count2++ < 4) {
+            char _tag[64];
+            fprintf(stderr, "[evt-trace] flag=2 tid=%u cia=0x%08X lr=0x%08X bits=0x%llX mode=%u\\n",
+                    (unsigned)ctx->thread_id, (unsigned)ctx->cia, (unsigned)ctx->lr,
+                    (unsigned long long)bitpat, mode);
+            snprintf(_tag, sizeof(_tag), "event-flag-2-tid-%u", (unsigned)ctx->thread_id);
+            extern void ppu_dump_guest_stack(ppu_context*, const char*);
+            ppu_dump_guest_stack(ctx, _tag);
+        }
+    }    /* SPU-completion shim (targeted): the main thread spins in func_003319D0 until
      * *(r29+0x24) (a completion counter the SPU would increment) reaches the target
      * *(r29). Since we don't yet run the SPU workload, satisfy that counter so the
      * main thread proceeds into its REAL recompiled render code. r29 is live in ctx

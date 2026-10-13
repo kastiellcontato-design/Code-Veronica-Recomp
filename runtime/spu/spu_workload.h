@@ -124,6 +124,11 @@ int spu_workload_dispatch(const uint8_t* image, uint32_t image_size,
  * waiting on PPU-side signals (running them inline deadlocks). */
 int spu_workload_dispatch_async(const uint8_t* image, uint32_t image_size,
                                 uint32_t args_ea);
+/* Captures ownership from the creating PPU call, without shared globals. */
+int spu_workload_dispatch_task_async(const uint8_t* image, uint32_t image_size,
+                                     uint32_t args_ea, uint32_t taskset_ea,
+                                     uint32_t taskid);
+
 
 /* Number of currently registered lifted SPU binaries (diagnostics/tests). */
 unsigned spu_workload_count(void);

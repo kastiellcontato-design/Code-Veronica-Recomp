@@ -395,11 +395,37 @@ int edat_is_npd(const char* host_path)
     return n == 4 && m[0] == 'N' && m[1] == 'P' && m[2] == 'D' && m[3] == 0;
 }
 
-/* The RIF key for a license-type-1/2 EDAT: $PS3_RIF_KEY as 32 hex chars, else
- * the 16 raw bytes of a <file>.rifkey sidecar. This is the buyer's own license
- * material for one content id -- deriving it from a .rap is deliberately out of
- * scope here, so nothing in this tree has to carry license-conversion keys. */
-static int edat_rif_key(const char* in_path, uint8_t out[16])
+/* RAP conversion uses the public NPDRM transform, also documented by
+ * RPCS3 Crypto/key_vault.cpp (rap_to_rif). The content license itself is
+ * loaded from the operator's existing exdata folder, never built in or logged.
+ * The decrypted block MAC is still verified before creating a cache. */
+static void edat_rap_key(const uint8_t rap[16], uint8_t out[16])
+{
+    static const uint8_t seed[16] = {
+        0x86,0x9F,0x77,0x45,0xC1,0x3F,0xD8,0x90,0xCC,0xF2,0x91,0x88,0xE3,0xCC,0x3E,0xDF};
+    static const uint8_t order[16] = {
+        12,3,6,4,1,11,15,8,2,7,0,5,10,14,13,9};
+    static const uint8_t mask[16] = {
+        0xA9,0x3E,0x1F,0xD6,0x7C,0x55,0xA3,0x29,0xB7,0x5F,0xDD,0xA6,0x2A,0x95,0xC7,0xA5};
+    static const uint8_t delta[16] = {
+        0x67,0xD4,0x5D,0xA3,0x29,0x6D,0,0x6A,0x4E,0x7C,0x53,0x7B,0xF5,0x53,0x8C,0x74};
+    uint8_t iv[16] = {0};
+    aes128_cbc_decrypt(seed, iv, rap, out, 16);
+    for (int round = 0; round < 5; ++round) {
+        for (int k = 0; k < 16; ++k) out[k] ^= mask[k];
+        for (int k = 15; k > 0; --k) out[order[k]] ^= out[order[k-1]];
+        unsigned borrow = 0;
+        for (int k = 0; k < 16; ++k) {
+            unsigned p = order[k];
+            uint8_t value = (uint8_t)(out[p] - borrow);
+            if (!(borrow && value == 255)) borrow = value < delta[p];
+            out[p] = (uint8_t)(value - delta[p]);
+        }
+    }
+}
+
+/* PS3_RIF_KEY / file.rifkey override a content-id-matched RAP in PS3_RAP_DIR. */
+static int edat_rif_key(const char* in_path, const uint8_t* content_id, uint8_t out[16])
 {
     const char* e = getenv("PS3_RIF_KEY");
     if (e) {
@@ -417,11 +443,34 @@ static int edat_rif_key(const char* in_path, uint8_t out[16])
     char side[1100];
     if ((size_t)snprintf(side, sizeof side, "%s.rifkey", in_path) >= sizeof side) return 0;
     FILE* f = fopen(side, "rb");
+    if (f) {
+        size_t n = fread(out, 1, 16, f);
+        fclose(f);
+        if (n == 16) { fprintf(stderr, "[edat] RIF key from %s\n", side); return 1; }
+    }
+    const char* rap_dir = getenv("PS3_RAP_DIR");
+    if (!rap_dir || !*rap_dir) return 0;
+    char id[49];
+    memcpy(id, content_id, 48); id[48] = 0;
+    if (!id[0]) return 0;
+    for (const char* c = id; *c; ++c)
+        if (!((*c >= 'A' && *c <= 'Z') || (*c >= 'a' && *c <= 'z') ||
+              (*c >= '0' && *c <= '9') || *c == '-' || *c == '_')) return 0;
+    if ((size_t)snprintf(side, sizeof side, "%s/%s.rap", rap_dir, id) >= sizeof side) return 0;
+    f = fopen(side, "rb");
     if (!f) return 0;
-    size_t n = fread(out, 1, 16, f);
+    uint8_t rap[16];
+    size_t n = fread(rap, 1, sizeof rap, f);
+    int extra = fgetc(f);
     fclose(f);
-    if (n == 16) { fprintf(stderr, "[edat] RIF key from %s\n", side); return 1; }
-    return 0;
+    if (n != sizeof rap || extra != EOF) {
+        fprintf(stderr, "[edat] RAP must contain exactly 16 bytes: %s\n", side);
+        return 0;
+    }
+    edat_rap_key(rap, out);
+    memset(rap, 0, sizeof rap);
+    fprintf(stderr, "[edat] content-matched RAP loaded: %s\n", side);
+    return 1;
 }
 
 int edat_decrypt_file(const char* in_path, const char* out_path)
@@ -501,7 +550,7 @@ int edat_decrypt_file(const char* in_path, const char* out_path)
             have_key = 1;
             fprintf(stderr, "[edat] klicensee %s verified against dev_hash\n",
                     KLIC_CANDIDATES[found].name);
-        } else if (edat_rif_key(in_path, key)) {
+        } else if (edat_rif_key(in_path, hdr + 0x10, key)) {
             have_key = 1;
             fprintf(stderr, "[edat] license type %u: using the supplied RIF key%s\n",
                     license, found >= 0 ? "" : " (dev_hash names an unknown klicensee)");
@@ -511,7 +560,7 @@ int edat_decrypt_file(const char* in_path, const char* out_path)
                 "[edat] license type %u needs a RIF key and none was supplied.\n"
                 "[edat]   set PS3_RIF_KEY=<32 hex chars>, or put the 16 raw bytes in\n"
                 "[edat]   %s.rifkey -- it is derived from your own .rap for this\n"
-                "[edat]   content id, which this runtime deliberately cannot do for you.\n",
+                "[edat]   content id. PS3_RAP_DIR can point to your existing exdata folder.\n",
                 license, in_path);
             fclose(in); return -6;
         }

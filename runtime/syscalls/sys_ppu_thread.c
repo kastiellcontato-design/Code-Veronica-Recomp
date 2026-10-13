@@ -16,6 +16,7 @@
 #endif
 static PPU_TLS jmp_buf s_exit_jmp;
 static PPU_TLS int     s_exit_armed = 0;
+static PPU_TLS int     s_exit_requested = 0;
 
 #include <stddef.h>
 #include "sys_ppu_thread.h"
@@ -124,6 +125,7 @@ static void* ppu_host_thread_proc(void* param)
             (unsigned long long)info->ctx.thread_id,
             (unsigned long long)info->entry_addr, (unsigned long)GetCurrentThreadId());
 
+    s_exit_requested = 0;
     /* Invoke the recompiled entry point */
     if (g_ppu_thread_entry_trampoline) {
         s_exit_armed = 1;
@@ -146,7 +148,7 @@ static void* ppu_host_thread_proc(void* param)
          * which is why SPUs 0-3 parked on SPU_RdInMbox and SPU 4 exited. */
         { extern int ps3_intr_is_handler(unsigned long long);
           extern int ps3_intr_wait(unsigned long long);
-          if (ps3_intr_is_handler(info->ctx.thread_id)) {
+          if (!s_exit_requested && ps3_intr_is_handler(info->ctx.thread_id)) {
               fprintf(stderr, "[intr] thread %llu is an interrupt handler -- \n",
                       (unsigned long long)info->ctx.thread_id);
               while (ps3_intr_wait(info->ctx.thread_id)) {
@@ -157,13 +159,14 @@ static void* ppu_host_thread_proc(void* param)
               }
           } }
     } else {
-        fprintf(stderr, "[THREAD %llu] g_ppu_thread_entry_trampoline is NULL — thread is a no-op!\n",
+        fprintf(stderr, "[THREAD %llu] g_ppu_thread_entry_trampoline is NULL â€” thread is a no-op!\n",
                 (unsigned long long)info->ctx.thread_id);
     }
 
     /* Mark as finished */
     table_lock();
-    info->exit_status = (int64_t)info->ctx.gpr[3];
+    if (!s_exit_requested)
+        info->exit_status = (int64_t)info->ctx.gpr[3];
 
     if (info->state == PPU_THREAD_STATE_DETACHED) {
         /* Detached threads self-clean */
@@ -187,7 +190,7 @@ static void* ppu_host_thread_proc(void* param)
 }
 
 /* ---------------------------------------------------------------------------
-/* PPU_THREADGATE: PS3 priority scheduling — a newly created same/lower-priority
+/* PPU_THREADGATE: PS3 priority scheduling â€” a newly created same/lower-priority
  * thread does NOT run until the creating thread blocks. Our HLE spawns host threads
  * immediately, so a worker (GThread entry=0x5353C0) can read its job object's
  * [arg+0x10] owner link BEFORE the main thread finishes linking it -> null -> spin.
@@ -514,25 +517,13 @@ int64_t sys_ppu_thread_exit(ppu_context* ctx)
     fprintf(stderr, "[SYS] sys_ppu_thread_exit(tid=%llu status=%llu)\n",
             (unsigned long long)tid, (unsigned long long)status);
 
+    /* Record the guest status, but publish completion only after the host
+     * thread has unwound. Publishing here lets join recycle this slot while
+     * the old host epilogue still accesses it, corrupting the next thread. */
+    s_exit_requested = 1;
     table_lock();
     ppu_thread_info* t = find_thread(tid);
-    if (t) {
-        t->exit_status = (int64_t)status;
-        if (t->state == PPU_THREAD_STATE_DETACHED) {
-            t->state = PPU_THREAD_STATE_FREE;
-        } else {
-            t->state = PPU_THREAD_STATE_FINISHED;
-        }
-
-#ifdef _WIN32
-        SetEvent(t->finish_event);
-#else
-        pthread_mutex_lock(&t->finish_mutex);
-        t->finished = 1;
-        pthread_cond_signal(&t->finish_cond);
-        pthread_mutex_unlock(&t->finish_mutex);
-#endif
-    }
+    if (t) t->exit_status = (int64_t)status;
     table_unlock();
 
     /* Hardware never returns from this. Unwind to the thread proc so the guest
@@ -572,6 +563,9 @@ int64_t sys_ppu_thread_join(ppu_context* ctx)
     /* Wait for completion */
 #ifdef _WIN32
     WaitForSingleObject(t->finish_event, INFINITE);
+    /* The completion event is set immediately before host return. Wait for
+     * that return too before closing its handles or recycling its slot. */
+    WaitForSingleObject(t->host_thread, INFINITE);
 #else
     pthread_mutex_lock(&t->finish_mutex);
     while (!t->finished) {

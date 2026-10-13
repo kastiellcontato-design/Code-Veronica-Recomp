@@ -1,22 +1,26 @@
 /*
  * ps3recomp - cellVdec HLE implementation
  *
- * Stub video decoder. Accepts AU data and delivers AUDONE callbacks
- * but does not perform actual H.264/MPEG-2 decoding. Games that
- * require video playback will need an FFmpeg/libav integration here.
+ * FFmpeg-backed video decoding. Only actual decoded pictures generate PICOUT.
  */
 
 #include "cellVdec.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include "cv_ffmpeg.h"
+#include "../../runtime/platform/win32_compat.h"
 #include "../guest_struct.h"   /* GUEST_EA, vm_read/vm_write: guest EA -> host */
 #include "ps3emu/guest_call.h" /* g_ps3_guest_caller -- cbFunc is a GUEST OPD */
 #include "../../runtime/memory/vm.h"     /* VM_HLE_INJECT_BASE */
+#include "../../runtime/ps3_log.h"       /* ps3_log_verbose */
 
 /* ---------------------------------------------------------------------------
  * Internal state
  * -----------------------------------------------------------------------*/
 #define MAX_VDEC 4
+
+typedef struct { CellVdecAuInfo info; u8* data; } VdecCommand;
 
 typedef struct {
     int in_use;
@@ -26,12 +30,27 @@ typedef struct {
     int seqStarted;
     CellVdecPicItem lastPic;
     int hasPic;
+    CvVideoDecoder* decoder;
+    u32 itemBase, itemSlots, itemIndex, frameRate, pictureType;
+    SRWLOCK commandLock;
+    HANDLE commandEvent, worker;
+    volatile LONG stopping;
+    VdecCommand commands[4];
+    unsigned commandRead, commandWrite;
     u32 auCount;        /* total AUs decoded */
     u16 width;          /* configured resolution (0 = use default) */
     u16 height;
 } VdecSlot;
 
 static VdecSlot s_vdec[MAX_VDEC];
+
+/* Read once: getenv walks the environment, and these sit on per-picture paths. */
+static int vdec_trace(void)
+{
+    static int t = -1;
+    if (t < 0) t = getenv("CV_AV_TRACE") ? 1 : 0;
+    return t;
+}
 
 /* Deliver a vdec message to the guest callback (handle, msgType, msgData,
  * cbArg). It is a guest OPD, so it goes through g_ps3_guest_caller; this used
@@ -44,8 +63,46 @@ static void vdec_notify(CellVdecHandle handle, u32 msg_type, s32 msg_data)
     if (handle >= MAX_VDEC || !s_vdec[handle].in_use) return;
     const VdecSlot* v = &s_vdec[handle];
     if (!v->cbFunc || !g_ps3_guest_caller) return;
+    if (vdec_trace())
+        fprintf(stderr,"[cellVdec] CALLBACK_BEGIN type=%u cb=%08X flags=%08X pictures=%u\n",msg_type,v->cbFunc,v->cbArg?vm_read32(v->cbArg+0x204):0,v->cbArg?vm_read32(v->cbArg+0x1FC):0);
     g_ps3_guest_caller(v->cbFunc, (u64)handle, (u64)msg_type,
                        (u64)(s64)msg_data, (u64)v->cbArg, 0, 0, 0, 0);
+    if (vdec_trace())
+        fprintf(stderr,"[cellVdec] CALLBACK_END type=%u\n",msg_type);
+}
+
+/* Decode and notify on a decoder thread, as the asynchronous SDK requires.
+ * A guest commonly holds its player mutex while submitting DecodeAu. Calling
+ * its AUDONE callback from that same thread deadlocks trying to take the mutex. */
+static void vdec_picture_ready(void* argument)
+{
+    u32 h=(u32)(uintptr_t)argument;
+    if(h<MAX_VDEC&&!InterlockedCompareExchange(&s_vdec[h].stopping,0,0))
+        vdec_notify(h,CELL_VDEC_MSG_TYPE_PICOUT,CELL_OK);
+}
+static DWORD WINAPI vdec_worker(LPVOID argument)
+{
+    u32 h=(u32)(uintptr_t)argument;VdecSlot* v=&s_vdec[h];
+    for(;;){
+        WaitForSingleObject(v->commandEvent,INFINITE);
+        for(;;){
+            VdecCommand command = {0};
+            AcquireSRWLockExclusive(&v->commandLock);
+            if(v->commandRead!=v->commandWrite)command=v->commands[v->commandRead++%4];
+            ReleaseSRWLockExclusive(&v->commandLock);
+            if(!command.data)break;
+            CellVdecAuInfo au = command.info;
+            int pictures=cv_video_decode(v->decoder,command.data,au.size,au.pts,au.userData,vdec_picture_ready,(void*)(uintptr_t)h);
+            free(command.data);
+            if (InterlockedCompareExchange(&v->stopping,0,0)) break;
+            vdec_notify(h,CELL_VDEC_MSG_TYPE_AUDONE,CELL_OK);
+            if(pictures<0){vdec_notify(h,CELL_VDEC_MSG_TYPE_ERROR,(s32)CELL_VDEC_ERROR_AU);continue;}
+            v->auCount++;
+
+        }
+        if(v->stopping)break;
+    }
+    return 0;
 }
 
 /* ---------------------------------------------------------------------------
@@ -92,10 +149,22 @@ s32 cellVdecOpen(const CellVdecType* type, const CellVdecResource* res,
     for (int i = 0; i < MAX_VDEC; i++) {
         if (!s_vdec[i].in_use) {
             memset(&s_vdec[i], 0, sizeof(VdecSlot));
+            s_vdec[i].decoder = cv_video_open(codec_type);
+            if (!s_vdec[i].decoder) return (s32)CELL_VDEC_ERROR_FATAL;
+            /* Use the guest-owned decoder workspace for stable picture items. */
+            u32 res_ea=GUEST_EA(res);
+            u32 work=res_ea?vm_read32(res_ea):0;
+            u32 size=res_ea?vm_read32(res_ea+4):0;
+            s_vdec[i].itemBase=work&&size>=0x10000?work:VM_HLE_INJECT_BASE+0x50000u+(u32)i*0x4000u;
+            s_vdec[i].itemSlots=work&&size>=0x10000?64:16;
             s_vdec[i].in_use = 1;
             s_vdec[i].codecType = codec_type;
             s_vdec[i].cbFunc = cb_ea ? vm_read32(cb_ea + 0) : 0;
             s_vdec[i].cbArg  = cb_ea ? vm_read32(cb_ea + 4) : 0;
+            InitializeSRWLock(&s_vdec[i].commandLock);
+            s_vdec[i].commandEvent=CreateEventA(NULL,FALSE,FALSE,NULL);
+            s_vdec[i].worker=CreateThread(NULL,0,vdec_worker,(LPVOID)(uintptr_t)i,0,NULL);
+            if(!s_vdec[i].commandEvent||!s_vdec[i].worker){s_vdec[i].in_use=0;return (s32)CELL_VDEC_ERROR_FATAL;}
             vm_write32((u32)(uintptr_t)handle, (u32)i);
             printf("[cellVdec] Open -> handle=%u\n", i);
             return CELL_OK;
@@ -111,6 +180,18 @@ s32 cellVdecClose(CellVdecHandle handle)
     if (handle >= MAX_VDEC || !s_vdec[handle].in_use)
         return (s32)CELL_VDEC_ERROR_ARG;
 
+    VdecSlot* v=&s_vdec[handle];
+    InterlockedExchange(&v->stopping,1);
+    AcquireSRWLockExclusive(&v->commandLock);
+    while(v->commandRead!=v->commandWrite){
+        VdecCommand* command=&v->commands[v->commandRead++%4];
+        free(command->data);command->data=NULL;
+    }
+    ReleaseSRWLockExclusive(&v->commandLock);
+    cv_video_stop(v->decoder);SetEvent(v->commandEvent);
+    WaitForSingleObject(s_vdec[handle].worker,INFINITE);
+    CloseHandle(s_vdec[handle].worker);CloseHandle(s_vdec[handle].commandEvent);
+    cv_video_close(s_vdec[handle].decoder);
     s_vdec[handle].in_use = 0;
     return CELL_OK;
 }
@@ -122,6 +203,7 @@ s32 cellVdecStartSeq(CellVdecHandle handle)
     if (handle >= MAX_VDEC || !s_vdec[handle].in_use)
         return (s32)CELL_VDEC_ERROR_ARG;
 
+    cv_video_reset_pacing(s_vdec[handle].decoder);
     s_vdec[handle].seqStarted = 1;
     return CELL_OK;
 }
@@ -163,34 +245,23 @@ s32 cellVdecDecodeAu(CellVdecHandle handle, s32 mode, const CellVdecAuInfo* auIn
     au.dts       = vm_read64(au_ea + (u32)offsetof(CellVdecAuInfo, dts));
     au.userData  = vm_read64(au_ea + (u32)offsetof(CellVdecAuInfo, userData));
 
-    printf("[cellVdec] DecodeAu(handle=%u, addr=0x%X, size=%u, pts=%llu)\n",
+    if (ps3_log_verbose())
+        printf("[cellVdec] DecodeAu(handle=%u, addr=0x%X, size=%u, pts=%llu)\n",
            handle, au.startAddr, au.size,
            (unsigned long long)au.pts);
 
-    /* Step 1: Report AU consumed */
-    vdec_notify(handle, CELL_VDEC_MSG_TYPE_AUDONE, CELL_OK);
-
-    /* Step 2: Generate a dummy PICOUT callback.
-     * Without FFmpeg, we can't actually decode video. But games expect the
-     * PICOUT callback to fire for each AU, so we generate a placeholder
-     * picture. Games that only check for completion (not pixel data) will
-     * proceed correctly. */
-    v->auCount++;
-    memset(&v->lastPic, 0, sizeof(v->lastPic));
-    v->lastPic.codecType = v->codecType;
-    v->lastPic.startAddr = au.startAddr;
-    v->lastPic.size      = au.size;
-    v->lastPic.auNum     = v->auCount;
-    v->lastPic.pts       = au.pts;
-    v->lastPic.dts       = au.dts;
-    v->lastPic.userData  = au.userData;
-    v->lastPic.status    = 0; /* OK */
-    v->lastPic.picFmt    = CELL_VDEC_PIC_FMT_YUV420P;
-    v->lastPic.width     = v->width ? v->width : 1280;
-    v->lastPic.height    = v->height ? v->height : 720;
-    v->hasPic = 1;
-
-    vdec_notify(handle, CELL_VDEC_MSG_TYPE_PICOUT, CELL_OK);
+    if (!au.startAddr || !au.size || au.size > 0x1000000)
+        return (s32)CELL_VDEC_ERROR_ARG;
+    u8* owned = (u8*)malloc(au.size);
+    if (!owned) return (s32)CELL_VDEC_ERROR_FATAL;
+    memcpy(owned, vm_ptr8(au.startAddr), au.size);
+    AcquireSRWLockExclusive(&v->commandLock);
+    if(v->commandWrite-v->commandRead>=4){ReleaseSRWLockExclusive(&v->commandLock);free(owned);return (s32)CELL_VDEC_ERROR_BUSY;}
+    VdecCommand* command = &v->commands[v->commandWrite++%4];
+    command->info = au;
+    command->data = owned;
+    ReleaseSRWLockExclusive(&v->commandLock);
+    SetEvent(v->commandEvent);
 
     return CELL_OK;
 }
@@ -207,7 +278,7 @@ s32 cellVdecDecodeAu(CellVdecHandle handle, s32 mode, const CellVdecAuInfo* auIn
  * +0x30 u64 auUserData[2], +0x40 status, +0x44 attr (0 normal, 1 skipped),
  * +0x48 picInfo. CellVdecAvcInfo and CellVdecMpeg2Info both begin with
  * u16 horizontalSize, u16 verticalSize; the rest of the info block is zero. */
-#define VDEC_ITEM_EA(h)  (VM_HLE_INJECT_BASE + 0x50000u + (u32)(h) * 0x100u)
+#define VDEC_ITEM_EA(h)  (s_vdec[h].itemBase + (s_vdec[h].itemIndex % s_vdec[h].itemSlots) * 0x400u)
 #define VDEC_INFO_EA(h)  (VDEC_ITEM_EA(h) + 0x80u)
 
 static void vdec_write_item(CellVdecHandle handle)
@@ -215,7 +286,7 @@ static void vdec_write_item(CellVdecHandle handle)
     const VdecSlot* v = &s_vdec[handle];
     const CellVdecPicItem* p = &v->lastPic;
     u32 it = VDEC_ITEM_EA(handle), info = VDEC_INFO_EA(handle);
-    for (u32 o = 0; o < 0x100; o += 4) vm_write32(it + o, 0);
+    for (u32 o = 0; o < 0x400; o += 4) vm_write32(it + o, 0);
     vm_write32(it + 0x00, v->codecType);
     vm_write32(it + 0x04, p->startAddr);
     vm_write32(it + 0x08, p->size);
@@ -234,19 +305,33 @@ static void vdec_write_item(CellVdecHandle handle)
     vm_write32(it + 0x48, info);
     vm_write16(info + 0, p->width);
     vm_write16(info + 2, p->height);
+    if(v->codecType==CELL_VDEC_CODEC_TYPE_MPEG2){
+        vm_write8(info+4,1); /* square pixels */
+        vm_write8(info+5,(u8)v->frameRate);
+        vm_write8(info+6,1);vm_write8(info+7,1);
+        vm_write8(info+8,5); /* unspecified video format */
+        vm_write8(info+10,1);vm_write8(info+11,1);vm_write8(info+12,1);
+        vm_write8(info+18,(u8)v->pictureType);
+        vm_write8(info+20,3);vm_write8(info+21,3); /* full frames */
+        vm_write8(info+24,1);
+    }
 }
 
-/* cellVdecGetPicItem(handle, &item): the NEXT picture's item, without
- * consuming it; cellVdecGetPicture is what takes it off the queue. */
+/* GetPicItem advances the metadata cursor; GetPicture consumes pixels. */
 s32 cellVdecGetPicItem(CellVdecHandle handle, const CellVdecPicItem** picItem)
 {
     u32 out = (u32)(uintptr_t)picItem;
     if (handle >= MAX_VDEC || !s_vdec[handle].in_use || !out)
         return (s32)CELL_VDEC_ERROR_ARG;
-    if (!s_vdec[handle].hasPic)
+    VdecSlot* v = &s_vdec[handle];
+    if (vdec_trace()) fprintf(stderr,"[cellVdec] GetPicItem handle=%u\n",handle);
+    if (!cv_video_peek(v->decoder,&v->lastPic.width,&v->lastPic.height,&v->lastPic.pts,&v->lastPic.userData,&v->frameRate,&v->pictureType))
         return (s32)CELL_VDEC_ERROR_EMPTY;
+    v->lastPic.dts=v->lastPic.pts;
+    v->lastPic.size=v->lastPic.width*v->lastPic.height*3/2;
     vdec_write_item(handle);
     vm_write32(out, VDEC_ITEM_EA(handle));
+    v->itemIndex++;
     return CELL_OK;
 }
 
@@ -263,35 +348,10 @@ s32 cellVdecGetPicture(CellVdecHandle handle, const void* format, void* outBuff)
     if (handle >= MAX_VDEC || !s_vdec[handle].in_use || !fmt_ea)
         return (s32)CELL_VDEC_ERROR_ARG;
     VdecSlot* v = &s_vdec[handle];
-    if (!v->hasPic)
-        return (s32)CELL_VDEC_ERROR_EMPTY;
-    v->hasPic = 0;
-    if (!dst)
-        return CELL_OK;                                /* a skip: consume only */
-
-    u32 type  = vm_read32(fmt_ea + 0);
-    u8  alpha = vm_read8(fmt_ea + 8);
-    u32 w = v->lastPic.width, h = v->lastPic.height;
-    u8 row[4096 * 4];
-    u32 rowlen;
-    switch (type) {
-    case 0: case 1:                                    /* ARGB32 / RGBA32 */
-        rowlen = w * 4; memset(row, 0, rowlen);
-        for (u32 x = 0; x < w; x++) row[x * 4 + (type == 0 ? 0 : 3)] = alpha;
-        break;
-    case 2:                                            /* UYVY: U Y V Y */
-        rowlen = w * 2;
-        for (u32 x = 0; x < rowlen; x += 2) { row[x] = 0x80; row[x + 1] = 0x10; }
-        break;
-    default: {                                         /* YUV420 planar */
-        memset(row, 0x10, w);
-        for (u32 y = 0; y < h; y++) guest_struct_store(dst + y * w, row, w);
-        memset(row, 0x80, w / 2);
-        u32 c = dst + w * h;
-        for (u32 y = 0; y < h; y++) guest_struct_store(c + y * (w / 2), row, w / 2);
-        return CELL_OK; }
-    }
-    for (u32 y = 0; y < h; y++) guest_struct_store(dst + y * rowlen, row, rowlen);
+    if (vdec_trace()) fprintf(stderr,"[cellVdec] GetPicture handle=%u format=%u dst=%08X\n",handle,vm_read32(fmt_ea),dst);
+    int ret = cv_video_picture(v->decoder, vm_read32(fmt_ea), vm_read8(fmt_ea+8), dst ? vm_ptr8(dst):NULL);
+    if (!ret) return (s32)CELL_VDEC_ERROR_EMPTY;
+    if (ret < 0) return (s32)CELL_VDEC_ERROR_ARG;
     return CELL_OK;
 }
 
@@ -305,3 +365,8 @@ s32 cellVdecSetFrameRate(CellVdecHandle handle, u32 frameRateCode)
 
     return CELL_OK;
 }
+
+s32 cellVdecQueryAttrEx(const CellVdecType* type, void* attr)
+{ return cellVdecQueryAttr(type,attr); }
+s32 cellVdecOpenEx(const CellVdecType* type, const CellVdecResource* res, const CellVdecCb* cb, CellVdecHandle* handle)
+{ return cellVdecOpen(type,res,cb,handle); }

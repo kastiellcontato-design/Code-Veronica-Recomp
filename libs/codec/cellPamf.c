@@ -11,25 +11,9 @@
 #include <stdio.h>
 #include <string.h>
 
-/* ---------------------------------------------------------------------------
- * PAMF file header layout (big-endian on disc)
- *
- * Offset  Size  Description
- * 0x00    4     Magic "PAMF"
- * 0x04    4     Version (typically 0x00040100)
- * 0x08    4     Data offset (header size / start of mux data)
- * 0x0C    4     Data size
- * 0x10    4     Stream descriptor table offset
- * 0x14    2     Number of streams
- * 0x18    4     Presentation start time (90kHz ticks)
- * 0x1C    4     Presentation end time (90kHz ticks)
- * 0x20    4     Mux rate (bytes/sec)
- * 0x24    4     EP table offset
- * 0x28    4     EP count
- *
- * We access these via raw byte offsets rather than a packed struct to
- * avoid alignment/padding issues across compilers.
- * -----------------------------------------------------------------------*/
+/* PAMF 0040/0041: header/data sizes at 8/12 are in 2048-byte sectors.
+ * Sequence info starts at 0x50; the first grouping period/group put their
+ * count at 0x87 and their 48-byte stream descriptors at 0x88. */
 
 #define PAMF_OFF_MAGIC            0x00
 #define PAMF_OFF_VERSION          0x04
@@ -37,25 +21,25 @@
 #define PAMF_OFF_DATA_SIZE        0x0C
 #define PAMF_OFF_STREAM_TABLE     0x10
 #define PAMF_OFF_NUM_STREAMS      0x14
-#define PAMF_OFF_PRESENT_START    0x18
-#define PAMF_OFF_PRESENT_END      0x1C
-#define PAMF_OFF_MUX_RATE         0x20
+#define PAMF_OFF_PRESENT_START    0x58
+#define PAMF_OFF_PRESENT_END      0x5E
+#define PAMF_OFF_MUX_RATE         0x62
 #define PAMF_OFF_EP_OFFSET        0x24
 #define PAMF_OFF_EP_COUNT         0x28
 
 /* Minimum valid header size (enough to read all fields above) */
-#define PAMF_MIN_HEADER_SIZE      0x2C
+#define PAMF_MIN_HEADER_SIZE      0x88
 
 /* Stream descriptor size (fixed 24 bytes per descriptor) */
-#define PAMF_STREAM_DESC_SIZE     24
+#define PAMF_STREAM_DESC_SIZE     48
 
 /* Raw stream type values in the PAMF file (different from SDK constants!) */
-#define PAMF_RAW_TYPE_AVC         1
+#define PAMF_RAW_TYPE_AVC         0x1B
 #define PAMF_RAW_TYPE_M2V         2
-#define PAMF_RAW_TYPE_ATRAC3PLUS  3
-#define PAMF_RAW_TYPE_AC3         4
-#define PAMF_RAW_TYPE_LPCM        5
-#define PAMF_RAW_TYPE_USERDATA    6
+#define PAMF_RAW_TYPE_ATRAC3PLUS  0xDC
+#define PAMF_RAW_TYPE_AC3         0x81
+#define PAMF_RAW_TYPE_LPCM        0x80
+#define PAMF_RAW_TYPE_USERDATA    0xDD
 
 /* ---------------------------------------------------------------------------
  * Endian helpers (PAMF is big-endian)
@@ -76,6 +60,55 @@ static u16 be16(const void* p)
 {
     const u8* b = (const u8*)p;
     return ((u16)b[0] << 8) | b[1];
+}
+
+/* Header queries use 2048-byte sectors and write guest big-endian u64s.
+ * See the PAMF 0040/0041 header format, not the host Reader struct. */
+static s32 pamf_query_sizes(void* pamfAddr, u64 fileSize, u64* header, u64* data)
+{
+    if (!pamfAddr) return (s32)0x80610503;
+    const u8* base = GUEST_PTR(pamfAddr, const u8*);
+    if (be32(base) != CELL_PAMF_MAGIC) return (s32)0x80610504;
+    u32 version = be32(base + 4);
+    if (version != 0x30303430u && version != 0x30303431u) return (s32)0x80610505;
+    *header = (u64)be32(base + 8) * 2048;
+    *data = (u64)be32(base + 12) * 2048;
+    if (!*header || (fileSize && *header + *data != fileSize)) return (s32)0x80610502;
+    return CELL_OK;
+}
+
+s32 cellPamfGetStreamOffsetAndSize(void* pamfAddr, u64 fileSize, u64* offset, u64* size)
+{
+    u64 h, d;
+    s32 ret = pamf_query_sizes(pamfAddr, fileSize, &h, &d);
+    fprintf(stderr, "[cellPamf] GetStreamOffsetAndSize(addr=%08X file=%llu) ret=%08X\n",
+        (u32)(uintptr_t)pamfAddr, (unsigned long long)fileSize, (u32)ret);
+    if (ret) return ret;
+    if (offset) vm_write64((u32)(uintptr_t)offset, h);
+    if (size) vm_write64((u32)(uintptr_t)size, d);
+    return CELL_OK;
+}
+
+s32 cellPamfGetHeaderSize(void* pamfAddr, u64 fileSize, u64* size)
+{
+    return cellPamfGetStreamOffsetAndSize(pamfAddr, fileSize, size, NULL);
+}
+
+s32 cellPamfGetHeaderSize2(void* pamfAddr, u64 fileSize, u32 attribute, u64* size)
+{
+    u64 h, d;
+    s32 ret = pamf_query_sizes(pamfAddr, fileSize, &h, &d);
+    if (!ret && (attribute & 2)) {
+        const u8* base = GUEST_PTR(pamfAddr, const u8*);
+        u64 minimum = 0x54ull + be32(base + 0x50);
+        if (minimum > h) ret = (s32)0x80610502;
+        else h = minimum;
+    }
+    fprintf(stderr, "[cellPamf] GetHeaderSize2(addr=%08X file=%llu attr=%u) ret=%08X header=%llu\n",
+        (u32)(uintptr_t)pamfAddr, (unsigned long long)fileSize, attribute,
+        (u32)ret, ret ? 0ull : (unsigned long long)h);
+    if (!ret && size) vm_write64((u32)(uintptr_t)size, h);
+    return ret;
 }
 
 /* ---------------------------------------------------------------------------
@@ -156,10 +189,13 @@ s32 cellPamfReaderInitialize(CellPamfReader* reader, void* pamfAddr,
 
     reader->pamfAddr = pamfAddr;
     reader->pamfSize = pamfSize;
-    reader->dataOffset = be32(base + PAMF_OFF_DATA_OFFSET);
-    reader->dataSize = be32(base + PAMF_OFF_DATA_SIZE);
-    reader->streamTableOffset = be32(base + PAMF_OFF_STREAM_TABLE);
-    reader->numStreams = (u8)be16(base + PAMF_OFF_NUM_STREAMS);
+    reader->dataOffset = be32(base + PAMF_OFF_DATA_OFFSET) * 2048u;
+    reader->dataSize = be32(base + PAMF_OFF_DATA_SIZE) * 2048u;
+    reader->streamTableOffset = 0x88; /* first grouping period, first group */
+    reader->numStreams = base[0x87];
+    if (!base[0x6F] || !base[0x81] || !reader->numStreams ||
+        0x88u + (u32)reader->numStreams * 48u > 0x54u + be32(base + 0x50))
+        return (s32)0x80610502;
     reader->currentStream = 0;
     reader->currentEP = 0;
 
@@ -175,7 +211,7 @@ s32 cellPamfReaderInitialize(CellPamfReader* reader, void* pamfAddr,
     for (u32 i = 0; i < reader->numStreams; i++) {
         const u8* desc = base + reader->streamTableOffset + i * PAMF_STREAM_DESC_SIZE;
         u8 rawType = desc[0];
-        u8 channel = desc[1];
+        u8 channel = (desc[4] == 0xBD ? desc[5] : desc[4]) & 15;
         s32 sdkType = raw_type_to_sdk(rawType);
         printf("[cellPamf]   stream[%u]: rawType=%u (sdk=%d) channel=%u\n",
                i, rawType, sdkType, channel);
@@ -191,7 +227,7 @@ s32 cellPamfReaderGetPresentationStartTime(CellPamfReader* reader, u64* startTim
         return (s32)CELL_PAMF_ERROR_INVALID_ARG;
 
     const u8* base = (const u8*)reader->pamfAddr;
-    vm_write64((u32)(uintptr_t)startTime, (u64)be32(base + PAMF_OFF_PRESENT_START));
+    vm_write64((u32)(uintptr_t)startTime, ((u64)be16(base + 0x56) << 32) | be32(base + PAMF_OFF_PRESENT_START));
     return CELL_OK;
 }
 
@@ -202,7 +238,7 @@ s32 cellPamfReaderGetPresentationEndTime(CellPamfReader* reader, u64* endTime)
         return (s32)CELL_PAMF_ERROR_INVALID_ARG;
 
     const u8* base = (const u8*)reader->pamfAddr;
-    vm_write64((u32)(uintptr_t)endTime, (u64)be32(base + PAMF_OFF_PRESENT_END));
+    vm_write64((u32)(uintptr_t)endTime, ((u64)be16(base + 0x5C) << 32) | be32(base + PAMF_OFF_PRESENT_END));
     return CELL_OK;
 }
 
@@ -333,118 +369,65 @@ static u8 lpcm_bits(u8 code)
     }
 }
 
-/* ---------------------------------------------------------------------------
- * Stream info extraction — reads real codec parameters from descriptors
- *
- * Stream descriptor layout (24 bytes, big-endian):
- *   Byte  0:    stream type (raw: 1=AVC, 2=M2V, 3=ATRAC3+, 4=AC3, 5=LPCM)
- *   Byte  1:    channel index
- *   For AVC (type 1):
- *     Byte  2:  profileIdc (66=baseline, 77=main, 100=high)
- *     Byte  3:  levelIdc
- *     Byte  4:  frameMbsOnlyFlag (bit 7), videoSignalInfoFlag (bit 6)
- *     Byte  5:  frameRateCode (upper nibble), aspectRatioIdc (lower nibble)
- *     Bytes 6-7:   sarWidth  (be16)
- *     Bytes 8-9:   sarHeight (be16)
- *     Bytes 14-15:  horizontalSize (be16)
- *     Bytes 16-17:  verticalSize   (be16)
- *     Bytes 18-19:  frameCropLeft/Right
- *     Bytes 20-21:  frameCropTop/Bottom
- *   For ATRAC3+ (type 3) / AC3 (type 4):
- *     Byte 10:  channel configuration
- *     Byte 12:  sample rate code
- *   For LPCM (type 5):
- *     Byte 10:  channel configuration
- *     Byte 11:  bits-per-sample code
- *     Byte 12:  sample rate code
- * -----------------------------------------------------------------------*/
-
+/* Stream metadata is serialized in the SDK's guest layout, big endian.
+ * Never write through a guest EA as if it were a native host pointer. */
 s32 cellPamfReaderGetStreamInfo(CellPamfReader* reader, void* info, u32 infoSize)
 {
     reader = pamf_host(reader);
-    if (!reader || !info)
-        return (s32)CELL_PAMF_ERROR_INVALID_ARG;
-
-    info = GUEST_PTR(info, void*);
-    /* ponytail: the CellPamf*Info structs below are filled host-endian.
-     * Their u8 fields are already right; the u16/u32 ones (horizontalSize,
-     * samplingFreq, ...) still need a swap if a title ever reads them. */
+    if (!reader || !info) return (s32)CELL_PAMF_ERROR_INVALID_ARG;
     const u8* desc = get_stream_desc_raw(reader, reader->currentStream);
-    if (!desc)
-        return (s32)CELL_PAMF_ERROR_STREAM_NOT_FOUND;
-
-    s32 sdkType = raw_type_to_sdk(desc[0]);
-
-    switch (sdkType) {
-    case CELL_PAMF_STREAM_TYPE_AVC:
-        if (infoSize >= sizeof(CellPamfAvcInfo)) {
-            CellPamfAvcInfo* avc = (CellPamfAvcInfo*)info;
-            memset(avc, 0, sizeof(*avc));
-            avc->profileIdc            = desc[2];
-            avc->levelIdc              = desc[3];
-            avc->frameMbsOnlyFlag      = (desc[4] >> 7) & 1;
-            avc->videoSignalInfoFlag   = (desc[4] >> 6) & 1;
-            avc->frameRateCode         = (desc[5] >> 4) & 0x0F;
-            avc->aspectRatioIdc        = desc[5] & 0x0F;
-            avc->sarWidth              = be16(desc + 6);
-            avc->sarHeight             = be16(desc + 8);
-            avc->horizontalSize        = be16(desc + 14);
-            avc->verticalSize          = be16(desc + 16);
-            avc->frameCropLeftOffset   = desc[18];
-            avc->frameCropRightOffset  = desc[19];
-            avc->frameCropTopOffset    = desc[20];
-            avc->frameCropBottomOffset = desc[21];
-
-            printf("[cellPamf] AVC info: profile=%u level=%u %ux%u "
-                   "frameRate=%u aspect=%u\n",
-                   avc->profileIdc, avc->levelIdc,
-                   avc->horizontalSize, avc->verticalSize,
-                   avc->frameRateCode, avc->aspectRatioIdc);
+    if (!desc) return (s32)CELL_PAMF_ERROR_STREAM_NOT_FOUND;
+    s32 type = raw_type_to_sdk(desc[0]);
+    const u8* d = desc + 16;
+    u32 ea = (u32)(uintptr_t)info;
+    u32 need = type == CELL_PAMF_STREAM_TYPE_M2V ? 24 : type == CELL_PAMF_STREAM_TYPE_AVC ? 32 : 8;
+    if (infoSize < need) return (s32)CELL_PAMF_ERROR_INVALID_ARG;
+    memset(GUEST_PTR(info, void*), 0, need);
+    if (type == CELL_PAMF_STREAM_TYPE_M2V || type == CELL_PAMF_STREAM_TYPE_AVC) {
+        int m2v = type == CELL_PAMF_STREAM_TYPE_M2V;
+        vm_write8(ea, m2v ? (d[0] == 0x44 ? 3 : d[0] == 0x48 ? 1 : 255) : d[0]);
+        if (!m2v) vm_write8(ea + 1, d[1]);
+        u32 f = m2v ? 1 : 2;
+        vm_write8(ea + f, d[2] >> 7);
+        vm_write8(ea + f + 1, (d[2] >> 6) & 1);
+        vm_write8(ea + f + 2, (d[2] & 15) - (m2v ? 0 : 1));
+        vm_write8(ea + f + 3, d[3]);
+        u32 w = 6;
+        if (d[3] == 255) { vm_write16(ea + w, be16(d + 4)); vm_write16(ea + w + 2, be16(d + 6)); }
+        vm_write16(ea + 10, d[9] * 16u);
+        vm_write16(ea + 12, d[11] * 16u);
+        if (m2v) {
+            vm_write16(ea + 14, be16(d + 12)); vm_write16(ea + 16, be16(d + 14));
+        } else {
+            for (u32 i=0; i<4; ++i) vm_write16(ea + 14 + i*2, be16(d + 12 + i*2));
         }
-        break;
-
-    case CELL_PAMF_STREAM_TYPE_ATRAC3PLUS:
-        if (infoSize >= sizeof(CellPamfAtrac3plusInfo)) {
-            CellPamfAtrac3plusInfo* at3 = (CellPamfAtrac3plusInfo*)info;
-            memset(at3, 0, sizeof(*at3));
-            at3->numberOfChannels  = audio_channels(desc[10]);
-            at3->samplingFrequency = audio_sample_rate(desc[12]);
-
-            printf("[cellPamf] ATRAC3+ info: %u ch, %u Hz\n",
-                   at3->numberOfChannels, at3->samplingFrequency);
+        u32 v = m2v ? 18 : 22;
+        if (d[2] & 0x40) {
+            vm_write8(ea + v, d[20] >> 5); vm_write8(ea + v+1, (d[20] >> 4)&1);
+            for (u32 i=0; i<3; ++i) vm_write8(ea + v+2+i, d[21+i]);
         }
-        break;
-
-    case CELL_PAMF_STREAM_TYPE_PAMF_LPCM:
-        if (infoSize >= sizeof(CellPamfLpcmInfo)) {
-            CellPamfLpcmInfo* lpcm = (CellPamfLpcmInfo*)info;
-            memset(lpcm, 0, sizeof(*lpcm));
-            lpcm->numberOfChannels  = audio_channels(desc[10]);
-            lpcm->bitsPerSample     = lpcm_bits(desc[11]);
-            lpcm->samplingFrequency = audio_sample_rate(desc[12]);
-
-            printf("[cellPamf] LPCM info: %u ch, %u Hz, %u bits\n",
-                   lpcm->numberOfChannels, lpcm->samplingFrequency,
-                   lpcm->bitsPerSample);
+        if (!m2v) {
+            vm_write8(ea+27,d[24]>>7); vm_write8(ea+28,(d[24]>>6)&1);
+            vm_write8(ea+29,(d[24]>>4)&3); vm_write8(ea+30,d[24]&3); vm_write8(ea+31,d[25]);
         }
-        break;
+        fprintf(stderr,"[cellPamf] StreamInfo type=%d %ux%u\n",type,d[9]*16u,d[11]*16u);
+    } else if (type >= 2 && type <= 4) {
+        vm_write32(ea, d[3] & 15); vm_write8(ea + 4, d[2] & 15);
+        if (type == CELL_PAMF_STREAM_TYPE_PAMF_LPCM) vm_write16(ea + 6, d[4] >> 6);
+    } else return (s32)CELL_PAMF_ERROR_NOT_AVAILABLE;
+    return CELL_OK;
+}
 
-    case CELL_PAMF_STREAM_TYPE_AC3:
-        if (infoSize >= sizeof(CellPamfAc3Info)) {
-            CellPamfAc3Info* ac3 = (CellPamfAc3Info*)info;
-            memset(ac3, 0, sizeof(*ac3));
-            ac3->numberOfChannels  = audio_channels(desc[10]);
-            ac3->samplingFrequency = audio_sample_rate(desc[12]);
-
-            printf("[cellPamf] AC3 info: %u ch, %u Hz\n",
-                   ac3->numberOfChannels, ac3->samplingFrequency);
-        }
-        break;
-
-    default:
-        return (s32)CELL_PAMF_ERROR_NOT_AVAILABLE;
-    }
-
+s32 cellPamfReaderGetStreamTypeAndChannel(CellPamfReader* reader, u8* type, u8* channel)
+{
+    reader = pamf_host(reader);
+    if (!reader) return (s32)CELL_PAMF_ERROR_INVALID_ARG;
+    const u8* d = get_stream_desc_raw(reader, reader->currentStream);
+    if (!d) return (s32)CELL_PAMF_ERROR_STREAM_NOT_FOUND;
+    s32 t = raw_type_to_sdk(d[0]);
+    if (t < 0) return (s32)CELL_PAMF_ERROR_STREAM_NOT_FOUND;
+    if (type) vm_write8((u32)(uintptr_t)type, (u8)t);
+    if (channel) vm_write8((u32)(uintptr_t)channel, (d[4] == 0xBD ? d[5] : d[4]) & 15);
     return CELL_OK;
 }
 
@@ -460,14 +443,20 @@ s32 cellPamfReaderGetStreamIndex(CellPamfReader* reader)
 s32 cellPamfStreamTypeToEsFilterId(u8 streamType, u8 streamIndex,
                                      void* esFilterId)
 {
-    (void)streamType; (void)streamIndex;
-    if (!esFilterId)
-        return (s32)CELL_PAMF_ERROR_INVALID_ARG;
-
-    /* Set filter ID bytes (type + index) */
-    u8* id = (u8*)esFilterId;
-    id[0] = streamType;
-    id[1] = streamIndex;
+    if (!esFilterId || streamIndex > 15) return (s32)CELL_PAMF_ERROR_INVALID_ARG;
+    u32 major, minor = 0;
+    switch (streamType) {
+    case CELL_PAMF_STREAM_TYPE_AVC:
+    case CELL_PAMF_STREAM_TYPE_M2V: major = 0xE0 | streamIndex; break;
+    case CELL_PAMF_STREAM_TYPE_ATRAC3PLUS: major = 0xBD; minor = streamIndex; break;
+    case CELL_PAMF_STREAM_TYPE_PAMF_LPCM: major = 0xBD; minor = 0x40 | streamIndex; break;
+    case CELL_PAMF_STREAM_TYPE_AC3: major = 0xBD; minor = 0x30 | streamIndex; break;
+    case CELL_PAMF_STREAM_TYPE_USER_DATA: major = 0xBD; minor = 0x20 | streamIndex; break;
+    default: return (s32)CELL_PAMF_ERROR_INVALID_ARG;
+    }
+    u32 ea = (u32)(uintptr_t)esFilterId;
+    vm_write32(ea, major); vm_write32(ea+4, minor);
+    vm_write32(ea+8, streamType == CELL_PAMF_STREAM_TYPE_AVC); vm_write32(ea+12, 0);
     return CELL_OK;
 }
 

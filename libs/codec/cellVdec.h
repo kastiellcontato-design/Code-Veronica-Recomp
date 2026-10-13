@@ -30,7 +30,7 @@ extern "C" {
  * Codec types
  * -----------------------------------------------------------------------*/
 #define CELL_VDEC_CODEC_TYPE_AVC       0x00000001
-#define CELL_VDEC_CODEC_TYPE_MPEG2     0x00000002
+#define CELL_VDEC_CODEC_TYPE_MPEG2     0x00000000
 #define CELL_VDEC_CODEC_TYPE_DIVX      0x00000005
 
 /* Picture format */
@@ -100,6 +100,8 @@ typedef struct CellVdecCb {
 
 s32 cellVdecOpen(const CellVdecType* type, const CellVdecResource* res,
                   const CellVdecCb* cb, CellVdecHandle* handle);
+s32 cellVdecQueryAttrEx(const CellVdecType* type, void* attr);
+s32 cellVdecOpenEx(const CellVdecType* type, const CellVdecResource* res, const CellVdecCb* cb, CellVdecHandle* handle);
 s32 cellVdecClose(CellVdecHandle handle);
 
 s32 cellVdecStartSeq(CellVdecHandle handle);

@@ -179,7 +179,7 @@ static void ps3_hle_unresolved(uint32_t nid, ppu_context* ctx)
 
 extern "C" void ppu_prof_stamp(void* ctx, unsigned lr);
 extern "C" uint32_t ppu_prof_resolve_host(void* ra);
-extern "C" void ps3_hle_call(uint32_t nid, ppu_context* ctx)
+extern "C" void ps3_hle_call_inner(uint32_t nid, ppu_context* ctx)
 {
     /* HLE_BT_EVERY=<n>: dump the calling thread's guest stack every nth HLE
      * call it makes. WAITBT_EVERY only samples threads that are blocking on an
@@ -660,6 +660,16 @@ extern "C" void ps3_hle_call(uint32_t nid, ppu_context* ctx)
         }
         static int logged = 0;
         if (logged < 40) { fprintf(stderr, "[hle] unresolved NID 0x%08X\n", nid); logged++; }
+        if (nid == 0x7FDF4FEFu) {
+            fprintf(stderr, "[hle-trace] missing cellSpursBarrierInitialize lr=0x%08X "
+                            "cia=0x%08X r3..r10=%08X %08X %08X %08X %08X %08X %08X %08X\n",
+                    (uint32_t)ctx->lr, (uint32_t)ctx->cia,
+                    (uint32_t)ctx->gpr[3], (uint32_t)ctx->gpr[4],
+                    (uint32_t)ctx->gpr[5], (uint32_t)ctx->gpr[6],
+                    (uint32_t)ctx->gpr[7], (uint32_t)ctx->gpr[8],
+                    (uint32_t)ctx->gpr[9], (uint32_t)ctx->gpr[10]);
+            fflush(stderr);
+        }
         /* cellSaveData call-shape capture: dump r3-r10 + resolve r7/r8 as OPD
          * callbacks (statCallback/fileCallback) to learn the cellSaveDataAutoLoad2
          * protocol so it can be implemented. */
@@ -736,14 +746,78 @@ extern "C" void ps3_hle_call(uint32_t nid, ppu_context* ctx)
             nid, e->name?e->name:"?", rv); } } }
 }
 
+/* Keep the callback-yield longjmp outside ps3_hle_call_inner: its local C++
+ * guard restores the guest TOC and clears the per-thread HLE-inflight marker. */
+extern "C" void ppu_guest_call_yield_if_requested(void);
+extern "C" void ps3_hle_call(uint32_t nid, ppu_context* ctx)
+{
+    ps3_hle_call_inner(nid, ctx);
+    ppu_guest_call_yield_if_requested();
+}
+
 /* Populated by the generated registration unit (gen_hle_nids.py). Weak so a
  * build without it still links (no HLE registered -> imports log + return 0). */
 extern "C" void ppu_hle_register_all(void) __attribute__((weak));
 extern "C" void ppu_hle_register_all(void) {}
 
+/* cellFiber PPU-context exports are implemented in cellFiber.c, but are not
+ * present in the generated NID database yet. Keep their verified NIDs here so
+ * games importing these APIs reach the existing HLE implementations. */
+extern "C" {
+int32_t cellSpursBarrierInitialize(uint64_t taskset_ea, uint64_t barrier_ea,
+                                   uint32_t total, uint64_t a3, uint64_t a4,
+                                   uint64_t a5, uint64_t a6, uint64_t a7);
+int32_t _cellFiberPpuContextAttributeInitialize(uint64_t attr_ea,
+                                                uint32_t sdk_version,
+                                                uint64_t a2, uint64_t a3,
+                                                uint64_t a4, uint64_t a5,
+                                                uint64_t a6, uint64_t a7);
+int32_t cellFiberPpuContextInitialize(uint64_t context_ea,
+                                      uint64_t entry_opd, uint64_t arg,
+                                      uint64_t stack_ea, uint32_t stack_size,
+                                      uint64_t attr_ea, uint64_t a6,
+                                      uint64_t a7);
+int32_t cellFiberPpuContextRun(uint64_t context_ea, uint64_t cause_ea,
+                               uint64_t fiber_from_ea, uint64_t option_ea,
+                               uint64_t a4, uint64_t a5, uint64_t a6,
+                               uint64_t a7);
+int32_t cellFiberPpuContextSwitch(uint64_t context_ea,
+                                  uint64_t fiber_from_ea,
+                                  uint64_t option_ea, uint64_t a3,
+                                  uint64_t a4, uint64_t a5, uint64_t a6,
+                                  uint64_t a7);
+uint64_t cellFiberPpuContextSelf(uint64_t a0, uint64_t a1, uint64_t a2,
+                                 uint64_t a3, uint64_t a4, uint64_t a5,
+                                 uint64_t a6, uint64_t a7);
+int32_t cellFiberPpuContextFinalize(uint64_t context_ea, uint64_t a1,
+                                    uint64_t a2, uint64_t a3, uint64_t a4,
+                                    uint64_t a5, uint64_t a6, uint64_t a7);
+int32_t cellFiberPpuContextReturnToThread(uint64_t cause, uint64_t a1,
+                                          uint64_t a2, uint64_t a3,
+                                          uint64_t a4, uint64_t a5,
+                                          uint64_t a6, uint64_t a7);
+}
+
 extern "C" void ppu_hle_init(void)
 {
     ppu_hle_register_all();
+
+    ps3_hle_register(0x7FDF4FEFu, "cellSpursBarrierInitialize",
+                     (void*)cellSpursBarrierInitialize);
+    ps3_hle_register(0x31252EC3u, "_cellFiberPpuContextAttributeInitialize",
+                     (void*)_cellFiberPpuContextAttributeInitialize);
+    ps3_hle_register(0x72086315u, "cellFiberPpuContextInitialize",
+                     (void*)cellFiberPpuContextInitialize);
+    ps3_hle_register(0xABA1C563u, "cellFiberPpuContextRun",
+                     (void*)cellFiberPpuContextRun);
+    ps3_hle_register(0xD0066B17u, "cellFiberPpuContextSwitch",
+                     (void*)cellFiberPpuContextSwitch);
+    ps3_hle_register(0x34A81091u, "cellFiberPpuContextSelf",
+                     (void*)cellFiberPpuContextSelf);
+    ps3_hle_register(0xB3A48079u, "cellFiberPpuContextFinalize",
+                     (void*)cellFiberPpuContextFinalize);
+    ps3_hle_register(0x01036193u, "cellFiberPpuContextReturnToThread",
+                     (void*)cellFiberPpuContextReturnToThread);
 
     /* The generated registration unit is per-game and easy to leave out: the
      * weak stub above means a build without it links and starts, then fails

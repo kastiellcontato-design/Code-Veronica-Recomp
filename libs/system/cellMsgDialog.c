@@ -6,6 +6,9 @@
  */
 
 #include "cellMsgDialog.h"
+#include "../../runtime/ppu/ppu_context.h"
+extern PPU_THREAD_LOCAL ppu_context* g_active_ctx;
+extern void ppu_dump_guest_stack(ppu_context*, const char*);
 #include "cellSysutil.h"
 #include "ps3emu/guest_call.h"
 #include <stdio.h>
@@ -115,6 +118,26 @@ s32 cellMsgDialogOpen2(CellMsgDialogType type, const char* msgString,
 {
     printf("[cellMsgDialog] Open2(type=0x%08X, msg='%s')\n",
            type, guest_str(msgString));
+    if (getenv("CV_PROGRESS_DIAG") && g_active_ctx)
+        ppu_dump_guest_stack(g_active_ctx, "msg-dialog");
+    if (getenv("CV_ARC_DUMP") && g_active_ctx &&
+        strstr(guest_str(msgString), "installation is corrupted")) {
+        uint32_t object=(uint32_t)g_active_ctx->gpr[26];
+        uint32_t buffer=vm_read32(object+0x18);
+        uint32_t bytes=(uint32_t)g_active_ctx->gpr[30];
+        if (buffer>=0x10000 && buffer<0x50000000 && bytes>0 && bytes<=0x20000) {
+            FILE* dump=fopen(getenv("CV_ARC_DUMP"),"wb");
+            if(dump){fwrite(vm_base+buffer,1,bytes,dump);fclose(dump);}
+            fprintf(stderr,"[ARC-DUMP] buffer=%08X bytes=%u\n",buffer,bytes);
+            fprintf(stderr,"[ARC-CONSTANT] seed=");
+            for(int i=0;i<16;i++)fprintf(stderr,"%02X",vm_read8(0x8ee540+i));
+            fprintf(stderr," rot=");
+            for(int i=0;i<16;i++)fprintf(stderr,"%02X",vm_read8(0x792920+i));
+            fprintf(stderr,"\n");
+
+        }
+    }
+
 
     if (s_dialog_open) {
         printf("[cellMsgDialog] WARNING: dialog already open, closing previous\n");

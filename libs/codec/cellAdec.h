@@ -44,12 +44,13 @@ extern "C" {
 /* ---------------------------------------------------------------------------
  * Codec types
  * -----------------------------------------------------------------------*/
-#define CELL_ADEC_TYPE_ATRACX          0   /* ATRAC3plus */
-#define CELL_ADEC_TYPE_LPCM            1   /* Linear PCM */
-#define CELL_ADEC_TYPE_AC3             2   /* AC3 / Dolby Digital */
-#define CELL_ADEC_TYPE_MP3             3   /* MPEG-1 Layer 3 */
-#define CELL_ADEC_TYPE_AAC             4   /* AAC */
-#define CELL_ADEC_TYPE_CELP8           5   /* CELP 8kHz */
+#define CELL_ADEC_TYPE_LPCM            1
+#define CELL_ADEC_TYPE_AC3             2
+#define CELL_ADEC_TYPE_ATRACX          3
+#define CELL_ADEC_TYPE_MP3             4
+#define CELL_ADEC_TYPE_ATRAC3           5
+#define CELL_ADEC_TYPE_AAC             7
+#define CELL_ADEC_TYPE_CELP8           11
 
 /* Callback message types */
 #define CELL_ADEC_MSG_TYPE_AUDONE      0
@@ -123,6 +124,7 @@ typedef struct CellAdecCb {
 s32 cellAdecQueryAttr(const CellAdecType* type, void* attr);
 s32 cellAdecOpen(const CellAdecType* type, const CellAdecResource* res,
                  const CellAdecCb* cb, CellAdecHandle* handle);
+s32 cellAdecOpenEx(const CellAdecType* type, const CellAdecResource* res, const CellAdecCb* cb, CellAdecHandle* handle);
 s32 cellAdecClose(CellAdecHandle handle);
 
 s32 cellAdecStartSeq(CellAdecHandle handle, void* param);

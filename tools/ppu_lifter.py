@@ -2690,9 +2690,17 @@ class PPULifter:
         # Byte compare equal
         if mn.startswith("vcmpequb"):
             vd, va, vb = int(ops[0][1:]), int(ops[1][1:]), int(ops[2][1:])
-            return (f"{{ uint8_t* d=(uint8_t*)&ctx->vr[{vd}]; uint8_t* a=(uint8_t*)&ctx->vr[{va}]; "
-                    f"uint8_t* b=(uint8_t*)&ctx->vr[{vb}]; "
-                    f"for(int i=0;i<16;i++) d[i]=a[i]==b[i]?0xFFu:0u; }}")
+            # Dot forms also record all-true/all-false in CR6. Archive
+            # checksum code reads CR6 through mfcr immediately afterwards.
+            body = (f"{{ const uint8_t* a=(const uint8_t*)&ctx->vr[{va}]; "
+                    f"const uint8_t* b=(const uint8_t*)&ctx->vr[{vb}]; "
+                    f"uint8_t d[16]; int t=0; "
+                    f"for(int i=0;i<16;i++){{ int r=a[i]==b[i]; d[i]=r?0xFFu:0u; t+=r; }} "
+                    f"memcpy(&ctx->vr[{vd}], d, 16);")
+            if mn.endswith("."):
+                body += (" uint32_t c6=(t==16?8u:0u)|(t==0?2u:0u); "
+                         "ctx->cr=(ctx->cr & ~(0xFu<<4))|(c6<<4);")
+            return body + " }"
 
         # Saturating add
         if mn == "vaddsbs":

@@ -76,6 +76,35 @@ static void fs_normalize_sep(char* p) {
 #endif
 }
 
+/* A directly extracted HDD title retains its firmware install path even
+ * when the host stores it outside dev_hdd0/game. Register the precise title
+ * mount from its HG PARAM.SFO; other titles and device paths keep their mounts.
+ * Initialized before guest threads start, shared by all filesystem bridges. */
+static char s_hdd_title_prefix[96];
+static char s_hdd_title_host[1024];
+
+void ps3_vfs_set_hdd_title_mount(const char* title_id, const char* host)
+{
+    s_hdd_title_prefix[0] = s_hdd_title_host[0] = 0;
+    if (!title_id || !*title_id || !host || !*host) return;
+    snprintf(s_hdd_title_prefix, sizeof s_hdd_title_prefix,
+             "/dev_hdd0/game/%s", title_id);
+    snprintf(s_hdd_title_host, sizeof s_hdd_title_host, "%s", host);
+    fs_normalize_sep(s_hdd_title_host);
+    printf("[vfs] HDD title mount %s -> %s\n", s_hdd_title_prefix, s_hdd_title_host);
+}
+
+int ps3_vfs_resolve_hdd_title(const char* guest, char* host, size_t cap)
+{
+    if (!guest || !host || !cap || !s_hdd_title_prefix[0]) return 0;
+    size_t n = strlen(s_hdd_title_prefix);
+    if (strncmp(guest, s_hdd_title_prefix, n) ||
+        (guest[n] != 0 && guest[n] != '/')) return 0;
+    snprintf(host, cap, "%s%s", s_hdd_title_host, guest + n);
+    fs_normalize_sep(host);
+    return 1;
+}
+
 /* Extracted game trees come in two shapes: the disc layout (<root>/PS3_GAME/
  * USRDIR/...) and a flattened one (<root>/USRDIR/...). cellGame hands the title
  * disc-style paths either way -- cellGameContentPermit reports
@@ -124,6 +153,7 @@ void ps3_vfs_ps3game_fallback(char* path, size_t cap)
 
 void sys_fs_translate_path(const char* ps3_path, char* host_path, int host_path_size)
 {
+    if (ps3_vfs_resolve_hdd_title(ps3_path, host_path, (size_t)host_path_size)) return;
     /* Lazily adopt PS3_VFS_ROOT if the root is still the default ".", so this
      * sys_fs layer points at the same place as the cellFs layer (ppu_vfs_root). */
     if (g_sys_fs_root[0] == '.' && g_sys_fs_root[1] == '\0') {

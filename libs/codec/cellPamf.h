@@ -19,11 +19,11 @@ extern "C" {
 /* ---------------------------------------------------------------------------
  * Error codes
  * -----------------------------------------------------------------------*/
-#define CELL_PAMF_ERROR_INVALID_ARG          0x80610301
-#define CELL_PAMF_ERROR_INVALID_HEADER       0x80610302
-#define CELL_PAMF_ERROR_STREAM_NOT_FOUND     0x80610303
-#define CELL_PAMF_ERROR_EP_NOT_FOUND         0x80610304
-#define CELL_PAMF_ERROR_NOT_AVAILABLE        0x80610305
+#define CELL_PAMF_ERROR_INVALID_ARG          0x80610503
+#define CELL_PAMF_ERROR_INVALID_HEADER       0x80610502
+#define CELL_PAMF_ERROR_STREAM_NOT_FOUND     0x80610501
+#define CELL_PAMF_ERROR_EP_NOT_FOUND         0x80610507
+#define CELL_PAMF_ERROR_NOT_AVAILABLE        0x80610508
 
 /* ---------------------------------------------------------------------------
  * Stream types
@@ -113,12 +113,19 @@ typedef struct CellPamfStreamInfo {
  * Functions
  * -----------------------------------------------------------------------*/
 
+/* Container header queries; output pointers are guest addresses. */
+s32 cellPamfGetHeaderSize(void* pamfAddr, u64 fileSize, u64* size);
+s32 cellPamfGetHeaderSize2(void* pamfAddr, u64 fileSize, u32 attribute, u64* size);
+s32 cellPamfGetStreamOffsetAndSize(void* pamfAddr, u64 fileSize, u64* offset, u64* size);
+
 /* Reader lifecycle */
 s32 cellPamfReaderInitialize(CellPamfReader* reader, void* pamfAddr,
                               u32 pamfSize, u32 attribute);
 s32 cellPamfReaderGetPresentationStartTime(CellPamfReader* reader, u64* startTime);
 s32 cellPamfReaderGetPresentationEndTime(CellPamfReader* reader, u64* endTime);
 u32 cellPamfReaderGetMuxRateBound(CellPamfReader* reader);
+
+s32 cellPamfReaderGetStreamTypeAndChannel(CellPamfReader* reader, u8* type, u8* channel);
 
 /* Stream queries */
 s32 cellPamfReaderGetNumberOfStreams(CellPamfReader* reader);

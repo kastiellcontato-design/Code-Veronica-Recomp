@@ -24,12 +24,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <setjmp.h>
 #ifdef _WIN32
 #  include <windows.h>
 #else
 #  include "../platform/win32_compat.h"   /* _Interlocked*, YieldProcessor, Sleep */
 #endif
 
+#include "ppu_fiber_bridge.h"
 #include "ppu_tls.h"   /* PPU_THREAD_LOCAL, without a second ppu_context */
 #include "ppu_recomp.h"
 #include "ps3emu/milestone.h"   /* ps3_ms / ps3_msf -- boot milestone log */     /* ppu_context, func decls, ppu_recomp_register */
@@ -1433,6 +1435,7 @@ static void pt_restore(uint32_t addr) { for (int i=0;i<g_pt_n;i++) if (g_pt_addr
  * write hook can name the virtual method that is running when it writes a value. */
 static PPU_THREAD_LOCAL uint32_t g_vcall_stk[128];
 static PPU_THREAD_LOCAL int      g_vcall_sp = 0;
+static PPU_THREAD_LOCAL int g_indirect_depth = 0;
 
 /* Every guest store commits through this: on a line no SPU has reserved (all of
  * them, until SPU code runs) it is the plain memcpy it replaced. */
@@ -2340,6 +2343,15 @@ static void icall_hist(ppu_context* ctx, uint32_t tgt, int phase)
 
 extern "C" void ps3_indirect_call(ppu_context* ctx)
 {
+    if (getenv("CV_MEMORY_TRACE") && ctx->lr==0x00247BC0) {
+        uint32_t tgt=(uint32_t)ctx->ctr;
+        fprintf(stderr,"[cv-alloc] tgt=%08X this=%08X bytes=%08X align=%08X r2=%08X\n",
+            tgt,(uint32_t)ctx->gpr[3],(uint32_t)ctx->gpr[4],(uint32_t)ctx->gpr[5],(uint32_t)ctx->gpr[2]);
+        ps3_indirect_call_impl(ctx);
+        fprintf(stderr,"[cv-alloc] tgt=%08X returned=%08X\n",tgt,(uint32_t)ctx->gpr[3]);
+        return;
+    }
+
     static int on = -1;
     if (on < 0) on = getenv("PPU_CSCHECK") ? 1 : 0;
     { static int hg = -1; if (hg < 0) hg = getenv("PS3_ICALL_GATE") ? 1 : 0;
@@ -2639,14 +2651,14 @@ static void ps3_indirect_call_impl(ppu_context* ctx)
         /* Recursion-depth guard: a malformed/cyclic jump table (or a tail-call
          * chain that never converges) can dispatch recursively without bound
          * and blow the host stack. Cap the depth, log once, then unwind. */
-        static thread_local int s_depth = 0;
-        if (s_depth > 4000) {
+        /* Depth is saved per native fiber by the bridge below. */
+        if (g_indirect_depth > 4000) {
             static int warned = 0;
             if (warned++ < 8)
-                fprintf(stderr, "[ppu] recursion cap @0x%08X depth=%d -- skipping\n", addr, s_depth);
+                fprintf(stderr, "[ppu] recursion cap @0x%08X depth=%d -- skipping\n", addr, g_indirect_depth);
             return;
         }
-        s_depth++;
+        g_indirect_depth++;
         /* PPU_TOCFIX: the dispatched function's TOC (r2) is the OPD toc we were
          * called with. Tail-call trampoline links (`b target`) are intra-module, so
          * they must all run with THIS same r2. A link that does a cross-module call
@@ -2680,7 +2692,7 @@ static void ps3_indirect_call_impl(ppu_context* ctx)
             fprintf(stderr,"%s\n",ln);
 #endif
           } } }
-        s_depth--;
+        g_indirect_depth--;
         return;
     }
     /* Garbage virtual-call guard: a call target that resolves to no registered
@@ -3008,14 +3020,8 @@ extern "C" void lv2_syscall(ppu_context* ctx)
         fprintf(stderr,"[sc-caller] port_send(port=1) from func_%08X+0x%llX data=0x%08X/0x%08X/0x%08X\n",
                 bg,(unsigned long long)(tgt-bh),(uint32_t)ctx->gpr[4],(uint32_t)ctx->gpr[5],(uint32_t)ctx->gpr[6]); } }
     switch (num) {
-    case 352: {   /* sys_memory_get_user_memory_size(sys_memory_info_t* info)
-                   * info = { u32 total_user_memory; u32 available_user_memory } */
-        uint32_t info = (uint32_t)ctx->gpr[3];
-        if (info) { vm_write32(info + 0, 0x10000000u);   /* 256 MB total */
-                    vm_write32(info + 4, 0x0C000000u); } /* 192 MB available */
-        ctx->gpr[3] = 0;
-        return;
-    }
+    /* Syscall 352 uses the registered sys_memory handler below, including
+     * its live allocation accounting. A fixed available size starves heaps. */
     case 330: {   /* sys_mmapper_allocate_address(u64 size, u64 flags,
                    * u64 alignment, u32* alloc_addr) -> reserve guest VA range */
         static uint32_t s_next_va = 0x11000000u;   /* just past the loaded image */
@@ -3545,6 +3551,101 @@ extern "C" void ppu_register_opd_fixup(uint32_t opd, uint32_t code, uint32_t toc
         s_opd_fixups[s_opd_fixup_n].code = code; s_opd_fixups[s_opd_fixup_n].toc = toc; s_opd_fixup_n++; }
 }
 
+/* A cooperative CellFiber context may call ContextReturnToThread from inside
+ * lifted guest code. The current runtime cannot preserve a guest stack across
+ * calls, so let that HLE return to the host wrapper that started the callback. */
+static PPU_THREAD_LOCAL jmp_buf* s_guest_call_return_env = nullptr;
+static PPU_THREAD_LOCAL int s_guest_call_return_requested = 0;
+
+extern "C" void ppu_fiber_bridge_save(PpuFiberBridgeState* state)
+{
+    state->active_ctx = g_active_ctx;
+    state->return_env = s_guest_call_return_env;
+    state->return_requested = s_guest_call_return_requested;
+    state->trampoline = g_trampoline_fn;
+    memcpy(state->callstack, g_vcall_stk, sizeof(g_vcall_stk));
+    state->call_depth = g_vcall_sp;
+    state->indirect_depth = g_indirect_depth;
+}
+
+extern "C" void ppu_fiber_bridge_restore(const PpuFiberBridgeState* state)
+{
+    g_active_ctx = static_cast<ppu_context*>(state->active_ctx);
+    s_guest_call_return_env = static_cast<jmp_buf*>(state->return_env);
+    s_guest_call_return_requested = state->return_requested;
+    g_trampoline_fn = state->trampoline;
+    memcpy(g_vcall_stk, state->callstack, sizeof(g_vcall_stk));
+    g_vcall_sp = state->call_depth;
+    g_indirect_depth = state->indirect_depth;
+}
+
+/* Unlike a callback, a fiber owns the guest stack passed to ContextInitialize.
+ * Its host frame and the lifted function's frames survive SwitchToFiber. */
+extern "C" void ppu_fiber_guest_start(uint32_t opd, uint64_t arg,
+                                     uint32_t stack_top, uint32_t from)
+{
+    uint32_t code = 0, toc = 0;
+    ppu_opd_resolve(opd, &code, &toc);
+    ppu_fn fn = ppu_lookup(code);
+    if (!fn) {
+        fprintf(stderr, "[cellFiber] entry OPD 0x%08X code 0x%08X is not registered\n", opd, code);
+        return;
+    }
+    ppu_context ctx = {};
+    ctx.thread_id = g_active_ctx ? g_active_ctx->thread_id : 0;
+    ctx.gpr[13] = g_active_ctx ? g_active_ctx->gpr[13] : PPU_TLS_TP;
+    ctx.gpr[1] = (stack_top & ~15u) - 0x80u;
+    ctx.gpr[2] = toc;
+    ctx.gpr[3] = arg;
+    ctx.gpr[4] = from;
+    ctx.cia = code;
+    vm_write64((uint32_t)ctx.gpr[1], 0);
+    g_active_ctx = &ctx;
+    s_guest_call_return_env = nullptr;
+    s_guest_call_return_requested = 0;
+    g_trampoline_fn = nullptr;
+    g_vcall_sp = 0;
+    g_indirect_depth = 0;
+    fn(&ctx);
+    while (g_trampoline_fn) {
+        void (*next)(void*) = g_trampoline_fn;
+        g_trampoline_fn = nullptr;
+        next(&ctx);
+    }
+}
+
+extern "C" int ppu_guest_call_return_to_caller(void)
+{
+    if (!s_guest_call_return_env) return 0;
+    s_guest_call_return_requested = 1;
+    return 1;
+}
+
+/* Called by the outer HLE bridge only after its stack guards have unwound. */
+extern "C" void ppu_guest_call_yield_if_requested(void)
+{
+    if (!s_guest_call_return_env || !s_guest_call_return_requested) return;
+    s_guest_call_return_requested = 0;
+    longjmp(*s_guest_call_return_env, 1);
+}
+
+/* Host callback threads need distinct guest stacks. Guest-originated HLE
+ * callbacks can use the unused space below the calling guest's stack frame. */
+static uint32_t ppu_callback_stack(void)
+{
+    if (g_active_ctx && g_active_ctx->gpr[1])
+        return ((uint32_t)g_active_ctx->gpr[1] - 0x80u) & ~15u;
+    static volatile LONG next_slot = 0;
+    static PPU_THREAD_LOCAL uint32_t private_sp = 0;
+    if (!private_sp) {
+        LONG slot = InterlockedIncrement(&next_slot) - 1;
+        if (slot >= 128) { fprintf(stderr,"[ppu] callback stack slots exhausted\n"); abort(); }
+        private_sp = 0xCFFE0000u - (uint32_t)slot * 0x20000u;
+        vm_commit(private_sp - 0x10000u, 0x20000u);
+    }
+    return private_sp;
+}
+
 extern "C" uint64_t ppu_guest_call(uint32_t opd_addr,
                                    uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
                                    uint64_t a4, uint64_t a5, uint64_t a6, uint64_t a7)
@@ -3571,8 +3672,7 @@ extern "C" uint64_t ppu_guest_call(uint32_t opd_addr,
 
     /* Private scratch stack high in the guest stack region, distinct from the
      * main + ppu_thread stacks. One callback at a time per caller thread. */
-    static PPU_THREAD_LOCAL uint32_t s_cb_sp = 0;
-    if (!s_cb_sp) s_cb_sp = 0xCFFE0000u;
+    uint32_t s_cb_sp = ppu_callback_stack();
 
     ppu_context ctx;
     memset(&ctx, 0, sizeof(ctx));
@@ -3580,7 +3680,7 @@ extern "C" uint64_t ppu_guest_call(uint32_t opd_addr,
     ctx.gpr[2]  = toc;
     ctx.gpr[3]  = a0; ctx.gpr[4] = a1; ctx.gpr[5] = a2; ctx.gpr[6] = a3;
     ctx.gpr[7]  = a4; ctx.gpr[8] = a5; ctx.gpr[9] = a6; ctx.gpr[10] = a7;
-    ctx.gpr[13] = PPU_TLS_TP;
+    ctx.gpr[13] = g_active_ctx ? g_active_ctx->gpr[13] : PPU_TLS_TP;
     ctx.cia     = code;
     /* Save/restore g_active_ctx: this scratch ctx lives on the stack, so leaving
      * g_active_ctx pointing at it after we return leaves a DANGLING pointer once the
@@ -3598,8 +3698,21 @@ extern "C" uint64_t ppu_guest_call(uint32_t opd_addr,
     ctx.thread_id = saved_active ? saved_active->thread_id : 0x7FFF0000ull;
 #endif
     g_active_ctx = &ctx;
-    fn(&ctx);
-    while (g_trampoline_fn) { void (*tf)(void*) = g_trampoline_fn; g_trampoline_fn = 0; tf(&ctx); }
+    jmp_buf return_env;
+    jmp_buf* saved_return_env = s_guest_call_return_env;
+    int saved_return_requested = s_guest_call_return_requested;
+    s_guest_call_return_requested = 0;
+    s_guest_call_return_env = &return_env;
+    if (setjmp(return_env) == 0) {
+        fn(&ctx);
+        while (g_trampoline_fn) { void (*tf)(void*) = g_trampoline_fn; g_trampoline_fn = 0; tf(&ctx); }
+    } else {
+        /* Do not allow a stale lifted tail-call to continue after yielding. */
+        g_trampoline_fn = nullptr;
+        ctx.gpr[3] = 0;
+    }
+    s_guest_call_return_env = saved_return_env;
+    s_guest_call_return_requested = saved_return_requested;
     g_active_ctx = saved_active;
     return ctx.gpr[3];
 }
@@ -3616,8 +3729,7 @@ extern "C" uint64_t ppu_guest_call_ct(uint32_t code, uint32_t toc,
     ppu_fn fn = ppu_lookup(code);
     if (!fn) { fprintf(stderr, "[ppu] guest_call_ct: code 0x%08X not registered\n", code); return 0; }
 
-    static PPU_THREAD_LOCAL uint32_t s_cb_sp = 0;
-    if (!s_cb_sp) s_cb_sp = 0xCFFE0000u;
+    uint32_t s_cb_sp = ppu_callback_stack();
 
     ppu_context ctx;
     memset(&ctx, 0, sizeof(ctx));
@@ -3625,7 +3737,7 @@ extern "C" uint64_t ppu_guest_call_ct(uint32_t code, uint32_t toc,
     ctx.gpr[2]  = toc;
     ctx.gpr[3]  = a0; ctx.gpr[4] = a1; ctx.gpr[5] = a2; ctx.gpr[6] = a3;
     ctx.gpr[7]  = a4; ctx.gpr[8] = a5; ctx.gpr[9] = a6; ctx.gpr[10] = a7;
-    ctx.gpr[13] = PPU_TLS_TP;
+    ctx.gpr[13] = g_active_ctx ? g_active_ctx->gpr[13] : PPU_TLS_TP;
     ctx.cia     = code;
     /* Save/restore g_active_ctx (see ppu_guest_call): the scratch ctx is stack-local,
      * so a dangling g_active_ctx after return corrupts the crash handler / diagnostics. */
@@ -3694,7 +3806,7 @@ extern "C" int ppu_run(uint32_t entry_opd, uint32_t stack_top)
         memcpy(vm_base + PPU_TLS_IMG, vm_base + g_tls_vaddr, g_tls_filesz);
         if (g_tls_memsz > g_tls_filesz)
             memset(vm_base + PPU_TLS_IMG + g_tls_filesz, 0, g_tls_memsz - g_tls_filesz);
-        ctx.gpr[13] = PPU_TLS_TP;
+        ctx.gpr[13] = g_active_ctx ? g_active_ctx->gpr[13] : PPU_TLS_TP;
         fprintf(stderr, "[ppu] TLS image 0x%08X (r13/TP=0x%08X)\n", PPU_TLS_IMG, PPU_TLS_TP);
     }
     /* Guest command line (argc/argv). The PS3 LV2 loader passes argv[0] = the boot
@@ -3708,7 +3820,8 @@ extern "C" int ppu_run(uint32_t entry_opd, uint32_t stack_top)
          * The old /dev_hdd0/NPUA80001 (another game's id) failed the compare ->
          * wrong boot branch -> init divergence/deadlock. $PS3_BOOT_PATH overrides. */
         const char* boot_path = getenv("PS3_BOOT_PATH");
-        if (!boot_path || !*boot_path) boot_path = "/dev_bdvd/PS3_GAME/USRDIR/EBOOT.BIN";
+        extern const char* cellGame_get_boot_path(void);
+        if (!boot_path || !*boot_path) boot_path = cellGame_get_boot_path();
 
         /* PS3_ARGV=<arg1>;<arg2>;... -- the arguments AFTER argv[0].
          *
@@ -3867,4 +3980,3 @@ extern "C" void ppu_guest_callstack(const char* tag)
     (void)tag;
 #endif
 }
-

@@ -187,6 +187,8 @@ s32 cellSpursInitialize(CellSpurs* spurs, s32 nSpus, s32 spuPriority,
                         s32 ppuPriority, u8 exitIfNoWork);
 s32 cellSpursInitializeWithAttribute(CellSpurs* spurs,
                                      const CellSpursAttribute* attr);
+s32 cellSpursInitializeWithAttribute2(CellSpurs* spurs,
+                                      const CellSpursAttribute* attr);
 s32 cellSpursFinalize(CellSpurs* spurs);
 
 s32 cellSpursAttributeInitialize(CellSpursAttribute* attr, s32 nSpus,
@@ -198,6 +200,8 @@ s32 cellSpursAttributeSetSpuThreadGroupType(CellSpursAttribute* attr,
                                             s32 type);
 s32 cellSpursAttributeEnableSpuPrintfIfAvailable(CellSpursAttribute* attr);
 
+/* NID 0x6C960F6D: enumerate initialized SPU IDs; nThreads is in/out capacity. */
+s32 cellSpursGetSpuThreadId(const CellSpurs* spurs, u32* threadIds, u32* nThreads);
 s32 cellSpursGetNumSpuThread(const CellSpurs* spurs, u32* nThreads);
 s32 cellSpursSetMaxContention(CellSpurs* spurs, CellSpursWorkloadId wid,
                               u32 maxContention);
@@ -234,6 +238,18 @@ s32 cellSpursTasksetAttributeSetName(CellSpursTasksetAttribute* attr,
 s32 cellSpursCreateTask(CellSpursTaskset* taskset, CellSpursTaskId* taskId,
                         void* elf, void* context, u32 sizeContext,
                         u32 lsPattern_ea, u32 argument_ea);
+s32 _cellSpursTaskAttribute2Initialize(u32 attr, u32 revision);
+s32 _cellSpursTasksetAttribute2Initialize(u32 attr, u32 revision);
+s32 cellSpursCreateTaskset2(CellSpurs* spurs, CellSpursTaskset* taskset, u32 attr);
+s32 cellSpursTasksetGetSpursAddress(CellSpursTaskset* taskset, u32 out);
+s32 cellSpursGetTasksetId(u32 taskset_ea, u32 out);
+s32 cellSpursGetJobChainId(u32 jc_ea, u32 out);
+s32 cellSpursJobChainGetSpursAddress(u32 jc_ea, u32 out);
+s32 cellSpursCreateTask2(CellSpursTaskset* taskset, CellSpursTaskId* taskId, void* elf, u32 argument, u32 attr);
+s32 cellSpursTryJoinTask2(CellSpursTaskset* taskset, u32 id, u32 out);
+s32 cellSpursJoinTask2(CellSpursTaskset* taskset, u32 id, u32 out);
+void spurs_task2_exit(u32 taskset_ea, u32 taskId, s32 code);
+void spurs_task2_finished(u32 taskset_ea, u32 taskId);
 s32 cellSpursJoinTask(CellSpursTaskset* taskset, CellSpursTaskId taskId,
                       s32* exitCode);
 s32 cellSpursSendSignal(CellSpursTaskset* taskset, CellSpursTaskId taskId);

@@ -5,6 +5,9 @@
  */
 
 #include "cellGame.h"
+#include "../../runtime/ppu/ppu_context.h"
+extern PPU_THREAD_LOCAL ppu_context* g_active_ctx;
+extern void ppu_dump_guest_stack(ppu_context*, const char*);
 #include "../../runtime/ppu/ppu_memory.h"   /* vm_base, vm_write32 (guest mem) */
 #include "ps3emu/guest_call.h"              /* g_ps3_guest_caller (funcStat dispatch) */
 #include <stdio.h>
@@ -90,6 +93,17 @@ static char s_exit_param[256] = "";
 
 static int  s_boot_checked = 0;
 static u32  s_game_type = CELL_GAME_GAMETYPE_DISC;
+static u32  s_boot_attributes = 0;
+extern void ps3_vfs_set_hdd_title_mount(const char*, const char*);
+extern int ps3_vfs_resolve_hdd_title(const char*, char*, size_t);
+
+static void content_host_path(char* out, size_t cap, const char* title_id)
+{
+    char guest[CELL_GAME_PATH_MAX];
+    snprintf(guest, sizeof guest, "/dev_hdd0/game/%s", title_id);
+    if (!ps3_vfs_resolve_hdd_title(guest, out, cap))
+        snprintf(out, cap, "%s/%s", content_root(), title_id);
+}
 
 /* Current content-check session. BootCheck/DataCheck open a session naming
  * some content; ContentPermit reports THAT content's paths and closes it.
@@ -287,6 +301,9 @@ static int sfo_read_string(const char* sfo_path, const char* key,
 void cellGame_init_from_paramsfo(const char* sfo_path)
 {
     char tmp[256];
+    s_game_type = CELL_GAME_GAMETYPE_DISC;
+    s_boot_attributes = 0;
+    ps3_vfs_set_hdd_title_mount(NULL, NULL);
     if (sfo_read_string(sfo_path, "TITLE_ID", tmp, sizeof(tmp)) == 0 && tmp[0]) {
         strncpy(s_title_id, tmp, sizeof(s_title_id) - 1);
         s_title_id[sizeof(s_title_id) - 1] = '\0';
@@ -308,10 +325,35 @@ void cellGame_init_from_paramsfo(const char* sfo_path)
     if (sfo_read_string(sfo_path, "APP_VER", tmp, sizeof(tmp)) == 0 && tmp[0]) {
         strncpy(s_app_ver, tmp, sizeof(s_app_ver) - 1); s_app_ver[sizeof(s_app_ver) - 1] = '\0';
     }
+    if (sfo_read_string(sfo_path, "CATEGORY", tmp, sizeof tmp) == 0) {
+        if (!strcmp(tmp, "HG")) {
+            s_game_type = CELL_GAME_GAMETYPE_HDD;
+            char host[1024];
+            snprintf(host, sizeof host, "%s", sfo_path);
+            for (char* p = host; *p; ++p) if (*p == '\\') *p = '/';
+            char* slash = strrchr(host, '/');
+            if (slash) { *slash = 0; ps3_vfs_set_hdd_title_mount(s_title_id, host); }
+        } else if (!strcmp(tmp, "GD")) {
+            s_boot_attributes = CELL_GAME_ATTRIBUTE_PATCH;
+        }
+        printf("[cellGame] PARAM.SFO category=%s boot type=%u attributes=0x%X\n",
+               tmp, s_game_type, s_boot_attributes);
+    }
 }
 
 /* Central title-id accessor so other modules (cellSysutil etc.) don't hardcode it. */
 const char* cellGame_get_title_id(void) { return s_title_id; }
+
+const char* cellGame_get_boot_path(void)
+{
+    static char path[CELL_GAME_PATH_MAX];
+    if (s_game_type == CELL_GAME_GAMETYPE_HDD)
+        snprintf(path, sizeof path, "/dev_hdd0/game/%s/USRDIR/EBOOT.BIN", s_title_id);
+    else
+        snprintf(path, sizeof path, "/dev_bdvd/PS3_GAME/USRDIR/EBOOT.BIN");
+    return path;
+}
+
 
 s32 cellGameBootCheck(u32* type, u32* attributes, CellGameContentSize* size,
                        char* dirName)
@@ -319,10 +361,8 @@ s32 cellGameBootCheck(u32* type, u32* attributes, CellGameContentSize* size,
     printf("[cellGame] BootCheck()\n");
 
     /* Build paths based on title ID */
-    snprintf(s_content_info_path, sizeof(s_content_info_path),
-             "%s/%s", content_root(), s_title_id);
-    snprintf(s_usrdir_path, sizeof(s_usrdir_path),
-             "%s/%s/USRDIR", content_root(), s_title_id);
+    content_host_path(s_content_info_path, sizeof s_content_info_path, s_title_id);
+    snprintf(s_usrdir_path, sizeof s_usrdir_path, "%s/USRDIR", s_content_info_path);
     snprintf(s_tmp_path, sizeof(s_tmp_path),
              "%s/%s_TMP", content_root(), s_title_id);
 
@@ -342,7 +382,7 @@ s32 cellGameBootCheck(u32* type, u32* attributes, CellGameContentSize* size,
     uint32_t dir_ea  = (uint32_t)(uintptr_t)dirName;
 
     if (type_ea) vm_write32(type_ea, (uint32_t)s_game_type);
-    if (attr_ea) vm_write32(attr_ea, 0);
+    if (attr_ea) vm_write32(attr_ea, s_boot_attributes);
 
     if (size_ea) {
         vm_write32(size_ea + 0, (u32)content_free_kb());
@@ -381,12 +421,7 @@ s32 cellGameContentPermit(char* contentInfoPath, char* usrdirPath)
          * forever and exits. Create it where cellFs will actually find it. */
         ensure_dirs(s_content_info_path);
         ensure_dirs(s_usrdir_path);
-        {
-            extern const char* ppu_vfs_root;
-            char vpath[CELL_GAME_PATH_MAX];
-            snprintf(vpath, sizeof vpath, "%s/game/%s/USRDIR", ppu_vfs_root, s_check_dir);
-            ensure_dirs(vpath);
-        }
+
     }
 
     /* Both paths are GUEST addresses; format into a host temp, copy into the
@@ -428,7 +463,7 @@ s32 cellGameDataCheck(u32 type, const char* dirName, CellGameContentSize* size)
     s_check_dir[sizeof(s_check_dir) - 1] = '\0';
 
     char path[CELL_GAME_PATH_MAX];
-    snprintf(path, sizeof(path), "%s/%s", content_root(), check_dir);
+    content_host_path(path, sizeof path, check_dir);
 
     uint32_t size_ea = (uint32_t)(uintptr_t)size;
     if (size_ea) {
@@ -810,6 +845,8 @@ s32 cellGameContentErrorDialog(s32 type, s32 errNeedSizeKB, const char* dirName)
            what, type, dir, errNeedSizeKB);
     if (type >= 100)
         printf("[cellGame] *** this is an EXIT dialog -- the title quits after this\n");
+    if (getenv("CV_PROGRESS_DIAG") && g_active_ctx)
+        ppu_dump_guest_stack(g_active_ctx, "content-error");
     fflush(stdout);
 
     return CELL_OK;

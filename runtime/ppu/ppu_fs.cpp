@@ -84,11 +84,13 @@ static void guest_strcpy(char* dst, uint32_t gaddr, size_t cap)
 /* Defined in runtime/syscalls/sys_fs.c -- shared by all three path
  * translators. (extern "C" is ill-formed at block scope.) */
 extern "C" void ps3_vfs_ps3game_fallback(char* path, size_t cap);
+extern "C" int ps3_vfs_resolve_hdd_title(const char*, char*, size_t);
 
 /* Translate a guest path to a host path under ppu_vfs_root. Known PS3 mount
  * prefixes are stripped; the rest is appended to the root. */
 static void host_path(char* out, size_t cap, const char* guest)
 {
+    if (ps3_vfs_resolve_hdd_title(guest, out, cap)) return;
     const char* rel = guest;
     /* /dev_hdd0 overlays the installed game-update dir (a disc title patched to
      * e.g. v1.30 runs the update's EBOOT and reads its patchN.farc from

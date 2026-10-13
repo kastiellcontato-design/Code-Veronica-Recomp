@@ -551,7 +551,10 @@ static unsigned __stdcall audio_mix_thread_func(void* arg)
     while (s_mix_thread_running) {
         const int room = audio_backend_room();
         if (room >= 0 && room < CELL_AUDIO_BLOCK_SAMPLES) { audio_backend_wait(); continue; }
-        if (room < 0) {
+        /* WASAPI can free several PS3 blocks at once (device period ~10ms).
+         * Consume only one every 256/48000 seconds, giving the notified guest
+         * producer time to fill the next ring slot before it is read. */
+        {
             LARGE_INTEGER now; QueryPerformanceCounter(&now);
             const long long due = q0.QuadPart +
                 (long long)(blocks * CELL_AUDIO_BLOCK_SAMPLES * qf.QuadPart / CELL_AUDIO_SAMPLE_RATE);

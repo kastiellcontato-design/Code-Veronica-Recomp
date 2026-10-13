@@ -14,6 +14,7 @@
 #include "../../runtime/platform/win32_compat.h"
 #include "../../runtime/ppu/ppu_memory.h"   /* vm_write32 (translate + byte-swap, OOB-safe) */
 #include "../../runtime/memory/vm.h"    /* VM_HLE_INJECT_BASE */
+#include "../../runtime/ps3_log.h"      /* ps3_log_verbose */
 #include "rsx_commands.h"                    /* rsx_state, rsx_process_command_buffer */
 #include "../../include/ps3emu/guest_call.h" /* g_ps3_guest_caller for direct handler dispatch */
 
@@ -892,6 +893,18 @@ static void nv3089_blit(void)
         if (!rok && s_nv3089.in_uv <= 0x00100010u && !s_nv3089.out_pt)
             rsx_live_draw_note_resolve(sl, s_nv3089.in_off, dl, s_gcm2d.dst_offset);
     }
+    #ifdef _WIN32
+    /* The D3D12 backend must replay GPU-surface copies between the draws
+     * that produce and consume them, rather than reading stale guest VRAM. */
+    if(!rsx_live_draw_enabled() && s_nv3089.ds_dx==0x100000u && s_nv3089.dt_dy==0x100000u &&
+       s_nv3089.src_dma!=0xFEED0001u && s_gcm2d.dst_dma!=0xFEED0001u &&
+       (s_nv3089.fmt&0xFFu)==3u && !s_nv309e.active) {
+        extern int rsx_d3d12_record_blit(u32,u32,u32,u32,u32,u32);
+        u32 u0=(s_nv3089.in_uv&0xFFFFu)>>4,v0=(s_nv3089.in_uv>>16)>>4;
+        if(rsx_d3d12_record_blit(s_nv3089.in_off+v0*in_pitch+u0*4u,in_pitch,
+           s_gcm2d.dst_offset+out_y*dst_pitch+out_x*4u,dst_pitch,out_w,out_h))return;
+    }
+    #endif
     /* Only the 32-bit colour formats are handled; anything else would need a
      * per-format converter and is better skipped loudly than written wrong. */
     u32 f = s_nv3089.fmt & 0xFF;
@@ -2338,7 +2351,8 @@ s32 cellGcmSetPrepareFlip(void* ctx, u32 bufferId)
     if (!s_display_buffer_set[bufferId])
         return CELL_GCM_ERROR_INVALID_VALUE;
 
-    printf("[cellGcmSys] SetPrepareFlip(bufferId=%u)\n", bufferId);
+    if (ps3_log_verbose())
+        printf("[cellGcmSys] SetPrepareFlip(bufferId=%u)\n", bufferId);
 
     s_current_display_buffer_id = bufferId;
     s_flip_status = CELL_GCM_FLIP_STATUS_DONE;
@@ -3250,7 +3264,8 @@ u32 cellGcmGetDefaultSegmentWordSize(void)
 /* Immediate flip — perform flip right now */
 s32 cellGcmSetFlipImmediate(u32 bufferId)
 {
-    printf("[cellGcmSys] SetFlipImmediate(bufferId=%u)\n", bufferId);
+    if (ps3_log_verbose())
+        printf("[cellGcmSys] SetFlipImmediate(bufferId=%u)\n", bufferId);
     return cellGcmSetFlipCommand(bufferId);
 }
 

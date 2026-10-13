@@ -127,8 +127,8 @@ static u8 pad_xinput_stick_to_u8(short raw, short deadzone)
  * another application does not drive the game. Set PAD_NO_KEYBOARD=1 to
  * disable it entirely.
  *
- * Arrows = d-pad, Z/X/A/S = cross/circle/square/triangle, Q/W = L1/R1,
- * 1/2 = L2/R2, Enter = START, Tab = SELECT. The left stick mirrors the d-pad
+ * Arrows = d-pad, X/Z/A/S = cross/circle/square/triangle, Q/W = L1/R1,
+ * 1/2 = L2/R2, I/Enter = START, R/Tab = SELECT. The left stick mirrors the d-pad
  * so a title that reads the stick instead is playable too. */
 #ifdef _WIN32
 static int pad_host_window_focused(void)
@@ -160,11 +160,12 @@ static void pad_poll_keyboard(void)
     static const struct { int vk; u16 btn; } map[] = {
         { VK_UP,     CELL_PAD_CTRL_UP },      { VK_DOWN,  CELL_PAD_CTRL_DOWN },
         { VK_LEFT,   CELL_PAD_CTRL_LEFT },    { VK_RIGHT, CELL_PAD_CTRL_RIGHT },
-        { 'Z',       CELL_PAD_CTRL_CROSS },   { 'X',      CELL_PAD_CTRL_CIRCLE },
+        { 'X',       CELL_PAD_CTRL_CROSS },   { 'Z',      CELL_PAD_CTRL_CIRCLE },
         { 'A',       CELL_PAD_CTRL_SQUARE },  { 'S',      CELL_PAD_CTRL_TRIANGLE },
         { 'Q',       CELL_PAD_CTRL_L1 },      { 'W',      CELL_PAD_CTRL_R1 },
         { '1',       CELL_PAD_CTRL_L2 },      { '2',      CELL_PAD_CTRL_R2 },
-        { VK_RETURN, CELL_PAD_CTRL_START },   { VK_TAB,   CELL_PAD_CTRL_SELECT },
+        { 'I',       CELL_PAD_CTRL_START },   { VK_RETURN, CELL_PAD_CTRL_START },
+        { 'R',       CELL_PAD_CTRL_SELECT },  { VK_TAB,    CELL_PAD_CTRL_SELECT },
     };
 
     u16 btns = 0;

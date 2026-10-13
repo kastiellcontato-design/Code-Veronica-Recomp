@@ -126,6 +126,9 @@ static int translate_path(const char* ps3_path, char* host_buf, size_t buf_size)
     if (!ps3_path || !host_buf || buf_size == 0)
         return -1;
 
+    extern int ps3_vfs_resolve_hdd_title(const char*, char*, size_t);
+    if (ps3_vfs_resolve_hdd_title(ps3_path, host_buf, buf_size)) return 0;
+
     /* Find longest matching prefix */
     int best = -1;
     size_t best_len = 0;

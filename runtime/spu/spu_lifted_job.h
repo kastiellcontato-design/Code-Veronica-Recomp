@@ -297,7 +297,10 @@ static inline int32_t spu_run_lifted_job_abi(spu_lifted_entry_fn entry,
     }
     int _halted = 0;
     { extern int spu_run_with_halt(void (*)(spu_context*), spu_context*);
-      _halted = spu_run_with_halt(entry, &ctx); }               /* run with halt pad   */
+      _halted = spu_run_with_halt(entry, &ctx); }
+    if (taskset_ctx && getenv("SPURS_TASKSET_TRACE")) {
+        fprintf(stderr,"[taskset-end] img=%d halted=%d pc=%05X status=%X stop=%X r3=%08X r4=%08X stc=%08X syscall=%08X\n", image_id,_halted,ctx.pc,ctx.status,ctx.stop_code,ctx.gpr[3]._u32[0],ctx.gpr[4]._u32[0], ((uint32_t)ctx.ls[0x2FB8]<<24)|((uint32_t)ctx.ls[0x2FB9]<<16)|((uint32_t)ctx.ls[0x2FBA]<<8)|ctx.ls[0x2FBB], ((uint32_t)ctx.ls[0x27C4]<<24)|((uint32_t)ctx.ls[0x27C5]<<16)|((uint32_t)ctx.ls[0x27C6]<<8)|ctx.ls[0x27C7]);
+    }               /* run with halt pad   */
     /* Raw-worker run summary (env SPU_WORKER_TRACE). A worker that produces no
      * outbound word leaves the PPU blocked in sys_event_queue_receive forever,
      * and the difference between "parked at its idle poll" and "fell over after

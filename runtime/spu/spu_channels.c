@@ -1783,6 +1783,18 @@ void spu_spurs_taskset_syscall(spu_context* ctx)   /* non-static: also called by
         return;
     }
     if (num == 0 && (ctx->image_id != 22 || getenv("YDKJ_CRI_EXIT_HALT"))) {
+        extern void spurs_task2_exit(uint32_t, uint32_t, int32_t);
+        uint32_t ts = ((uint32_t)ctx->ls[0x27BC]<<24)|((uint32_t)ctx->ls[0x27BD]<<16)|((uint32_t)ctx->ls[0x27BE]<<8)|ctx->ls[0x27BF];
+        uint32_t tid = ((uint32_t)ctx->ls[0x27D4]<<24)|((uint32_t)ctx->ls[0x27D5]<<16)|((uint32_t)ctx->ls[0x27D6]<<8)|ctx->ls[0x27D7];
+        /* The SDK EXIT stores its code in the task API argument at LS 0x2FD0. */
+        uint32_t exit_code=((uint32_t)ctx->ls[0x2FD0]<<24)|((uint32_t)ctx->ls[0x2FD1]<<16)|((uint32_t)ctx->ls[0x2FD2]<<8)|ctx->ls[0x2FD3];
+        if (getenv("SPURS_TASKSET_TRACE")) {
+            static int exit_log_count = 0;
+            if (exit_log_count++ < 24)
+                fprintf(stderr, "[spu-task-exit] image=%d taskset=0x%08X task=%u code=0x%08X\n",
+                        ctx->image_id, ts, tid, exit_code);
+        }
+        spurs_task2_exit(ts,tid,(int32_t)exit_code);
         ctx->status = SPU_STATUS_STOPPED_BY_STOP;
         spu_halt(ctx);          /* longjmp out to spu_run_with_halt; post-run writes exit code */
         return;
@@ -2035,7 +2047,14 @@ static int spu_smc_microstep(spu_context* ctx)
         /* Stop at the drain's return point too: it sits mid-function, so it is
          * no lifted entry, and a job's return would otherwise run on through
          * the caller's code (GH3's song-freeze; see drain_ret_pc). */
-        return spu_interp_run_until(ctx, pc, ctx->drain_ret_pc) ? 1 : 0;
+        uint32_t next = spu_interp_run_until(ctx, pc, ctx->drain_ret_pc);
+        /* The interpreter returns at a lifted entry without scheduling it.
+         * Keep the trampoline alive so the worker actually resumes there.
+         * A drain return point must unwind into its existing host caller. */
+        if (ctx->status == SPU_STATUS_RUNNING && next &&
+            (!ctx->drain_ret_pc || ctx->pc != ctx->drain_ret_pc))
+            g_spu_trampoline_fn = spu_indirect_branch;
+        return next ? 1 : 0;
     }
     { static int _n = 0; if (_n++ < 4)
         fprintf(stderr, "[spu-smc] microstep img=%d runaway (4096 steps from 0x%05X)\n",
