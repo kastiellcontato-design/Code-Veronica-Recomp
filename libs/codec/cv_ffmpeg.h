@@ -13,6 +13,7 @@ typedef struct CvAudioDecoder CvAudioDecoder;
 typedef struct {u32 samples,channels,rate,blockBytes;u64 pts,user;} CvPcmInfo;
 CvAudioDecoder* cv_audio_open(void);
 void cv_audio_close(CvAudioDecoder* d);
+void cv_audio_stop(CvAudioDecoder* d);
 int cv_audio_decode(CvAudioDecoder* d,const u8* data,u32 size,u64 pts,u64 user,void (*notify)(void*),void* arg);
 int cv_audio_peek(CvAudioDecoder* d,CvPcmInfo* info);
 int cv_audio_pcm(CvAudioDecoder* d,u32 bw,u8* dst,int consume);

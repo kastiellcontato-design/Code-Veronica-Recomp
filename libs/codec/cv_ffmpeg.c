@@ -159,6 +159,7 @@ struct CvAudioDecoder {
  u64 nextPts;int continuous,timelineStarted;
  CvPcmFrame frames[64]; unsigned read,write;
  SRWLOCK lock; CONDITION_VARIABLE space;
+ volatile LONG stopping;
 };
 CvAudioDecoder* cv_audio_open(void)
 {
@@ -166,6 +167,8 @@ CvAudioDecoder* cv_audio_open(void)
  CvAudioDecoder* d=calloc(1,sizeof(*d));if(!d)return NULL;d->continuous=getenv("CV_AV_CONTINUOUS_PTS")!=NULL;
  InitializeSRWLock(&d->lock);InitializeConditionVariable(&d->space);return d;
 }
+void cv_audio_stop(CvAudioDecoder* d)
+{if(!d)return;InterlockedExchange(&d->stopping,1);AcquireSRWLockExclusive(&d->lock);WakeAllConditionVariable(&d->space);ReleaseSRWLockExclusive(&d->lock);}
 void cv_audio_close(CvAudioDecoder* d)
 {
  if(!d)return;
@@ -205,7 +208,10 @@ int cv_audio_decode(CvAudioDecoder* d,const u8* data,u32 size,u64 pts,u64 user,v
    if(ret<0){f_av_frame_free(&f);return -1;}
    if(f->format!=AV_SAMPLE_FMT_FLTP){f_av_frame_free(&f);return -1;}
    AcquireSRWLockExclusive(&d->lock);
-   while(d->write-d->read>=64)SleepConditionVariableSRW(&d->space,&d->lock,INFINITE,0);
+   /* A full queue waits for the game to consume PCM; a skipped movie never
+    * will, so cv_audio_stop must be able to end the wait. */
+   while(d->write-d->read>=64&&!InterlockedCompareExchange(&d->stopping,0,0))SleepConditionVariableSRW(&d->space,&d->lock,INFINITE,0);
+   if(InterlockedCompareExchange(&d->stopping,0,0)){ReleaseSRWLockExclusive(&d->lock);f_av_frame_free(&f);return -1;}
    unsigned i=d->write++%64;d->frames[i].frame=f;
    d->frames[i].info=(CvPcmInfo){f->nb_samples,f->ch_layout.nb_channels,rate,bytes,d->nextPts,user};
    d->nextPts+=(90000ull*f->nb_samples)/rate;

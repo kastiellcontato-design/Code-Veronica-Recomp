@@ -130,6 +130,7 @@ static DWORD WINAPI adec_worker(LPVOID arg)
    a->lastAuAddr=au.startAddr;a->lastAuSize=au.size;
    int ret=cv_audio_decode(a->decoder,command.data,au.size,au.pts,au.userData,adec_real_ready,(void*)(uintptr_t)h);
    free(command.data);
+   if(a->stopping)break;   /* Close is waiting: no more guest callbacks */
    adec_notify(h,CELL_ADEC_MSG_TYPE_AUDONE,(s32)ea);
    if(ret<0)adec_notify(h,CELL_ADEC_MSG_TYPE_ERROR,(s32)CELL_ADEC_ERROR_AU);
   }
@@ -219,10 +220,14 @@ s32 cellAdecClose(CellAdecHandle handle)
         return (s32)CELL_ADEC_ERROR_ARG;
 
     if(s_adec[handle].decoder){
-        s_adec[handle].stopping=1;SetEvent(s_adec[handle].event);
-        WaitForSingleObject(s_adec[handle].worker,INFINITE);
-        CloseHandle(s_adec[handle].worker);CloseHandle(s_adec[handle].event);
-        cv_audio_close(s_adec[handle].decoder);
+        /* Skipping a movie closes the decoder while AUs are still queued and
+         * nobody drains the PCM: wake a worker blocked on a full queue, and do
+         * not hang the caller if it is stuck in a guest callback anyway. */
+        s_adec[handle].stopping=1;cv_audio_stop(s_adec[handle].decoder);SetEvent(s_adec[handle].event);
+        if(WaitForSingleObject(s_adec[handle].worker,2000)==WAIT_OBJECT_0){
+            CloseHandle(s_adec[handle].worker);CloseHandle(s_adec[handle].event);
+            cv_audio_close(s_adec[handle].decoder);
+        } else fprintf(stderr,"[cellAdec] Close(handle=%u): worker did not stop; leaving it\n",handle);
     }
     s_adec[handle].in_use = 0;
     return CELL_OK;
