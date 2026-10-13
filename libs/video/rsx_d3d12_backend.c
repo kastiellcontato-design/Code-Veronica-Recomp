@@ -2579,8 +2579,12 @@ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, in
     }
 
     s_perf_pso_calls++;
+    /* Keyed by content, not address: Code Veronica streams its programs
+     * through a ring, so the same shader lands at a new address every frame
+     * and an address key recompiled it each time (PSO creation was 60-90%
+     * of the frame, 0.3-4 fps in gameplay). */
     for (int i = 0; i < s_d3d.vp_fp_n; i++)
-        if (s_d3d.vp_fp[i].fp_addr != fp_addr) continue;   /* cheap reject first */
+        if (s_d3d.vp_fp[i].ucode_hash != uhash) continue;   /* cheap reject first */
         else if (s_d3d.vp_fp[i].vs_idx == vs_idx &&
             s_d3d.vp_fp[i].vs_hash == vs_hash && s_d3d.vp_fp[i].gen == s_d3d.vp_gen &&
             s_d3d.vp_fp[i].blend == blend && s_d3d.vp_fp[i].nrt == nrt &&
@@ -4962,7 +4966,9 @@ static void render_frame(void)
      * (gcm/cube: triangles mixing stale and new vertices -> missing/sliver
      * polygons). These workloads are a few draws/frame, so full serialisation
      * costs little. */
-    wait_for_gpu();
+    { double _tw = perf_on() ? perf_now() : 0.0;
+      wait_for_gpu();
+      if (perf_on()) s_perf_gpu += perf_now() - _tw; }
 
     off_rt_writeback_flush();   /* GPU is idle: last frame's copies are ready */
     s_cv_query_active = 0;
@@ -6081,12 +6087,14 @@ static void render_frame(void)
             double nfr = (double)s_n; s_n = 0;
             fprintf(stderr, "[PERF] %.2f fps | tex %.2fs (%.0f%%, %d calls) | vtx %.2fs"
                             " (%.0f%%, %.0fk verts) | render_frame %.2fs (%.0f%%)"
+                            " [gpuwait %.2fs %.0f%%]"
                             " | prepass %.2fs (%.0f%%) [srv %.2fs %.0f%% | pso %.2fs %.0f%% %d calls %d MISS %dKB hashed] | guest %.2fs (%.0f%%)%c",
                     nfr / fr,
                     s_perf_tex, 100.0 * s_perf_tex / fr, s_perf_ntex,
                     s_perf_vtx, 100.0 * s_perf_vtx / fr,
                     (double)s_perf_nverts / 1000.0,
                     s_perf_rf, 100.0 * s_perf_rf / fr,
+                    s_perf_gpu, 100.0 * s_perf_gpu / fr,
                     s_perf_pre, 100.0 * s_perf_pre / fr,
                     s_perf_srv, 100.0 * s_perf_srv / fr,
                     s_perf_pso, 100.0 * s_perf_pso / fr,

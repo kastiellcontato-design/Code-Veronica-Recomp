@@ -15,6 +15,8 @@ rem O jogo deixa a FIFO "estacionada" em 0x198060 e a libera depois; nao pular.
 set "GCM_PARK_GRACE_MS=5000"
 rem Diagnostico: captura automatica (rsxcap) de um quadro da gameplay.
 set "CV_AUTOCAP=1300"
+rem Diagnostico: tempo por etapa a cada 20 quadros ([PERF] no log).
+set "PERF=1"
 set "GAME_EXE=%~dp0build-release\bin\MyGameRecomp.exe"
 set "GAME_ELF=%PS3_VFS_ROOT%\USRDIR\EBOOT.elf"
 set "GAME_LOG=%~dp0run-log-release.txt"
