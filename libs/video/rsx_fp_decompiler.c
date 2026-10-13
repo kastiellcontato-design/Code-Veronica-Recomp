@@ -367,9 +367,14 @@ static const char* input_expr(u32 input_src)
     case 0x1: return "input.col0";     /* COL0 */
     case 0x2: return "input.col1";     /* COL1 */
     case 0x3: return "input.fog";      /* FOGC */
+    /* FACING (RSX "SSA"): +1 front face, -1 back. Code Veronica's character
+     * programs flip the interpolated normal on back faces of their
+     * mixed-winding meshes; read as 0 it flipped the wrong triangles, which
+     * came out as black polygons across faces and clothes. */
+    case 0xE: return "(input.isfront ? (float4)1.0 : (float4)-1.0)";
     default:
         if (input_src >= 0x4 && input_src <= 0xB) return tc[input_src - 0x4]; /* TC0..7 */
-        return "float4(0,0,0,0)";      /* TC8/TC9/FACING not plumbed */
+        return "float4(0,0,0,0)";      /* TC8/TC9 not plumbed */
     }
 }
 
@@ -941,6 +946,7 @@ static int rsx_fp_decompile_internal(
         "    float4 fog : FOG;\n"
         "    float4 tc0:TEXCOORD0; float4 tc1:TEXCOORD1; float4 tc2:TEXCOORD2; float4 tc3:TEXCOORD3;\n"
         "    float4 tc4:TEXCOORD4; float4 tc5:TEXCOORD5; float4 tc6:TEXCOORD6; float4 tc7:TEXCOORD7;\n"
+        "    bool isfront : SV_IsFrontFace;\n"
         "};\n");
     /* Texture bank. With no cube units (the default) emit the exact legacy
      * array declaration so 2D-only programs are byte-identical. When any unit
