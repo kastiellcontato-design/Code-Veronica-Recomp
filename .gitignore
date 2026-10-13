@@ -106,3 +106,26 @@ build-gate/
 # Scratch space for generated test drivers and their output (test_ppu_lift.py,
 # test_milestone.py).
 scratch/
+
+# ---------------------------------------------------------------------------
+# Code Veronica port: never publish game data or anything derived from it
+# ---------------------------------------------------------------------------
+# Game files (the user supplies their own copy)
+JOGO/
+# Code lifted from the game's executable: regenerate locally with the lifter
+src/recomp/
+projects/*/spu/
+projects/*/recompiled/
+# Shaders dumped from the running game
+projects/*/*_dump.hlsl
+# Local backups, diagnostics, captures and run logs
+backups/
+projects/*/codex_diag_*/
+projects/*/rsxcap*/
+projects/*/run-log-*.txt
+projects/*/spu-run-*.txt
+*.lnk
+*.before-*
+# FFmpeg DLLs are fetched separately (see the port's README)
+third_party/ffmpeg/bin/
+.mcp.json
