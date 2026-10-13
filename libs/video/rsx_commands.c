@@ -773,6 +773,14 @@ int rsx_process_method(rsx_state* state, u32 method, u32 data)
         state->index_array_dma = data;
         return 0;
     }
+    if (method == NV4097_SET_RESTART_INDEX_ENABLE) {
+        state->restart_index_enable = data;
+        return 0;
+    }
+    if (method == NV4097_SET_RESTART_INDEX) {
+        state->restart_index = data;
+        return 0;
+    }
     if (method == NV4097_DRAW_INDEX_ARRAY) {
         /* [23:0] first index, [31:24] count-1 (same packing as DRAW_ARRAYS). */
         u32 first = data & 0xFFFFFF;

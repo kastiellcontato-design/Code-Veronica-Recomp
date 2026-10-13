@@ -105,6 +105,8 @@ extern "C" {
 #define NV4097_SET_INDEX_ARRAY_ADDRESS         0x0000181C
 #define NV4097_SET_INDEX_ARRAY_DMA             0x00001820
 #define NV4097_DRAW_INDEX_ARRAY                0x00001824
+#define NV4097_SET_RESTART_INDEX_ENABLE        0x00001DAC
+#define NV4097_SET_RESTART_INDEX               0x00001DB0
 
 /* Vertex attributes */
 #define NV4097_SET_VERTEX_DATA_ARRAY_FORMAT     0x00001740
@@ -325,6 +327,10 @@ typedef struct rsx_state {
     u32 begin_epoch;
     u32 index_array_offset;
     u32 index_array_dma;
+    /* Primitive restart: an index equal to restart_index ends the current
+     * strip/fan (SET_RESTART_INDEX_ENABLE 0x1DAC / _INDEX 0x1DB0). */
+    u32 restart_index_enable;
+    u32 restart_index;
 
     /* Shader state */
     /* RSX viewport transform (SET_VIEWPORT_OFFSET 0x0A20 / _SCALE 0x0A30,

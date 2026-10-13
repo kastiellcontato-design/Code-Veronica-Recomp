@@ -6157,11 +6157,27 @@ static u32 upload_strip_vp_indexed(const rsx_state* state, u32 first, u32 count,
     VPSlot* out = (VPSlot*)((u8*)s_d3d.vp_vb_mapped
         + (u64)s_d3d.vp_parity * MAX_VERTICES * VP_VERT_STRIDE + s_d3d.vp_vb_offset);
     u32 o = 0;
-    for (u32 t = 0; t < tris; t++) {
-        u32 i0 = fan ? 0 : t;
-        read_vp_vertex(state, read_guest_index(state, first + i0),    &out[o*16]); o++;
-        read_vp_vertex(state, read_guest_index(state, first + t + 1), &out[o*16]); o++;
-        read_vp_vertex(state, read_guest_index(state, first + t + 2), &out[o*16]); o++;
+    /* Primitive restart: the sentinel ends the strip/fan and the next index
+     * starts a new one. Without this the sentinel is fetched as a vertex and
+     * every quad of a restart-separated sprite batch is joined to its
+     * neighbours by long slivers (Code Veronica's title menu). A 16-bit index
+     * buffer ignores a sentinel that does not fit (RPCS3 restart_index_enabled). */
+    int idx16 = ((state->index_array_dma >> 4) & 0xF) == 1;
+    int restart = state->restart_index_enable &&
+                  !(idx16 && state->restart_index > 0xFFFFu);
+    u32 sentinel = state->restart_index;
+    u32 seg = 0, seg_len = 0;   /* current segment's first index, and length */
+    for (u32 k = 0; k <= count && o + 3 <= tris * 3; k++) {
+        u32 idx = k < count ? read_guest_index(state, first + k) : 0;
+        if (k < count && !(restart && idx == sentinel)) { seg_len++; continue; }
+        /* Segment [seg, seg + seg_len) closed by a sentinel or the end. */
+        for (u32 t = 0; t + 2 < seg_len && o + 3 <= tris * 3; t++) {
+            u32 i0 = fan ? 0 : t;
+            read_vp_vertex(state, read_guest_index(state, first + seg + i0),    &out[o*16]); o++;
+            read_vp_vertex(state, read_guest_index(state, first + seg + t + 1), &out[o*16]); o++;
+            read_vp_vertex(state, read_guest_index(state, first + seg + t + 2), &out[o*16]); o++;
+        }
+        seg = k + 1; seg_len = 0;
     }
     s_d3d.vp_vb_offset += o * VP_VERT_STRIDE;
     return o;
