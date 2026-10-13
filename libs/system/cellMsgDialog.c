@@ -285,6 +285,20 @@ s32 cellMsgDialogOpen(CellMsgDialogType type, const char* msgString,
     return cellMsgDialogOpen2(type, msgString, callback, userdata, extParam);
 }
 
+/* cellMsgDialogOpenErrorCode -- the system's "An error occurred (%08X)" box
+ * with a single OK button. Unregistered, the import fell to the unresolved-NID
+ * default: the title saw CELL_OK, drew its empty window and waited forever
+ * for the callback. Code Veronica opens one when PSN sign-in for the
+ * Leaderboards fails. Answer it like any OK dialog. */
+s32 cellMsgDialogOpenErrorCode(u32 errorCode, CellMsgDialogCallback callback,
+                               void* userdata, void* extParam)
+{
+    (void)extParam;
+    printf("[cellMsgDialog] OpenErrorCode(0x%08X) -- auto-responding: OK\n", errorCode);
+    if (!callback) return CELL_OK;
+    return queue_dialog_callback(callback, CELL_MSGDIALOG_BUTTON_OK, userdata);
+}
+
 s32 cellMsgDialogClose(float delayMs)
 {
     printf("[cellMsgDialog] Close(delay=%.1f ms)\n", delayMs);
