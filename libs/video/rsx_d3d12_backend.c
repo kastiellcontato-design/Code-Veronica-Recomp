@@ -95,6 +95,7 @@ typedef struct {
         u32 raw;        /* raw RSX offset (offscreen-RT matching) */
         u32 w, h, fmt;  /* dims + RSX base format */
         u32 ctrl1;      /* NV4097 TEXTURE_CONTROL1: component remap crossbar */
+        u32 addr;       /* NV4097 TEXTURE_ADDRESS: wrap modes, S [3:0] T [11:8] */
         u32 mips;       /* SET_TEXTURE_FORMAT bits 16..31: mipmap level count.
                          * Cube faces sit one whole mip pyramid apart, so this
                          * is what sets the face stride. */
@@ -313,7 +314,7 @@ typedef struct {
     int                   vp_fp_n;
     u32                   srv_inc;              /* CBV_SRV_UAV descriptor size   */
     /* VP path: latest texture bound per unit (t0-t3). */
-    struct { u32 off, raw, w, h, fmt, ctrl1, mips; int cube; int set; } cur_texs[4];
+    struct { u32 off, raw, w, h, fmt, ctrl1, addr, mips; int cube; int set; } cur_texs[4];
 
     /* Render-to-texture: offscreen RT pool + their RTV heap. */
     OffRT                 off_rt[MAX_OFF_RTS];
@@ -2116,8 +2117,26 @@ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, in
     /* fp_exp32 snapshots SET_SHADER_CONTROL bit 6 for this draw. Convert
      * the boolean back to the control bit expected by the decompiler.
      * AUTO mistakes fp32 temporaries for exports when final color is h0. */
-    int n = rsx_fp_decompile(vm_base + off, 4096, exp32 ? 0x40u : 0u, hlsl, sizeof(hlsl));
+    /* Guest texture address modes, emulated in the shader. The static
+     * samplers are fixed (s0 clamps), so a title that mirrors a 9-slice panel
+     * with negative coordinates -- Code Veronica's message window -- lost the
+     * mirrored half. b1[0..3].zw carry each unit's S/T mode (vp_record_cb). */
+    static const char k_addr_prelude[] =
+        "cbuffer RsxTexAddr : register(b1) { float4 rsx_texaddr[4]; };\n"
+        "float rsx_addr1(float c, float m) {\n"
+        "    if (m == 1.0) return frac(c);\n"
+        "    if (m == 2.0) { float t = frac(c * 0.5) * 2.0; return t > 1.0 ? 2.0 - t : t; }\n"
+        "    if (m == 6.0 || m == 8.0) return saturate(abs(c));\n"
+        "    if (m == 3.0 || m == 4.0 || m == 5.0 || m == 7.0) return saturate(c);\n"
+        "    return c;\n"
+        "}\n"
+        "#define RSX_ADDR(u, c) float2(rsx_addr1((c).x, rsx_texaddr[u].z), rsx_addr1((c).y, rsx_texaddr[u].w))\n";
+    const size_t k_pre = sizeof k_addr_prelude - 1;
+    int n = rsx_fp_decompile(vm_base + off, 4096, exp32 ? 0x40u : 0u, hlsl + k_pre, sizeof(hlsl) - k_pre);
     if (n <= 0) { static int _e=0; if(_e++<16) printf("[FP] decompile fail (fp=0x%08X)\n", fp_addr); return NULL; }
+    /* A program that already declares b1 keeps pass-through coordinates. */
+    if (strstr(hlsl + k_pre, "register(b1)")) memmove(hlsl, hlsl + k_pre, strlen(hlsl + k_pre) + 1);
+    else memcpy(hlsl, k_addr_prelude, k_pre);
     if (getenv("CV_VIDEO_CAPTURE")) { char pn[100];snprintf(pn,sizeof pn,"ps_%08X_%08X.hlsl",fp_addr,uhash);FILE* f=fopen(pn,"w");if(f){fprintf(f,"/* vs_idx=%d exports32=%d */\n%s",vs_idx,exp32,hlsl);fclose(f);} }
     /* Explicit diagnostic only: isolate interpolation and RT sampling. */
     if (vs_idx == 3 && getenv("CV_COMPOSITE_PROBE")) {
@@ -3167,6 +3186,12 @@ static void vp_record_cb(u32 slot, int vs_idx, const D3D12DrawRecord* dr)
                 sy = 1.0f / (float)dr->tex[_u].h;
             }
             ts[_u*4+0] = sx; ts[_u*4+1] = sy; ts[_u*4+2] = 0.0f; ts[_u*4+3] = 0.0f;
+            /* .zw: the guest's S/T address modes, applied in the shader by
+             * RSX_ADDR (the static samplers cannot follow them per draw). */
+            if (dr && dr->tex[_u].set) {
+                ts[_u*4+2] = (float)(dr->tex[_u].addr & 0xFu);
+                ts[_u*4+3] = (float)((dr->tex[_u].addr >> 8) & 0xFu);
+            }
         }
         /* rsx_alphatest (b1[4]): x=enable, y=ref/255, z=func-0x200. D3D12
          * has no fixed alpha test; guest FPs discard on it dynamically
@@ -6166,19 +6191,38 @@ static u32 upload_strip_vp_indexed(const rsx_state* state, u32 first, u32 count,
     int restart = state->restart_index_enable &&
                   !(idx16 && state->restart_index > 0xFFFFu);
     u32 sentinel = state->restart_index;
-    u32 seg = 0, seg_len = 0;   /* current segment's first index, and length */
-    for (u32 k = 0; k <= count && o + 3 <= tris * 3; k++) {
-        u32 idx = k < count ? read_guest_index(state, first + k) : 0;
-        if (k < count && !(restart && idx == sentinel)) { seg_len++; continue; }
+    /* One BEGIN/END is one strip even when it arrives as several
+     * DRAW_INDEX_ARRAY entries (each holds at most 256 indices). A segment
+     * split across two entries continues here: restart from the unfinished
+     * segment's first index and skip the triangles the previous entry already
+     * emitted. Without this a glyph quad straddling the boundary loses one of
+     * its two triangles. */
+    static u32 s_carry_epoch, s_carry_next = ~0u, s_carry_start, s_carry_len;
+    u32 base = first, skip = 0;
+    if (restart && s_carry_epoch == state->begin_epoch && s_carry_next == first &&
+        s_carry_len && first - s_carry_start == s_carry_len) {
+        base = s_carry_start;
+        skip = s_carry_len > 2 ? s_carry_len - 2 : 0;
+    }
+    u32 total = first + count - base;
+    if (total - 2 > tris && (total - 2) * 3 <= maxv) tris = total - 2;
+    u32 seg = 0, seg_len = 0;   /* current segment's first index (rel. base), length */
+    for (u32 k = 0; k <= total && o + 3 <= tris * 3; k++) {
+        u32 idx = k < total ? read_guest_index(state, base + k) : 0;
+        if (k < total && !(restart && idx == sentinel)) { seg_len++; continue; }
         /* Segment [seg, seg + seg_len) closed by a sentinel or the end. */
-        for (u32 t = 0; t + 2 < seg_len && o + 3 <= tris * 3; t++) {
+        for (u32 t = (seg == 0 ? skip : 0); t + 2 < seg_len && o + 3 <= tris * 3; t++) {
             u32 i0 = fan ? 0 : t;
-            read_vp_vertex(state, read_guest_index(state, first + seg + i0),    &out[o*16]); o++;
-            read_vp_vertex(state, read_guest_index(state, first + seg + t + 1), &out[o*16]); o++;
-            read_vp_vertex(state, read_guest_index(state, first + seg + t + 2), &out[o*16]); o++;
+            read_vp_vertex(state, read_guest_index(state, base + seg + i0),    &out[o*16]); o++;
+            read_vp_vertex(state, read_guest_index(state, base + seg + t + 1), &out[o*16]); o++;
+            read_vp_vertex(state, read_guest_index(state, base + seg + t + 2), &out[o*16]); o++;
+        }
+        if (k == total) {   /* the entry ended inside this segment: remember it */
+            s_carry_start = base + seg; s_carry_len = seg_len;
         }
         seg = k + 1; seg_len = 0;
     }
+    s_carry_epoch = state->begin_epoch; s_carry_next = first + count;
     s_d3d.vp_vb_offset += o * VP_VERT_STRIDE;
     return o;
 }
@@ -6251,7 +6295,7 @@ static void d3d12_draw_arrays(void* ud, u32 primitive, u32 first, u32 count)
                     dr->tex[_u].w   = s_d3d.cur_texs[_u].w;
                     dr->tex[_u].h   = s_d3d.cur_texs[_u].h;
                     dr->tex[_u].fmt = s_d3d.cur_texs[_u].fmt;
-                    dr->tex[_u].ctrl1 = s_d3d.cur_texs[_u].ctrl1;
+                    dr->tex[_u].ctrl1 = s_d3d.cur_texs[_u].ctrl1; dr->tex[_u].addr = s_d3d.cur_texs[_u].addr;
                     dr->tex[_u].cube  = s_d3d.cur_texs[_u].cube;
                     dr->tex[_u].mips  = s_d3d.cur_texs[_u].mips;
                     dr->tex[_u].set = s_d3d.cur_texs[_u].set;
@@ -6374,7 +6418,7 @@ static void d3d12_draw_arrays(void* ud, u32 primitive, u32 first, u32 count)
                 dr->tex[_u].w   = s_d3d.cur_texs[_u].w;
                 dr->tex[_u].h   = s_d3d.cur_texs[_u].h;
                 dr->tex[_u].fmt = s_d3d.cur_texs[_u].fmt;
-                    dr->tex[_u].ctrl1 = s_d3d.cur_texs[_u].ctrl1;
+                    dr->tex[_u].ctrl1 = s_d3d.cur_texs[_u].ctrl1; dr->tex[_u].addr = s_d3d.cur_texs[_u].addr;
                     dr->tex[_u].cube  = s_d3d.cur_texs[_u].cube;
                     dr->tex[_u].mips  = s_d3d.cur_texs[_u].mips;
                 dr->tex[_u].set = s_d3d.cur_texs[_u].set;
@@ -6518,7 +6562,7 @@ static void d3d12_draw_indexed(void* ud, u32 primitive, u32 first, u32 count)
             dr->tex[_u].w   = s_d3d.cur_texs[_u].w;
             dr->tex[_u].h   = s_d3d.cur_texs[_u].h;
             dr->tex[_u].fmt = s_d3d.cur_texs[_u].fmt;
-                    dr->tex[_u].ctrl1 = s_d3d.cur_texs[_u].ctrl1;
+                    dr->tex[_u].ctrl1 = s_d3d.cur_texs[_u].ctrl1; dr->tex[_u].addr = s_d3d.cur_texs[_u].addr;
                     dr->tex[_u].cube  = s_d3d.cur_texs[_u].cube;
                     dr->tex[_u].mips  = s_d3d.cur_texs[_u].mips;
             dr->tex[_u].set = s_d3d.cur_texs[_u].set;
@@ -6667,6 +6711,7 @@ static void d3d12_bind_texture(void* ud, u32 unit, const rsx_texture_state* tex)
         s_d3d.cur_texs[unit].w = width; s_d3d.cur_texs[unit].h = height;
         s_d3d.cur_texs[unit].fmt = format;   /* full byte: LN(0x20)/UN(0x40) kept */
         s_d3d.cur_texs[unit].ctrl1 = tex->control1;
+        s_d3d.cur_texs[unit].addr  = tex->address;
         s_d3d.cur_texs[unit].cube  = (tex->format & 4) ? 1 : 0;
         s_d3d.cur_texs[unit].mips  = (tex->format >> 16) & 0xFFFFu;
         if (getenv("TEXFMTDBG")) { static u32 seen[64]; static int ns=0;

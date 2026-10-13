@@ -678,10 +678,10 @@ static int rsx_fp_decompile_internal(
                          "rsx_tex%u.Sample(rsx_samp[%u], (%s).xyz)", tex_unit, tex_unit, a);
             else if (tex_cube_mask)
                 snprintf(rhs, sizeof(rhs),
-                         "rsx_tex%u.Sample(rsx_samp[%u], (%s).xy)", tex_unit, tex_unit, a);
+                         "rsx_tex%u.Sample(rsx_samp[%u], RSX_ADDR(%u, (%s).xy))", tex_unit, tex_unit, tex_unit, a);
             else
                 snprintf(rhs, sizeof(rhs),
-                         "rsx_tex[%u].Sample(rsx_samp[%u], (%s).xy)", tex_unit, tex_unit, a);
+                         "rsx_tex[%u].Sample(rsx_samp[%u], RSX_ADDR(%u, (%s).xy))", tex_unit, tex_unit, tex_unit, a);
             break;
         case OP_TXP:
             if ((tex_cube_mask >> tex_unit) & 1u)
@@ -691,12 +691,12 @@ static int rsx_fp_decompile_internal(
                          "rsx_tex%u.Sample(rsx_samp[%u], (%s).xyz)", tex_unit, tex_unit, a);
             else if (tex_cube_mask)
                 snprintf(rhs, sizeof(rhs),
-                         "rsx_tex%u.Sample(rsx_samp[%u], (%s).xy / (%s).w)",
-                         tex_unit, tex_unit, a, a);
+                         "rsx_tex%u.Sample(rsx_samp[%u], RSX_ADDR(%u, (%s).xy / (%s).w))",
+                         tex_unit, tex_unit, tex_unit, a, a);
             else
                 snprintf(rhs, sizeof(rhs),
-                         "rsx_tex[%u].Sample(rsx_samp[%u], (%s).xy / (%s).w)",
-                         tex_unit, tex_unit, a, a);
+                         "rsx_tex[%u].Sample(rsx_samp[%u], RSX_ADDR(%u, (%s).xy / (%s).w))",
+                         tex_unit, tex_unit, tex_unit, a, a);
             break;
         case OP_TXB: case OP_TXL: {
             /* Biased / explicit-LOD sample; bias or LOD is src1.x (RPCS3
@@ -903,6 +903,10 @@ static int rsx_fp_decompile_internal(
     }
     out_puts(&p,
         "SamplerState rsx_samp[16] : register(s0);\n"
+        /* A backend that emulates the guest's texture address modes in the
+         * shader defines RSX_ADDR ahead of this text; otherwise texture
+         * coordinates pass through unchanged. */
+        "#ifndef RSX_ADDR\n#define RSX_ADDR(u, c) (c)\n#endif\n"
     );
     if (buffered) {
         char constants_decl[192];
