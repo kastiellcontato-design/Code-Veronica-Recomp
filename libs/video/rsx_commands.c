@@ -332,8 +332,23 @@ static int process_vertex_attrib_method(rsx_state* state, u32 method, u32 data)
  * Main method dispatch
  * -----------------------------------------------------------------------*/
 
+/* Last value written to every 3D-class method, for rsxcap: a register the
+ * backend ignores shows up here with the value the title relies on. */
+u32 g_rsx_method_val[0x800];
+unsigned char g_rsx_method_seen[0x800];
+
 int rsx_process_method(rsx_state* state, u32 method, u32 data)
 {
+    if (method < 0x2000) { g_rsx_method_val[method >> 2] = data; g_rsx_method_seen[method >> 2] = 1; }
+    /* NV4097_SET_SHADER_PACKER: sRGB-encode colour writes (RPCS3
+     * framebuffer_srgb_enabled). Code Veronica writes its scene this way and
+     * decodes it in the grade pass; ignored, the scene came out ~10x darker. */
+    if (method == 0x1FEC) {
+        if (data != state->shader_packer) { static int n = 0;
+            if (n++ < 16) fprintf(stderr, "[RSX] shader_packer (sRGB output) = 0x%X%c", data, 10); }
+        state->shader_packer = data;
+        return 0;
+    }
     /* RSX_TRACE=<N>: trace the first N methods (bare "1" keeps the old 250).
      * The fixed 250 was spent entirely on boot-time setup, so the methods around
      * the first real draw -- exactly the ones worth seeing -- were never traced. */

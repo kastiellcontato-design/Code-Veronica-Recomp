@@ -102,6 +102,10 @@ static volatile int s_flip_pending = 0;
  * derive it from the observed per-frame volume if a title outgrows it. */
 #define GCM_FLIP_WRAP_BYTES 0x40000u
 
+/* Set by the host loop: presents the batch held right now. The FIFO drain
+ * calls it at a flip it passes in catch-up mode (see below). */
+void (*g_gcm_catchup_present)(void) = NULL;
+
 int cellGcm_take_flip_pending(void)
 {
     int v = s_flip_pending;
@@ -1673,6 +1677,18 @@ static void gcm_rsx_process_fifo_unlocked(void)
             if (put < s_fifo_getoff ||
                 put - s_fifo_getoff < GCM_FIFO_CATCHUP_BYTES)
                 { why = "flip"; break; }
+            /* Draining on past a flip used to fold the next frame into the
+             * same batch. A Code Veronica frame alone is ~1480 draws and its
+             * FIFO segment is well past the catch-up threshold, so two frames
+             * overflowed the backend's 2048-record batch, the tail of the
+             * second (post-processing and the copy to the display) was
+             * dropped, and every other frame came out black. Present each
+             * frame at its own flip instead; this runs on the host loop's
+             * thread, the same one that presents. */
+            if (g_gcm_catchup_present) {
+                g_gcm_catchup_present();
+                s_flip_pending = 0;
+            }
             continue;
         }
 

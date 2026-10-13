@@ -176,6 +176,17 @@ static void present_guest_frame(void)
     InterlockedIncrement(&g_frames_presented);
 }
 
+/* Last flip request this loop has presented. File scope so the FIFO drain's
+ * catch-up present (below) can mark its flip as shown too. */
+static unsigned g_last_flip = 0;
+extern "C" void (*g_gcm_catchup_present)(void);
+
+static void catchup_present(void)
+{
+    present_guest_frame();
+    g_last_flip = cellGcm_flip_request_count();
+}
+
 extern "C" void ppu_report_guest_lrs(void);
 extern "C" void cellFiberPpuContextReport(void);
 extern void ps3_sampler_start(void);
@@ -189,7 +200,7 @@ static DWORD WINAPI frame_clock(LPVOID)
     fprintf(stderr, "[rsx] %s backend init %s\n", RSX_BACKEND_NAME,
             rsx_ok ? "OK -- window open" : "FAILED");
 
-    unsigned  last_flip = 0;
+    g_gcm_catchup_present = catchup_present;
     ULONGLONG next_tick = GetTickCount64();
 
     ULONGLONG diag_at = GetTickCount64() + 20000;
@@ -214,7 +225,7 @@ static DWORD WINAPI frame_clock(LPVOID)
              * mixed one. */
             if (rsx_ok && cellGcm_take_flip_pending()) {
                 present_guest_frame();
-                last_flip = cellGcm_flip_request_count();
+                g_last_flip = cellGcm_flip_request_count();
             }
             /* Drain the FIFO every tick. This is what writes the RSX sync-fence
              * labels the game's per-frame logic blocks on, so it has to keep
@@ -232,7 +243,7 @@ static DWORD WINAPI frame_clock(LPVOID)
         if (rsx_ok) {
             if (cellGcm_take_flip_pending()) {
                 present_guest_frame();
-                last_flip = cellGcm_flip_request_count();
+                g_last_flip = cellGcm_flip_request_count();
             }
             cellGcm_rsx_process_fifo();
 
@@ -244,9 +255,9 @@ static DWORD WINAPI frame_clock(LPVOID)
              * drain mid-frame and flash a partial one. Before the first flip
              * present freely, so the window is not blank during boot. */
             unsigned fc = cellGcm_flip_request_count();
-            if (fc != last_flip) {
+            if (fc != g_last_flip) {
                 present_guest_frame();
-                last_flip = fc;
+                g_last_flip = fc;
             } else if (fc == 0) {
                 rsx_backend_present();
             }

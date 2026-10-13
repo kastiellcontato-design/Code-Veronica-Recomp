@@ -338,6 +338,7 @@ typedef struct rsx_state {
     float viewport_offset[4];
     float viewport_scale[4];
     u32 shader_program;       /* fragment program address (offset | location in bits [0:1]) */
+    u32 shader_packer;        /* NV4097_SET_SHADER_PACKER (0x1FEC): != 0 = sRGB colour output */
     u32 shader_control;       /* SET_SHADER_CONTROL (0x40 = 32-bit colour exports) */
     u32 fragment_program_addr;
     u32 vertex_attrib_output_mask;

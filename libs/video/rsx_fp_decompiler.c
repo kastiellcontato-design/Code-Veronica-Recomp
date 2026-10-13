@@ -95,9 +95,34 @@ const char* rsx_fp_opcode_name(u32 op)
     case OP_DIV: return "DIV"; case OP_DP2: return "DP2"; case OP_NRM: return "NRM";
     case OP_DIVSQ: return "DIVSQ"; case OP_LIF: return "LIF";
     case OP_FENCT: return "FENCT"; case OP_FENCB: return "FENCB";
+    case OP_PK4B: return "PK4"; case OP_UP4B: return "UP4"; case OP_PK2H: return "PK2";
+    case OP_UP2H: return "UP2"; case OP_PK4UB: return "PKB"; case OP_UP4UB: return "UPB";
+    case OP_PK2US: return "PK16"; case OP_UP2US: return "UP16";
+    case 0x2B: return "BEM"; case 0x2C: return "PKG"; case 0x2D: return "UPG";
+    case 0x33: return "TEXBEM"; case 0x34: return "TXPBEM"; case 0x35: return "BEMLUM";
+    case 0x37: return "TIMESWTEX";
     default:     return "?";
     }
 }
+
+/* HLSL for the pack/unpack opcodes. Layouts follow GLSL packSnorm4x8 /
+ * packUnorm4x8 / packHalf2x16 / packUnorm2x16 (first component in the low
+ * bits), which is what RPCS3 emits for the same opcodes. */
+static const char rsx_fp_pack_helpers[] =
+    "float rsx_pk4b(float4 v) { uint4 u = asuint(int4(round(clamp(v, -1.0, 1.0) * 127.0))) & 255u;\n"
+    "    return asfloat(u.x | (u.y << 8) | (u.z << 16) | (u.w << 24)); }\n"
+    "float4 rsx_up4b(float f) { uint u = asuint(f);\n"
+    "    int4 i = asint(uint4(u << 24, u << 16, u << 8, u)) >> 24;\n"
+    "    return clamp(float4(i) / 127.0, -1.0, 1.0); }\n"
+    "float rsx_pk4ub(float4 v) { uint4 u = uint4(round(saturate(v) * 255.0));\n"
+    "    return asfloat(u.x | (u.y << 8) | (u.z << 16) | (u.w << 24)); }\n"
+    "float4 rsx_up4ub(float f) { uint u = asuint(f);\n"
+    "    return float4(u & 255u, (u >> 8) & 255u, (u >> 16) & 255u, u >> 24) / 255.0; }\n"
+    "float rsx_pk2h(float4 v) { return asfloat(f32tof16(v.x) | (f32tof16(v.y) << 16)); }\n"
+    "float4 rsx_up2h(float f) { uint u = asuint(f); return float2(f16tof32(u), f16tof32(u >> 16)).xyxy; }\n"
+    "float rsx_pk2us(float4 v) { uint2 u = uint2(round(saturate(v.xy) * 65535.0));\n"
+    "    return asfloat(u.x | (u.y << 16)); }\n"
+    "float4 rsx_up2us(float f) { uint u = asuint(f); return (float2(u & 65535u, u >> 16) / 65535.0).xyxy; }\n";
 
 /* ------------------------------------------------------------------------- */
 
@@ -335,7 +360,10 @@ static const char* input_expr(u32 input_src)
         "input.tc0", "input.tc1", "input.tc2", "input.tc3",
         "input.tc4", "input.tc5", "input.tc6", "input.tc7" };
     switch (input_src) {
-    case 0x0: return "input.position"; /* WPOS */
+    /* WPOS.w is 1/w on RSX (GL gl_FragCoord convention); D3D's SV_Position.w
+     * is w itself. Code Veronica takes 1/WPOS.w as the view distance for its
+     * fog and light falloff, which came out inverted. */
+    case 0x0: return "float4(input.position.xyz, 1.0 / input.position.w)"; /* WPOS */
     case 0x1: return "input.col0";     /* COL0 */
     case 0x2: return "input.col1";     /* COL1 */
     case 0x3: return "input.fog";      /* FOGC */
@@ -465,6 +493,7 @@ static int rsx_fp_decompile_internal(
     u32 blk_else[FP_MAX_BLOCKS], blk_end[FP_MAX_BLOCKS];
     int blk_loop[FP_MAX_BLOCKS];
     int n_blk = 0, n_loop = 0, loops_open = 0;
+    int uses_pack = 0;
 
     while (off + 16 <= max_bytes) {
         /* Close blocks ending here, innermost first, then open an else. Ends
@@ -623,6 +652,20 @@ static int rsx_fp_decompile_internal(
         case OP_MIN: snprintf(rhs, sizeof(rhs), "min((%s), (%s))", a, b); break;
         case OP_MAX: snprintf(rhs, sizeof(rhs), "max((%s), (%s))", a, b); break;
         case OP_FRC: snprintf(rhs, sizeof(rhs), "frac(%s)", a); break;
+        /* Pack/unpack: a float4 squeezed into the bits of ONE float and back
+         * (RPCS3 FragmentProgramDecompiler, RSX_FP_OPCODE_PK4..UP16). Titles
+         * use them to carry HDR/depth through RGBA8 targets. Unhandled, they
+         * made a program export zero -- see rsx_fp_pack_helpers. */
+        case OP_PK4B:  snprintf(rhs, sizeof(rhs), "(float4)rsx_pk4b(%s)", a); uses_pack = 1; break;
+        case OP_UP4B:  snprintf(rhs, sizeof(rhs), "rsx_up4b((%s).x)", a); uses_pack = 1; break;
+        case OP_PK4UB: snprintf(rhs, sizeof(rhs), "(float4)rsx_pk4ub(%s)", a); uses_pack = 1; break;
+        case OP_UP4UB: snprintf(rhs, sizeof(rhs), "rsx_up4ub((%s).x)", a); uses_pack = 1; break;
+        case OP_PK2H:  snprintf(rhs, sizeof(rhs), "(float4)rsx_pk2h(%s)", a); uses_pack = 1; break;
+        case OP_UP2H:  snprintf(rhs, sizeof(rhs), "rsx_up2h((%s).x)", a); uses_pack = 1; break;
+        case OP_PK2US: snprintf(rhs, sizeof(rhs), "(float4)rsx_pk2us(%s)", a); uses_pack = 1; break;
+        case OP_UP2US: snprintf(rhs, sizeof(rhs), "rsx_up2us((%s).x)", a); uses_pack = 1; break;
+        case OP_DDX: snprintf(rhs, sizeof(rhs), "ddx(%s)", a); break;
+        case OP_DDY: snprintf(rhs, sizeof(rhs), "ddy(%s)", a); break;
         case OP_FLR: snprintf(rhs, sizeof(rhs), "floor(%s)", a); break;
         case OP_RCP: snprintf(rhs, sizeof(rhs), "(1.0 / (%s).x)", a); break;
         /* Real RSX RSQ ignores the input's sign — 1/sqrt(|x|), not 1/sqrt(x)
@@ -738,6 +781,14 @@ static int rsx_fp_decompile_internal(
             break;
         }
 
+        /* Texture results pass through RSX_TEXOUT so a backend can apply the
+         * unit's sRGB (gamma) decode; it is the identity by default. */
+        if (handled && (opcode == OP_TEX || opcode == OP_TXP ||
+                        opcode == OP_TXB || opcode == OP_TXL)) {
+            char wrapped[700];
+            snprintf(wrapped, sizeof(wrapped), "RSX_TEXOUT(%u, %s)", tex_unit, rhs);
+            snprintf(rhs, sizeof(rhs), "%s", wrapped);
+        }
         int has_dest = !(w0 & FP_OUT_NONE);
         if (handled && (has_dest || set_cond)) {
             u32 dst_idx = (w0 & FP_OUT_REG_MASK) >> FP_OUT_REG_SHIFT;
@@ -787,13 +838,17 @@ static int rsx_fp_decompile_internal(
                                  "      /* exec_if=none: write suppressed */\n");
                     } else {
                         /* Per-component select gated by the CC sign test.
-                         * lerp(dst, _v, mask) == mask ? _v : dst since the
-                         * mask is exactly 0.0/1.0 from the bool->float cast. */
+                         * A real select, not lerp: lerp(dst, _v, 1) is
+                         * dst*0 + _v, and a NaN/inf in the discarded dst
+                         * survives it. RSX (and RPCS3's mix(a, b, bvec))
+                         * drop it -- Code Veronica's colour curve divides
+                         * by zero in the branch it then discards, and the
+                         * lerp turned both ends of the curve black. */
                         snprintf(buf, sizeof(buf),
-                                 "      float4 _p = (float4)((cc%u).%s %s (float4)0.0);\n"
-                                 "      %s[%u].%s = lerp(%s[%u].%s, _v.%s, _p.%s);\n",
+                                 "      bool4 _p = (cc%u).%s %s (float4)0.0;\n"
+                                 "      %s[%u].%s = _p.%s ? _v.%s : %s[%u].%s;\n",
                                  cc_read, cswz, cmp_op,
-                                 reg, dst_idx, m, reg, dst_idx, m, m, m);
+                                 reg, dst_idx, m, m, m, reg, dst_idx, m);
                     }
                     out_puts(&o, buf);
                 }
@@ -877,7 +932,7 @@ static int rsx_fp_decompile_internal(
     /* Preamble: PSInput matches the backend's placeholder layout; temp/half
      * register files; texture+sampler banks for TEX. Built here, in front of
      * the body, now that the return type is known. */
-    char preamble[2048];
+    char preamble[4096];
     Out p = { preamble, sizeof(preamble), 0, 1 };
     preamble[0] = '\0';
     out_puts(&p,
@@ -907,7 +962,9 @@ static int rsx_fp_decompile_internal(
          * shader defines RSX_ADDR ahead of this text; otherwise texture
          * coordinates pass through unchanged. */
         "#ifndef RSX_ADDR\n#define RSX_ADDR(u, c) (c)\n#endif\n"
+        "#ifndef RSX_TEXOUT\n#define RSX_TEXOUT(u, x) (x)\n#endif\n"
     );
+    if (uses_pack) out_puts(&p, rsx_fp_pack_helpers);
     if (buffered) {
         char constants_decl[192];
         snprintf(

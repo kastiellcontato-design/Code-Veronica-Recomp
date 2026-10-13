@@ -74,6 +74,13 @@ void rsx_fetch_attrib(const rsx_state* st, int idx, u32 vi, float out[4])
         : cellGcmResolveLocated(1, off)); /* LOCAL: VRAM, never the IO table */
 
     u32 n = a->size ? a->size : 4; if (n > 4) n = 4;
+    /* VTX_TYPEDBG=1: each distinct (attribute, type, size, stride) once. */
+    { static int t = -1; if (t < 0) t = getenv("VTX_TYPEDBG") ? 1 : 0;
+      if (t) { static u32 seen[64]; static int ns = 0;
+        u32 key = ((u32)idx << 24) | ((a->type & 0xFFu) << 16) | ((a->size & 0xFFu) << 8) | (a->stride & 0xFFu);
+        int f = 0; for (int i = 0; i < ns; i++) if (seen[i] == key) f = 1;
+        if (!f && ns < 64) { seen[ns++] = key;
+            fprintf(stderr, "[VTXFMT] attr=%d type=%u size=%u stride=%u%c", idx, a->type, a->size, a->stride, 10); } } }
     switch (a->type) {
     case 2: /* CELL_GCM_VERTEX_F: float32 BE */
         for (u32 k = 0; k < n; k++) out[k] = rsx_rd_bef(p + k * 4);
@@ -97,12 +104,21 @@ void rsx_fetch_attrib(const rsx_state* st, int idx, u32 vi, float out[4])
     case 7: /* UB256: u8 unnormalized */
         for (u32 k = 0; k < n; k++) out[k] = (float)p[k];
         break;
+    case 6: { /* CMP: one BE word, signed normalized x:11 y:11 z:10 (low bits first) */
+        u32 v = ((u32)p[0] << 24) | ((u32)p[1] << 16) | ((u32)p[2] << 8) | p[3];
+        s32 x = (s32)(v << 21) >> 21, y = (s32)(v << 10) >> 21, z = (s32)v >> 22;
+        out[0] = (float)x / 1023.0f;
+        out[1] = (float)y / 1023.0f;
+        out[2] = (float)z / 511.0f;
+        out[3] = 1.0f;
+        break; }
     default:
-        { static int t = -1; if (t < 0) t = getenv("VTX_TYPEDBG") ? 1 : 0;
-          if (t) { static u32 seen = 0;
-              if (!(seen & (1u << (a->type & 31)))) { seen |= 1u << (a->type & 31);
-                  fprintf(stderr, "[VTXTYPE] UNHANDLED type=%u attr=%d size=%u stride=%u\n",
-                          a->type, idx, a->size, a->stride); } } }
+        /* Always reported, once per type: reading an unknown format as floats
+         * turns a whole mesh into garbage positions that never rasterise. */
+        { static u32 seen = 0;
+          if (!(seen & (1u << (a->type & 31)))) { seen |= 1u << (a->type & 31);
+              fprintf(stderr, "[VTXTYPE] UNHANDLED type=%u attr=%d size=%u stride=%u\n",
+                      a->type, idx, a->size, a->stride); } }
         for (u32 k = 0; k < n; k++) out[k] = rsx_rd_bef(p + k * 4);
         break;
     }
