@@ -42,6 +42,7 @@
 #include <initguid.h>
 
 #include "rsx_getenv_cache.h"   /* getenv() per call site, cached: per-draw paths */
+#include "../../runtime/platform/host_thread_name.h"
 
 /* Link libraries */
 #pragma comment(lib, "d3d12.lib")
@@ -374,7 +375,7 @@ typedef struct {
     /* Per-frame draw recording */
     int                   frame_recording; /* 1 if cmd list is open for recording */
     u32                   draw_count;      /* draws this frame */
-    D3D12DrawRecord       draws[MAX_DRAWS];
+    D3D12DrawRecord*      draws;           /* the RECORDING batch (s_draw_bufs[k]) */
 
     /* Pointer to current RSX state (set before draw calls) */
     const rsx_state*      current_rsx_state;
@@ -391,6 +392,34 @@ typedef struct {
 } D3D12State;
 
 static D3D12State s_d3d;
+
+/* Two batches: the FIFO drain records into s_d3d.draws while the render
+ * thread builds and submits the frozen one in s_rb. render_frame() freezes
+ * the recording batch into s_rb, points recording at the other buffer, and
+ * hands s_rb to the render thread (or runs it inline with
+ * RSX_RENDER_THREAD=0). Before this the drain and the D3D12 work ran one
+ * after the other on the frame clock, and the guest's main thread spent
+ * most of each frame polling a label the drain could not write while a
+ * frame was being rendered.
+ *
+ * Everything render-side reads the batch through s_rb: the draw list and
+ * count, the upload-stream parity, the FP/vertex-texture snapshot arenas
+ * and the present flag. Record-side code keeps using s_d3d.* and the
+ * s_fp_arena / s_vtex_arena of the recording batch. */
+static D3D12DrawRecord s_draw_bufs[2][MAX_DRAWS];
+typedef struct {
+    D3D12DrawRecord* draws;
+    u32  count;
+    int  parity;
+    u8*  fp_arena;
+    u8*  vtex_arena;
+    int  present;
+} RenderBatch;
+static RenderBatch s_rb;
+/* Window title written by the render thread, applied by the window thread. */
+static SRWLOCK s_title_lock = SRWLOCK_INIT;
+static char    s_title_pending[256];
+static int     s_title_dirty = 0;
 char g_rsx_title_base[128] = "ps3recomp";
 static u32 s_dbg_last_draws = 0;
 static u64 s_req_verts = 0, s_req_draws = 0, s_drop_draws = 0;
@@ -1765,7 +1794,7 @@ static void rsx_capture_frame(u32 fi, u32 ndraws, u32 capidx)
                         s_d3d.off_rt[i].w, s_d3d.off_rt[i].h, s_d3d.off_rt[i].dxgi);
         fprintf(mf, "--- ops ---\n");
         for (u32 d = 0; d < ndraws && d < MAX_DRAWS; d++) {
-            const D3D12DrawRecord* r = &s_d3d.draws[d];
+            const D3D12DrawRecord* r = &s_rb.draws[d];
             if(r->is_copy) {fprintf(mf,"op%03u COPY src=%08X (%u,%u) dst=%08X (%u,%u) %ux%u\n",d,r->copy_src,r->copy_sx,r->copy_sy,r->rt_off,r->copy_dx,r->copy_dy,r->copy_w,r->copy_h);continue;}
             if (r->is_clear)
                 fprintf(mf, "op%03u CLEAR rt=0x%08X mrt=0x%X/0x%X/0x%X cc=(%.3f,%.3f,%.3f,%.3f) zeta=0x%08X\n",
@@ -1798,11 +1827,11 @@ static void rsx_capture_frame(u32 fi, u32 ndraws, u32 capidx)
          * live at slot==draw-index; parity is post-^1 here (capture is after the
          * frame's vp_parity flip), so read the other half. */
         if (s_d3d.vp_cb_mapped) {
-            u32 par = (u32)(s_d3d.vp_parity ^ 1);
+            u32 par = (u32)(s_rb.parity ^ 1);
             fprintf(mf, "--- vp constants (first offscreen geometry draws) ---\n");
             int shown = 0;
             for (u32 d = 0; d < ndraws && d < MAX_DRAWS && shown < 4; d++) {
-                const D3D12DrawRecord* r = &s_d3d.draws[d];
+                const D3D12DrawRecord* r = &s_rb.draws[d];
                 if (r->is_clear || !r->rt_off) continue;
                 const float* c = (const float*)((const char*)s_d3d.vp_cb_mapped
                     + ((u64)par * MAX_DRAWS + d) * VP_CB_STRIDE);
@@ -1830,10 +1859,10 @@ static void rsx_capture_frame(u32 fi, u32 ndraws, u32 capidx)
          * with), up to the last non-zero slot. Paired with the fp_*.hlsl
          * files below, a pass can be evaluated by hand from the capture. */
         if (s_d3d.vp_fpcb_mapped) {
-            u32 par = (u32)(s_d3d.vp_parity ^ 1);
+            u32 par = (u32)(s_rb.parity ^ 1);
             fprintf(mf, "--- fp constants per draw (fp_k[i] = x y z w) ---\n");
             for (u32 d = 0; d < ndraws && d < MAX_DRAWS; d++) {
-                const D3D12DrawRecord* r = &s_d3d.draws[d];
+                const D3D12DrawRecord* r = &s_rb.draws[d];
                 if (r->is_clear || r->is_copy || !r->is_vp || !r->fp_addr) continue;
                 const float* k = (const float*)((const char*)s_d3d.vp_fpcb_mapped
                     + ((u64)par * MAX_DRAWS + r->cb_slot) * VP_FPCB_STRIDE) + 20;
@@ -1850,11 +1879,11 @@ static void rsx_capture_frame(u32 fi, u32 ndraws, u32 capidx)
          * mesh decoded from an unsupported format shows up here as NaN/huge
          * values long before anyone can see why it is missing on screen. */
         if (s_d3d.vp_vb_mapped) {
-            u32 par = (u32)(s_d3d.vp_parity ^ 1);
+            u32 par = (u32)(s_rb.parity ^ 1);
             fprintf(mf, "--- first vertices per vertex program (attrs with any non-zero lane) ---\n");
             int seen_vs[64]; int nvs = 0;
             for (u32 d = 0; d < ndraws && d < MAX_DRAWS; d++) {
-                const D3D12DrawRecord* r = &s_d3d.draws[d];
+                const D3D12DrawRecord* r = &s_rb.draws[d];
                 if (r->is_clear || r->is_copy || !r->is_vp || !r->vertex_count) continue;
                 int dup = 0;
                 for (int i = 0; i < nvs; i++) if (seen_vs[i] == r->vs_idx) dup = 1;
@@ -1903,7 +1932,7 @@ static void rsx_capture_frame(u32 fi, u32 ndraws, u32 capidx)
         static char fph[32768];
         u32 seen[256]; int ns = 0;
         for (u32 d = 0; d < ndraws && d < MAX_DRAWS && vm_base; d++) {
-            const D3D12DrawRecord* r = &s_d3d.draws[d];
+            const D3D12DrawRecord* r = &s_rb.draws[d];
             if (r->is_clear || r->is_copy || !r->fp_addr) continue;
             int dup = 0;
             for (int i = 0; i < ns; i++) if (seen[i] == r->fp_addr) dup = 1;
@@ -1938,10 +1967,10 @@ static void rsx_capture_frame(u32 fi, u32 ndraws, u32 capidx)
     if (getenv("CV_VIDEO_CAPTURE")) {
         extern uint8_t* vm_base;
         for (u32 d=0; d<ndraws && d<MAX_DRAWS; ++d) {
-            const D3D12DrawRecord* r=&s_d3d.draws[d];
+            const D3D12DrawRecord* r=&s_rb.draws[d];
             if(r->is_clear || r->is_copy) continue;
             if(s_d3d.vp_cb_mapped && s_d3d.vp_vb_mapped && r->is_vp) {
-                u32 par=(u32)(s_d3d.vp_parity^1);
+                u32 par=(u32)(s_rb.parity^1);
                 snprintf(path,sizeof path,"%s/op%03u_cb.bin",dir,d);FILE* f=fopen(path,"wb");
                 if(f){fwrite((char*)s_d3d.vp_cb_mapped+((u64)par*MAX_DRAWS+r->cb_slot)*VP_CB_STRIDE,1,VP_CB_STRIDE,f);fclose(f);}
                 snprintf(path,sizeof path,"%s/op%03u_vb.bin",dir,d);f=fopen(path,"wb");
@@ -2270,7 +2299,7 @@ static void fp_snapshot(D3D12DrawRecord* dr)
 
 static const u8* fp_snap_ptr(const D3D12DrawRecord* dr)
 {
-    return (dr->fp_snap && s_fp_arena) ? s_fp_arena + dr->fp_snap - 1 : NULL;
+    return (dr->fp_snap && s_rb.fp_arena) ? s_rb.fp_arena + dr->fp_snap - 1 : NULL;
 }
 
 /* Per-frame copy of every vertex texture's texels (guest byte order, packed
@@ -2378,6 +2407,8 @@ static void vtex_record(D3D12DrawRecord* dr, const rsx_state* st)
     }
 }
 
+static void render_wait_idle(void);   /* render thread, see render_frame() */
+
 static int vp_get_vs(const rsx_state* st)
 {
     extern int rsx_vp_decompile_ex(const uint8_t*, u32, u32, char*, u32);
@@ -2480,6 +2511,7 @@ static int vp_get_vs(const rsx_state* st)
     int slot;
     if (s_d3d.vp_vs_n < VP_VS_CACHE) slot = s_d3d.vp_vs_n++;
     else {  /* evict slot 0 */
+        render_wait_idle();   /* the memmove below shifts slots the render thread reads */
         { static int _w=0; if (_w++<3) printf("[VP] WARNING: VS cache full (%d) -- evicting re-keys every FP pipeline%c", VP_VS_CACHE, 10); }
         if (s_d3d.vp_vs[0].vs) s_d3d.vp_vs[0].vs->lpVtbl->Release(s_d3d.vp_vs[0].vs);
         free(s_d3d.vp_vs[0].hlsl);
@@ -4589,7 +4621,7 @@ static ID3D12Resource* vtex_get(const D3D12DrawRecord* dr, u32 u)
 {
     DXGI_FORMAT dxgi; u32 bpt, comp;
     if (!vtex_format(dr->vtx[u].fmt, &dxgi, &bpt, &comp)) return NULL;
-    const u8* data = s_vtex_arena + dr->vtx[u].data_off;
+    const u8* data = s_rb.vtex_arena + dr->vtx[u].data_off;
     const u32 w = dr->vtx[u].w, h = dr->vtx[u].h, row = dr->vtx[u].row_bytes;
     const u32 hash = dr->vtx[u].hash;
     int free_i = -1, old_i = 0;
@@ -4748,15 +4780,15 @@ static void zconv_plan(void)
 {
     s_zview_off = 0; s_zview_slot = -1; s_zconv_at = 0xFFFFFFFFu;
     if (getenv("ZCONV_OFF")) return;
-    for (u32 d = 0; d < s_d3d.draw_count && d < MAX_DRAWS; d++) {
-        const D3D12DrawRecord* dr = &s_d3d.draws[d];
+    for (u32 d = 0; d < s_rb.count && d < MAX_DRAWS; d++) {
+        const D3D12DrawRecord* dr = &s_rb.draws[d];
         if (!dr->is_vp || dr->is_clear || dr->is_copy) continue;
         for (int u = 0; u < 4 && !s_zview_off; u++) {
             if (!dr->tex[u].set || !dr->tex[u].raw) continue;
             u32 z = dr->tex[u].raw;
             int last = -1;
             for (u32 e = 0; e < d; e++) {
-                const D3D12DrawRecord* q = &s_d3d.draws[e];
+                const D3D12DrawRecord* q = &s_rb.draws[e];
                 if (q->is_vp && !q->is_clear && !q->is_copy && q->zeta_off == z) last = (int)e;
             }
             if (last < 0) continue;
@@ -4803,7 +4835,7 @@ static void zconv_run(D3D12_GPU_DESCRIPTOR_HANDLE gh_base)
  * Present, 0 = execute the recorded draws only. An OFFSCREEN-only batch (a
  * render-to-texture pass) must still run -- it is what fills the texture a
  * later batch samples -- but presenting it would show a half-built frame. */
-static int s_present_this_frame = 1;
+static int s_present_this_frame = 1;   /* recording side; frozen into s_rb.present */
 
 /* Resolve a DRAW_*_TEX value: a hex raw offset, or the literal "duck" for the
  * content-identified duck texture. */
@@ -5063,7 +5095,7 @@ static void guest_fb_present(u32 fi)
 }
 
 
-static void render_frame(void)
+static void render_frame_impl(void)
 {
     double _rf0 = perf_on() ? perf_now() : 0.0;
     u32 fi = s_d3d.frame_index;
@@ -5229,10 +5261,10 @@ static void render_frame(void)
     /* Frames with no ops (init/boot presents) don't count against the cap --
      * PNG-decode-heavy titles burn hundreds of empty presents before the first
      * real draw. */
-    if (getenv("RTT_DUMP") && s_d3d.draw_count > 0) { static int _f=0; int _cap = atoi(getenv("RTT_DUMP")); if (_cap < 2) _cap = 14; if (_f++ < _cap) {
-        fprintf(stderr, "[RTT] frame %d: %u ops\n", _f, s_d3d.draw_count);
-        for (u32 _d = 0; _d < s_d3d.draw_count && _d < MAX_DRAWS; _d++) {
-            D3D12DrawRecord* r = &s_d3d.draws[_d];
+    if (getenv("RTT_DUMP") && s_rb.count > 0) { static int _f=0; int _cap = atoi(getenv("RTT_DUMP")); if (_cap < 2) _cap = 14; if (_f++ < _cap) {
+        fprintf(stderr, "[RTT] frame %d: %u ops\n", _f, s_rb.count);
+        for (u32 _d = 0; _d < s_rb.count && _d < MAX_DRAWS; _d++) {
+            D3D12DrawRecord* r = &s_rb.draws[_d];
             fprintf(stderr, "[RTT]  op%02u %s rt=0x%X mrt=0x%X/0x%X/0x%X t0=0x%X fp=0x%X n=%u cmask=%X vp=%u,%u %ux%u blend=%d\n",
                 _d, r->is_clear?"CLR ":(r->is_vp?"draw":"leg "), r->rt_off,
                 r->rt_mrt[0], r->rt_mrt[1], r->rt_mrt[2],
@@ -5245,10 +5277,10 @@ static void render_frame(void)
      * ops, retargets pass N to the backbuffer). */
     { const char* rp = getenv("RTT_PASS");
       if (rp) {
-        int keep = atoi(rp), seen = 0; u32 cut = s_d3d.draw_count;
+        int keep = atoi(rp), seen = 0; u32 cut = s_rb.count;
         int viewrt = getenv("RTT_VIEWRT") != NULL;
-        for (u32 _d = 0; _d < s_d3d.draw_count && _d < MAX_DRAWS; _d++) {
-            D3D12DrawRecord* r = &s_d3d.draws[_d];
+        for (u32 _d = 0; _d < s_rb.count && _d < MAX_DRAWS; _d++) {
+            D3D12DrawRecord* r = &s_rb.draws[_d];
             if (r->is_clear || !r->is_vp) continue;
             if (seen == keep) {
                 /* Alone: retarget op N to the backbuffer. With RTT_VIEWRT:
@@ -5261,15 +5293,15 @@ static void render_frame(void)
             seen++;
         }
         if (viewrt) {
-            for (u32 _j = cut; _j < s_d3d.draw_count && _j < MAX_DRAWS; _j++) {
-                D3D12DrawRecord* r = &s_d3d.draws[_j];
+            for (u32 _j = cut; _j < s_rb.count && _j < MAX_DRAWS; _j++) {
+                D3D12DrawRecord* r = &s_rb.draws[_j];
                 if (r->is_vp && !r->is_clear && r->rt_off == 0) {
-                    if (cut < MAX_DRAWS) s_d3d.draws[cut++] = *r;
+                    if (cut < MAX_DRAWS) s_rb.draws[cut++] = *r;
                     break;
                 }
             }
         }
-        s_d3d.draw_count = (cut < s_d3d.draw_count) ? cut : s_d3d.draw_count;
+        s_rb.count = (cut < s_rb.count) ? cut : s_rb.count;
       } }
 
     /* DRAW_LIMIT=<N>: keep only the first N recorded ops this frame. The duck's
@@ -5278,7 +5310,7 @@ static void render_frame(void)
      * painted over them". Diagnostic only. */
     { static int lim = -1;
       if (lim < 0) { const char* e = getenv("DRAW_LIMIT"); lim = e ? atoi(e) : 0; }
-      if (lim > 0 && s_d3d.draw_count > (u32)lim) s_d3d.draw_count = (u32)lim; }
+      if (lim > 0 && s_rb.count > (u32)lim) s_rb.count = (u32)lim; }
 
     /* DRAW_SKIP_TEX=<hex raw offset>: drop every op binding that texture on
      * unit 0. The ducks sit behind the water's slab geometry, so removing the
@@ -5288,12 +5320,12 @@ static void render_frame(void)
       want = draw_filter_tex(sk);
       if (want) {
         u32 keep = 0;
-        for (u32 _d = 0; _d < s_d3d.draw_count && _d < MAX_DRAWS; _d++) {
-            if (!s_d3d.draws[_d].is_clear && s_d3d.draws[_d].tex[0].raw == want) continue;
-            if (keep != _d) s_d3d.draws[keep] = s_d3d.draws[_d];
+        for (u32 _d = 0; _d < s_rb.count && _d < MAX_DRAWS; _d++) {
+            if (!s_rb.draws[_d].is_clear && s_rb.draws[_d].tex[0].raw == want) continue;
+            if (keep != _d) s_rb.draws[keep] = s_rb.draws[_d];
             keep++;
         }
-        s_d3d.draw_count = keep;
+        s_rb.count = keep;
       } }
 
     /* DRAW_KEEP_TEX=<hex raw offset>: the inverse -- keep only the ops binding
@@ -5325,15 +5357,15 @@ static void render_frame(void)
         static D3D12DrawRecord kept[MAX_DRAWS];
         u32 nk = 0;
         if (!noclr)
-            for (u32 _d = 0; _d < s_d3d.draw_count && _d < MAX_DRAWS; _d++)
-                if (s_d3d.draws[_d].is_clear && nk < MAX_DRAWS) kept[nk++] = s_d3d.draws[_d];
-        for (u32 _d = 0; _d < s_d3d.draw_count && _d < MAX_DRAWS; _d++)
-            if (!s_d3d.draws[_d].is_clear && s_d3d.draws[_d].tex[0].raw == want
-                && (kblend < 0 || s_d3d.draws[_d].blend == kblend)
+            for (u32 _d = 0; _d < s_rb.count && _d < MAX_DRAWS; _d++)
+                if (s_rb.draws[_d].is_clear && nk < MAX_DRAWS) kept[nk++] = s_rb.draws[_d];
+        for (u32 _d = 0; _d < s_rb.count && _d < MAX_DRAWS; _d++)
+            if (!s_rb.draws[_d].is_clear && s_rb.draws[_d].tex[0].raw == want
+                && (kblend < 0 || s_rb.draws[_d].blend == kblend)
                 && nk < MAX_DRAWS)
-                kept[nk++] = s_d3d.draws[_d];
-        for (u32 _k = 0; _k < nk; _k++) s_d3d.draws[_k] = kept[_k];
-        s_d3d.draw_count = nk;
+                kept[nk++] = s_rb.draws[_d];
+        for (u32 _k = 0; _k < nk; _k++) s_rb.draws[_k] = kept[_k];
+        s_rb.count = nk;
       } }
 
     /* DRAW_LAST_TEX=<hex raw offset>: move the ops binding that texture to the
@@ -5344,28 +5376,28 @@ static void render_frame(void)
     { static const char* lt = (const char*)1; static u32 want = 0;
       if (lt == (const char*)1) lt = getenv("DRAW_LAST_TEX");
       want = draw_filter_tex(lt);
-      if (want && s_d3d.draw_count > 1) {
+      if (want && s_rb.count > 1) {
         static D3D12DrawRecord moved[MAX_DRAWS];
         u32 nm = 0, keep = 0;
-        for (u32 _d = 0; _d < s_d3d.draw_count && _d < MAX_DRAWS; _d++) {
-            if (!s_d3d.draws[_d].is_clear && s_d3d.draws[_d].tex[0].raw == want) {
-                if (nm < MAX_DRAWS) moved[nm++] = s_d3d.draws[_d];
+        for (u32 _d = 0; _d < s_rb.count && _d < MAX_DRAWS; _d++) {
+            if (!s_rb.draws[_d].is_clear && s_rb.draws[_d].tex[0].raw == want) {
+                if (nm < MAX_DRAWS) moved[nm++] = s_rb.draws[_d];
                 continue;
             }
-            if (keep != _d) s_d3d.draws[keep] = s_d3d.draws[_d];
+            if (keep != _d) s_rb.draws[keep] = s_rb.draws[_d];
             keep++;
         }
         for (u32 _m = 0; _m < nm && keep < MAX_DRAWS; _m++)
-            s_d3d.draws[keep++] = moved[_m];
-        s_d3d.draw_count = keep;
+            s_rb.draws[keep++] = moved[_m];
+        s_rb.count = keep;
       } }
 
     /* Render-to-texture pre-pass: make sure an offscreen RT resource exists for
      * every non-display surface targeted this frame (so draws binding it as a
      * texture can resolve to it below, whatever the op order). */
     for (int _i = 0; _i < MAX_OFF_RTS; _i++) s_d3d.off_rt[_i].used = 0;
-    for (u32 _d = 0; _d < s_d3d.draw_count && _d < MAX_DRAWS; _d++) {
-        D3D12DrawRecord* dr = &s_d3d.draws[_d];
+    for (u32 _d = 0; _d < s_rb.count && _d < MAX_DRAWS; _d++) {
+        D3D12DrawRecord* dr = &s_rb.draws[_d];
         if (dr->is_vp && dr->rt_off)
             off_rt_get(dr->rt_off, dr->rt_w, dr->rt_h, dr->rt_fmt);
         for (int _m = 0; _m < 3; _m++)
@@ -5381,8 +5413,8 @@ static void render_frame(void)
      * (tex_slot 1000+idx) -- no guest-memory upload. */
     double _pre0 = perf_on() ? perf_now() : 0.0;
     for (int _i = 0; _i < VP_TEX_SLOTS; _i++) s_d3d.vp_tex[_i].used = 0;
-    for (u32 _d = 0; _d < s_d3d.draw_count && _d < MAX_DRAWS; _d++) {
-        D3D12DrawRecord* dr = &s_d3d.draws[_d];
+    for (u32 _d = 0; _d < s_rb.count && _d < MAX_DRAWS; _d++) {
+        D3D12DrawRecord* dr = &s_rb.draws[_d];
         if (!dr->is_vp || dr->is_clear || dr->is_copy) continue;
         /* Debug: RTT_VIEWRT=<hex raw offset> makes display draws sample that
          * offscreen RT at t0 (the composite blit then shows it fullscreen). */
@@ -5531,7 +5563,7 @@ static void render_frame(void)
                     if (rt_nogamma < 0) rt_nogamma = getenv("RT_NOGAMMA") ? 1 : 0;
                     if (rt_nogamma && s_d3d.vp_fpcb_mapped && _u < 4) {
                         float* tsg = (float*)((char*)s_d3d.vp_fpcb_mapped
-                            + ((u64)s_d3d.vp_parity * MAX_DRAWS + dr->cb_slot) * VP_FPCB_STRIDE);
+                            + ((u64)s_rb.parity * MAX_DRAWS + dr->cb_slot) * VP_FPCB_STRIDE);
                         u32 gm = (u32)tsg[19];
                         gm &= ~(0xFu << (_u * 4));
                         tsg[19] = (float)gm;
@@ -5635,7 +5667,7 @@ static void render_frame(void)
     s_d3d.cmd_list->lpVtbl->RSSetScissorRects(s_d3d.cmd_list, 1, &scissor);
 
     /* Bind pipeline state and push MVP if anything to draw */
-    if (s_d3d.pipeline_ready && s_d3d.draw_count > 0) {
+    if (s_d3d.pipeline_ready && s_rb.count > 0) {
         s_d3d.cmd_list->lpVtbl->SetGraphicsRootSignature(s_d3d.cmd_list, s_d3d.root_signature);
         s_d3d.cmd_list->lpVtbl->IASetVertexBuffers(s_d3d.cmd_list, 0, 1, &s_d3d.vb_view);
 
@@ -5681,7 +5713,7 @@ static void render_frame(void)
           if (_vd && _n < 3) {
             _n++;
             fprintf(stderr, "[D3D12-DBG] have_mvp=%d draw_count=%u vb_offset=%u\n",
-                    have_mvp, s_d3d.draw_count, s_d3d.vb_offset);
+                    have_mvp, s_rb.count, s_d3d.vb_offset);
             fprintf(stderr, "[D3D12-DBG] mvp rows: [%.2f %.2f %.2f %.2f][%.2f %.2f %.2f %.2f]"
                             "[%.2f %.2f %.2f %.2f][%.2f %.2f %.2f %.2f]\n",
                     mvp[0],mvp[1],mvp[2],mvp[3], mvp[4],mvp[5],mvp[6],mvp[7],
@@ -5695,8 +5727,8 @@ static void render_frame(void)
                             k, v[0], v[1], v[2], v[3], v[4], v[5], v[6]);
                 }
             }
-            for (u32 d = 0; d < s_d3d.draw_count && d < 3; d++) {
-                const D3D12DrawRecord* dr = &s_d3d.draws[d];
+            for (u32 d = 0; d < s_rb.count && d < 3; d++) {
+                const D3D12DrawRecord* dr = &s_rb.draws[d];
                 fprintf(stderr, "[D3D12-DBG]  draw[%u] is_vp=%d is_clear=%d topo=%u cnt=%u vbofs=%u startv=%u rt=%u\n",
                         d, dr->is_vp, dr->is_clear, dr->topology, dr->vertex_count,
                         dr->vb_byte_offset, dr->vb_byte_offset / VERTEX_STRIDE, dr->rt_off);
@@ -5709,10 +5741,10 @@ static void render_frame(void)
          * must match the topology or D3D12 rejects the draw. */
         u32 last_topo = 0xFFFFFFFFu;
         ID3D12PipelineState* last_pso = NULL;
-        u32 draws = s_d3d.draw_count;
+        u32 draws = s_rb.count;
         if (draws > MAX_DRAWS) draws = MAX_DRAWS;
         for (u32 d = 0; d < draws; d++) {
-            const D3D12DrawRecord* dr = &s_d3d.draws[d];
+            const D3D12DrawRecord* dr = &s_rb.draws[d];
             if (dr->is_vp) continue; /* drawn by the VP pass below */
 
             /* Select PSO: textured triangles (dbgfont) use the atlas PSO;
@@ -5744,10 +5776,10 @@ static void render_frame(void)
 
     /* VP pass: real decompiled vertex program + atlas alpha-test PS. Feeds raw
      * float4 attrib0 from vp_vb and the vp_c[] constant bank. */
-    if (s_d3d.vp_ready && s_d3d.draw_count > 0) {
+    if (s_d3d.vp_ready && s_rb.count > 0) {
         int any = 0;
-        for (u32 d = 0; d < s_d3d.draw_count && d < MAX_DRAWS; d++)
-            if (s_d3d.draws[d].is_vp) { any = 1; break; }
+        for (u32 d = 0; d < s_rb.count && d < MAX_DRAWS; d++)
+            if (s_rb.draws[d].is_vp) { any = 1; break; }
         /* Textured geometry (dbgfont atlas) uses the sampling PS; untextured 3D
          * (vkcube) uses the colour-only PS. Fall back to whichever exists. */
         ID3D12PipelineState* vpso =
@@ -5758,12 +5790,12 @@ static void render_frame(void)
           if (cap < 0) { const char* e = getenv("VP_SUBMIT"); cap = e ? atoi(e) : 0; }
           if (cap && n < cap) { n++;
             u32 nvp = 0, nclr = 0;
-            for (u32 d2 = 0; d2 < s_d3d.draw_count && d2 < MAX_DRAWS; d2++) {
-                if (s_d3d.draws[d2].is_vp)    nvp++;
-                if (s_d3d.draws[d2].is_clear) nclr++;
+            for (u32 d2 = 0; d2 < s_rb.count && d2 < MAX_DRAWS; d2++) {
+                if (s_rb.draws[d2].is_vp)    nvp++;
+                if (s_rb.draws[d2].is_clear) nclr++;
             }
             fprintf(stderr, "[VPPASS] records=%u is_vp=%u clears=%u any=%d vpso=%p rootsig=%p\n",
-                    s_d3d.draw_count, nvp, nclr, any,
+                    s_rb.count, nvp, nclr, any,
                     (void*)vpso, (void*)s_d3d.vp_root_sig); } }
         if (any && vpso) {
             s_d3d.cmd_list->lpVtbl->SetGraphicsRootSignature(s_d3d.cmd_list, s_d3d.vp_root_sig);
@@ -5778,7 +5810,7 @@ static void render_frame(void)
             s_d3d.cmd_list->lpVtbl->SetGraphicsRootDescriptorTable(s_d3d.cmd_list, 1, gh);
             D3D12_VERTEX_BUFFER_VIEW vbv;
             vbv.BufferLocation = s_d3d.vp_vb->lpVtbl->GetGPUVirtualAddress(s_d3d.vp_vb)
-                               + (u64)s_d3d.vp_parity * MAX_VERTICES * 256;
+                               + (u64)s_rb.parity * MAX_VERTICES * 256;
             vbv.SizeInBytes    = MAX_VERTICES * 256;
             vbv.StrideInBytes  = 256;   /* 16 float4 attrib slots */
             s_d3d.cmd_list->lpVtbl->IASetVertexBuffers(s_d3d.cmd_list, 0, 1, &vbv);
@@ -5790,8 +5822,8 @@ static void render_frame(void)
             int cur_m[3] = {-1, -1, -1};           /* MRT B/C/D: -1 = unbound   */
             double _rec0 = perf_on() ? perf_now() : 0.0;
             int seen_small_vp = 0, captured = 0;
-            for (u32 d = 0; d < s_d3d.draw_count && d < MAX_DRAWS; d++) {
-                const D3D12DrawRecord* dr = &s_d3d.draws[d];
+            for (u32 d = 0; d < s_rb.count && d < MAX_DRAWS; d++) {
+                const D3D12DrawRecord* dr = &s_rb.draws[d];
                 if (d == s_zconv_at) {
                     zconv_run(gh_base);
                     cur_rt = -2; for (int m = 0; m < 3; m++) cur_m[m] = -2;
@@ -5914,7 +5946,7 @@ static void render_frame(void)
                       if (tt < 0) { const char* e = getenv("VP_TESTTRI"); tt = e ? atoi(e) : 0; }
                       if (tt && want >= 0 && s_d3d.vp_vb_mapped) {
                           float* vtx = (float*)((char*)s_d3d.vp_vb_mapped
-                              + (u64)s_d3d.vp_parity * MAX_VERTICES * 256u
+                              + (u64)s_rb.parity * MAX_VERTICES * 256u
                               + (u64)1000 * 256u);
                           static const float tri[3][4] = {
                               {-2.0f, -2.0f, 0.0f, 1.0f},
@@ -5935,7 +5967,7 @@ static void render_frame(void)
                 }
                 /* rsxcap: the post chain rewrites one target over and over;
                  * photograph it before each of the last 40 ops. */
-                if (s_cap_steps_on && cur_rt >= 0 && d + 40 >= s_d3d.draw_count &&
+                if (s_cap_steps_on && cur_rt >= 0 && d + 40 >= s_rb.count &&
                     s_d3d.off_rt[cur_rt].w >= 640)
                     cap_step_snapshot(cur_rt, d);
                 if (dr->is_clear) {
@@ -6032,11 +6064,11 @@ static void render_frame(void)
                 /* Per-draw constants: this draw's vp_cb + FP texscale slots. */
                 s_d3d.cmd_list->lpVtbl->SetGraphicsRootConstantBufferView(s_d3d.cmd_list, 0,
                     s_d3d.vp_cb->lpVtbl->GetGPUVirtualAddress(s_d3d.vp_cb)
-                    + ((u64)s_d3d.vp_parity * MAX_DRAWS + dr->cb_slot) * VP_CB_STRIDE);
+                    + ((u64)s_rb.parity * MAX_DRAWS + dr->cb_slot) * VP_CB_STRIDE);
                 if (s_d3d.vp_fpcb)
                     s_d3d.cmd_list->lpVtbl->SetGraphicsRootConstantBufferView(s_d3d.cmd_list, 2,
                         s_d3d.vp_fpcb->lpVtbl->GetGPUVirtualAddress(s_d3d.vp_fpcb)
-                        + ((u64)s_d3d.vp_parity * MAX_DRAWS + dr->cb_slot) * VP_FPCB_STRIDE);
+                        + ((u64)s_rb.parity * MAX_DRAWS + dr->cb_slot) * VP_FPCB_STRIDE);
                 /* DRAWARGS=<N>: the arguments actually handed to the GPU, plus
                  * the target they are aimed at. A zero vertex count, or a start
                  * vertex past the buffer, rasterises nothing while every other
@@ -6245,37 +6277,34 @@ static void render_frame(void)
      * of batch alternating; this names both. */
     { static int fl = -1; if (fl < 0) fl = getenv("CV_FRAMELOG") ? 1 : 0;
       static int lines = 0, armed = 0;   /* start at the first gameplay-sized batch */
-      if (s_d3d.draw_count > 1000) armed = 1;
-      if (fl && armed && lines < 600 && s_d3d.draw_count > 0) {
+      if (s_rb.count > 1000) armed = 1;
+      if (fl && armed && lines < 600 && s_rb.count > 0) {
           u32 disp = 0, clr = 0, cpy = 0, cpy_disp = 0, off = 0;
-          for (u32 i = 0; i < s_d3d.draw_count && i < MAX_DRAWS; i++) {
-              const D3D12DrawRecord* r = &s_d3d.draws[i];
+          for (u32 i = 0; i < s_rb.count && i < MAX_DRAWS; i++) {
+              const D3D12DrawRecord* r = &s_rb.draws[i];
               if (r->is_copy) { cpy++; if (cellGcmOffsetIsDisplay(r->rt_off)) cpy_disp++; }
               else if (r->is_clear) clr++;
               else if (!r->rt_off) disp++;
               else off++;
           }
-          const D3D12DrawRecord* f0 = &s_d3d.draws[0];
+          const D3D12DrawRecord* f0 = &s_rb.draws[0];
           fprintf(stderr, "[FRAME] #%llu draws=%u present=%d display=%u offscreen=%u clears=%u copies=%u(to display %u)"
                           " first: %s rt=0x%08X t0=0x%08X zconv=%d%c",
-                  (unsigned long long)s_d3d.frame_count, s_d3d.draw_count, s_present_this_frame,
+                  (unsigned long long)s_d3d.frame_count, s_rb.count, s_rb.present,
                   disp, off, clr, cpy, cpy_disp,
                   f0->is_copy ? "COPY" : f0->is_clear ? "CLEAR" : "DRAW", f0->rt_off, f0->tex[0].raw,
                   s_zconv_at != 0xFFFFFFFFu, 10);
           lines++;
       } }
-    if (s_d3d.draw_count >= MAX_DRAWS) {
+    if (s_rb.count >= MAX_DRAWS) {
         static int n = 0; if (n++ < 8)
             fprintf(stderr, "[D3D12] WARNING: frame hit MAX_DRAWS (%d) -- later draws were dropped%c", MAX_DRAWS, 10);
     }
-    s_dbg_last_draws = s_d3d.draw_count;
-    s_d3d.vb_offset  = 0; /* reset for next frame */
-    s_d3d.vp_vb_offset = 0;
-    s_d3d.draw_count = 0;
-    s_vtex_arena_used = 0;
-    s_fp_arena_used = 0; s_fp_nsnap = 0;  /* vertex-texture snapshots belong to the draws */
-    s_vtex_nsnap = 0;
-    s_d3d.vp_parity ^= 1;  /* next frame's records go to the other half */
+    s_dbg_last_draws = s_rb.count;
+    /* The recording-side resets (draw count, upload offsets, snapshot arenas,
+     * parity) happen when render_frame() freezes the batch, not here: with
+     * the render thread the drain is already recording the next frame. */
+    s_rb.count = 0;
 
     /* Debug: RTT_SAVERT=<hex raw offset>[:frame] copies that offscreen RT
      * into a readback buffer this frame and writes rt_save.bmp (half-float
@@ -6593,7 +6622,7 @@ skip_dump_consider: ;
       } }
 
     /* Present */
-    if (s_present_this_frame)
+    if (s_rb.present)
         { HRESULT _ph = s_d3d.swap_chain->lpVtbl->Present(s_d3d.swap_chain, 1, 0); /* vsync */
           if (_ph == DXGI_ERROR_DEVICE_REMOVED || _ph == DXGI_ERROR_DEVICE_RESET) dred_report("Present"); }   /* skipped for an offscreen-only batch */
 
@@ -6616,10 +6645,98 @@ skip_dump_consider: ;
                      g_rsx_title_base,
                      s_tframes * 1000.0 / (double)(tnow - s_tt0),
                      s_dbg_last_draws, s_d3d.width, s_d3d.height);
-            SetWindowTextA(s_d3d.hwnd, tb);
+            /* Posted, not SetWindowText: this runs on the render thread, and
+             * SetWindowText on another thread's window waits for that thread
+             * to pump. The window thread applies it in pump_messages. */
+            AcquireSRWLockExclusive(&s_title_lock);
+            memcpy(s_title_pending, tb, sizeof tb);
+            s_title_dirty = 1;
+            ReleaseSRWLockExclusive(&s_title_lock);
             s_tframes = 0;
             s_tt0 = tnow;
         }
+    }
+}
+
+/* ---------------------------------------------------------------------------
+ * Render thread (see s_rb). render_frame() is what every present path calls,
+ * on the thread that drains the FIFO.
+ * -------------------------------------------------------------------------*/
+static u8*    s_fp_arena_spare = NULL;
+static u8*    s_vtex_arena_spare = NULL;
+static u32    s_vtex_arena_spare_cap = 0;
+static HANDLE s_rt_work = NULL, s_rt_idle = NULL, s_rt_thread = NULL;
+static int    s_rt_async = -1;
+
+/* Wait for the render thread to finish its batch -- CPU work AND the GPU
+ * work it submitted, so both upload-stream halves are free again. While
+ * waiting, keep servicing messages SENT to this thread's windows: the
+ * render thread's SetWindowText (title FPS) and DXGI may send to the window
+ * this thread owns, and blocking here without dispatching them deadlocks. */
+static void render_wait_idle(void)
+{
+    if (!s_rt_idle) return;
+    for (;;) {
+        DWORD r = MsgWaitForMultipleObjects(1, &s_rt_idle, FALSE, INFINITE, QS_SENDMESSAGE);
+        if (r == WAIT_OBJECT_0) return;
+        MSG m; PeekMessageA(&m, NULL, 0, 0, PM_NOREMOVE | PM_QS_SENDMESSAGE);
+    }
+}
+
+static DWORD WINAPI render_thread_main(LPVOID p)
+{
+    (void)p;
+    for (;;) {
+        WaitForSingleObject(s_rt_work, INFINITE);
+        render_frame_impl();
+        wait_for_gpu();          /* this batch's upload halves are reusable */
+        SetEvent(s_rt_idle);
+    }
+    return 0;
+}
+
+static void render_frame(void)
+{
+    if (s_rt_async < 0) {
+        const char* e = getenv("RSX_RENDER_THREAD");
+        s_rt_async = (e && *e == '0') ? 0 : 1;
+        if (s_rt_async) {
+            s_rt_work = CreateEventA(NULL, FALSE, FALSE, NULL);
+            s_rt_idle = CreateEventA(NULL, TRUE, TRUE, NULL);
+            s_rt_thread = CreateThread(NULL, 4u << 20, render_thread_main, NULL, 0, NULL);
+            if (!s_rt_work || !s_rt_idle || !s_rt_thread) s_rt_async = 0;
+            else ps3_host_thread_name(s_rt_thread, "rsx_render");
+            fprintf(stderr, "[D3D12] render thread %s%c", s_rt_async ? "ON" : "OFF (RSX_RENDER_THREAD=0)", 10);
+        }
+    }
+    if (s_rt_async) render_wait_idle();   /* previous batch done, both halves free */
+
+    /* Freeze the recording batch for the renderer... */
+    s_rb.draws      = s_d3d.draws;
+    s_rb.count      = s_d3d.draw_count;   /* render_frame_impl clamps to MAX_DRAWS */
+    s_rb.parity     = s_d3d.vp_parity;
+    s_rb.fp_arena   = s_fp_arena;
+    s_rb.vtex_arena = s_vtex_arena;
+    s_rb.present    = s_present_this_frame;
+
+    /* ...and point recording at the other buffers. */
+    s_d3d.draws = (s_d3d.draws == s_draw_bufs[0]) ? s_draw_bufs[1] : s_draw_bufs[0];
+    s_d3d.draw_count = 0;
+    s_d3d.vb_offset = 0;
+    s_d3d.vp_vb_offset = 0;
+    s_d3d.vp_parity ^= 1;
+    { u8* t = s_fp_arena; s_fp_arena = s_fp_arena_spare; s_fp_arena_spare = t; }
+    s_fp_arena_used = 0; s_fp_nsnap = 0;
+    { u8* t = s_vtex_arena; u32 c = s_vtex_arena_cap;
+      s_vtex_arena = s_vtex_arena_spare; s_vtex_arena_cap = s_vtex_arena_spare_cap;
+      s_vtex_arena_spare = t; s_vtex_arena_spare_cap = c; }
+    s_vtex_arena_used = 0; s_vtex_nsnap = 0;
+
+    if (s_rt_async) {
+        ResetEvent(s_rt_idle);
+        SetEvent(s_rt_work);
+    } else {
+        render_frame_impl();
     }
 }
 
@@ -8200,6 +8317,7 @@ static rsx_backend s_d3d12_backend = {0};
 int rsx_d3d12_backend_init(u32 width, u32 height, const char* title)
 {
     memset(&s_d3d, 0, sizeof(s_d3d));
+    s_d3d.draws = s_draw_bufs[0];
     s_d3d.width = width;
     s_d3d.height = height;
     s_d3d.clear_color[0] = 0.0f;
@@ -8269,6 +8387,7 @@ void rsx_d3d12_backend_shutdown(void)
 {
     if (!s_d3d.initialized) return;
 
+    render_wait_idle();
     wait_for_gpu();
 
     /* Release D3D12 resources */
@@ -8305,6 +8424,13 @@ void rsx_d3d12_backend_shutdown(void)
 int rsx_d3d12_backend_pump_messages(void)
 {
     MSG msg;
+    if (s_title_dirty && s_d3d.hwnd) {
+        char tb[256];
+        AcquireSRWLockExclusive(&s_title_lock);
+        memcpy(tb, s_title_pending, sizeof tb); s_title_dirty = 0;
+        ReleaseSRWLockExclusive(&s_title_lock);
+        SetWindowTextA(s_d3d.hwnd, tb);
+    }
     while (PeekMessageA(&msg, NULL, 0, 0, PM_REMOVE)) {
         if (msg.message == WM_QUIT) return -1;
         TranslateMessage(&msg);
