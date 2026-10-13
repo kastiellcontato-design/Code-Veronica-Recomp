@@ -1,0 +1,18 @@
+﻿ABRIR CODE VERONICA
+
+De dois cliques em "Abrir Code Veronica" (atalho), "executar-code-veronica.cmd"
+ou diretamente em MyGameRecomp.exe dentro da pasta de compilacao.
+Nao e necessario abrir terminal nem digitar comandos.
+O iniciador configura a pasta do jogo e abre o executavel atual.
+Feche a janela do jogo para encerrar. O terminal permanece aberto para mostrar erros.
+O log fica em run-log-current.txt, nesta pasta.
+
+CONTROLES PELO TECLADO (quando nao houver controle XInput conectado)
+Setas = direcao; X = confirmar (Cruz); Z = Circulo; A = Quadrado; S = Triangulo.
+I = Start; R = Select. Enter e Tab continuam como atalhos para Start e Select.
+
+O executavel procura automaticamente EBOOT.elf em D:\ps3recomp\JOGO\NPEB00553.
+
+ESTADO ATUAL
+A recompilacao ainda e experimental: a primeira imagem do video foi confirmada e o video chega ao menu. A reproducao ainda engasga. O ultimo log mostra o renderizador perto de 30 FPS, mas o codigo do jogo/SPU ocupa quase todo o tempo de CPU, e a fila de quadros fica cheia; isso ainda precisa ser otimizado.
+O iniciador facilita abrir o programa; nao representa uma versao jogavel concluida.
