@@ -2667,14 +2667,15 @@ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, in
         /* b1 layout as vp_record_cb writes it: texaddr[4], alpha test, then
          * the program's inline constants re-read from guest ucode per draw. */
         "cbuffer RsxTexAddr : register(b1) { float4 rsx_texaddr[4]; float4 rsx_alpha_k; float4 fp_k[128]; };\n"
-        "float rsx_addr1(float c, float m) {\n"
+        "float rsx_addr1(float c, float m, float n) {\n"
+        "    float e = n > 0.0 ? 0.5 / n : 0.0;\n"
         "    if (m == 1.0) return frac(c);\n"
         "    if (m == 2.0) { float t = frac(c * 0.5) * 2.0; return t > 1.0 ? 2.0 - t : t; }\n"
-        "    if (m == 6.0 || m == 8.0) return saturate(abs(c));\n"
-        "    if (m == 3.0 || m == 4.0 || m == 5.0 || m == 7.0) return saturate(c);\n"
+        "    if (m == 6.0 || m == 8.0) return clamp(abs(c), e, 1.0 - e);\n"
+        "    if (m == 3.0 || m == 4.0 || m == 5.0 || m == 7.0) return clamp(c, e, 1.0 - e);\n"
         "    return c;\n"
         "}\n"
-        "#define RSX_ADDR(u, c) float2(rsx_addr1((c).x, rsx_texaddr[u].z), rsx_addr1((c).y, rsx_texaddr[u].w))\n"
+        "#define RSX_ADDR(u, c) float2(rsx_addr1((c).x, rsx_texaddr[u].z, rsx_texaddr[u].x), rsx_addr1((c).y, rsx_texaddr[u].w, rsx_texaddr[u].y))\n"
         /* TEXTURE_ADDRESS gamma bits: the unit's channels are sRGB and the
          * hardware linearises them on fetch (RPCS3 _process_texel). */
         "float4 rsx_texgamma(uint u, float4 c) {\n"
@@ -2732,18 +2733,32 @@ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, in
     /* A program that already declares b1 keeps pass-through coordinates. */
     if (strstr(hlsl + k_pre, "register(b1)")) memmove(hlsl, hlsl + k_pre, strlen(hlsl + k_pre) + 1);
     else memcpy(hlsl, k_addr_prelude, k_pre);
-    /* sRGB colour output (cull bit 0x200, SET_SHADER_PACKER): encode the
-     * single export the way RSX does on write. */
+    /* sRGB colour output (cull bit 0x200, SET_SHADER_PACKER): encode every
+     * export the way RSX does on write. Programs that write H-register
+     * outputs come out in the PSOutput form; Code Veronica's film-grain pass
+     * is one, and without the encode it left the scene in linear light
+     * (mean 5.4 -> 0.4) and the LUT that follows turned it into a negative. */
+#define RSX_SRGB_FN "float3 rsx_srgb(float3 c) { c = saturate(c); return c <= 0.0031308 ? c * 12.92 : 1.055 * pow(c, 1.0 / 2.4) - 0.055; } "
     if ((cull & 0x200u) && strstr(hlsl, "float4 main(PSInput input) : SV_TARGET")) {
         hlsl_replace_all(hlsl, sizeof hlsl, "float4 main(PSInput input) : SV_TARGET",
-            "float3 rsx_srgb(float3 c) { c = saturate(c); return c <= 0.0031308 ? c * 12.92 : 1.055 * pow(c, 1.0 / 2.4) - 0.055; } float4 main(PSInput input) : SV_TARGET");
+            RSX_SRGB_FN "float4 main(PSInput input) : SV_TARGET");
         hlsl_replace_all(hlsl, sizeof hlsl, "return (_o == _o) ? _o : (float4)0;",
             "_o = (_o == _o) ? _o : (float4)0; _o.rgb = rsx_srgb(_o.rgb); return _o;");
+    } else if ((cull & 0x200u) && strstr(hlsl, "PSOutput main(PSInput input)")) {
+        char enc[256] = "";
+        for (int t = 0; t < 4; t++) {
+            char decl[32], line[64];
+            snprintf(decl, sizeof decl, "float4 t%d : SV_TARGET%d", t, t);
+            if (!strstr(hlsl, decl)) continue;
+            snprintf(line, sizeof line, "_out.t%d.rgb = rsx_srgb(_out.t%d.rgb); ", t, t);
+            strncat(enc, line, sizeof enc - strlen(enc) - 1);
+        }
+        strncat(enc, "return _out;", sizeof enc - strlen(enc) - 1);
+        hlsl_replace_all(hlsl, sizeof hlsl, "PSOutput main(PSInput input)",
+            RSX_SRGB_FN "PSOutput main(PSInput input)");
+        hlsl_replace_all(hlsl, sizeof hlsl, "return _out;", enc);
     }
-    { static int dumped = 0;   /* the first sRGB pipeline, as compiled */
-      if ((cull & 0x200u) && !dumped) { dumped = 1;
-          FILE* f = fopen("srgb_pso.hlsl", "w");
-          if (f) { fputs(hlsl, f); fclose(f); } } }
+#undef RSX_SRGB_FN
     if (getenv("CV_VIDEO_CAPTURE")) { char pn[100];snprintf(pn,sizeof pn,"ps_%08X_%08X.hlsl",fp_addr,uhash);FILE* f=fopen(pn,"w");if(f){fprintf(f,"/* vs_idx=%d exports32=%d */\n%s",vs_idx,exp32,hlsl);fclose(f);} }
     /* Explicit diagnostic only: isolate interpolation and RT sampling. */
     if (vs_idx == 3 && getenv("CV_COMPOSITE_PROBE")) {
@@ -3791,11 +3806,15 @@ static void vp_record_cb(u32 slot, int vs_idx, const D3D12DrawRecord* dr)
         float* ts = (float*)((char*)s_d3d.vp_fpcb_mapped
             + ((u64)s_d3d.vp_parity * MAX_DRAWS + slot) * VP_FPCB_STRIDE);
         for (int _u = 0; _u < 4; _u++) {
-            float sx = 1.0f, sy = 1.0f;
-            if (dr && dr->tex[_u].set && (dr->tex[_u].fmt & 0x40) &&
-                dr->tex[_u].w && dr->tex[_u].h) {
-                sx = 1.0f / (float)dr->tex[_u].w;
-                sy = 1.0f / (float)dr->tex[_u].h;
+            /* .xy: texel counts, so RSX_ADDR's clamp modes stop at the edge
+             * texel centres. The static samplers wrap, and a linear fetch at
+             * exactly 0.0 blended the first texel with the last: Code
+             * Veronica's 1024x1 colour LUT turned every black pixel into
+             * (LUT[0] + LUT[1023]) / 2, the bright speckle over the cell. */
+            float sx = 0.0f, sy = 0.0f;
+            if (dr && dr->tex[_u].set) {
+                sx = (float)dr->tex[_u].w;
+                sy = (float)dr->tex[_u].h;
             }
             ts[_u*4+0] = sx; ts[_u*4+1] = sy; ts[_u*4+2] = 0.0f; ts[_u*4+3] = 0.0f;
             /* .zw: the guest's S/T address modes, applied in the shader by
