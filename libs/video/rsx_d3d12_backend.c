@@ -4930,6 +4930,22 @@ static void render_frame(void)
                 (unsigned long long)s_req_verts, (unsigned long long)s_req_draws,
                 MAX_VERTICES, (unsigned long long)s_drop_draws, 10); }
       s_req_verts = 0; s_req_draws = 0; s_drop_draws = 0; }
+    /* Always on, silent while the frame rate is healthy: one line per 2 s
+     * window in which fewer than 10 frames reached the screen, with how many
+     * flips the title asked for meanwhile. The slow intro after New Game comes
+     * and goes between runs, so the evidence has to be in every normal log. */
+    { static double w0 = 0.0; static unsigned frames = 0; static unsigned long long req0 = 0;
+      extern unsigned long long g_gcm_flip_requests;
+      double now = perf_now();
+      if (w0 == 0.0) { w0 = now; req0 = g_gcm_flip_requests; }
+      frames++;
+      if (now - w0 >= 2.0) {
+          if (frames < 10)
+              fprintf(stderr, "[SLOWFRAME] %.2f fps over %.1fs: %u presents, %llu flips requested%c",
+                      frames / (now - w0), now - w0, frames,
+                      g_gcm_flip_requests - req0, 10);
+          w0 = now; frames = 0; req0 = g_gcm_flip_requests;
+      } }
     if (perf_on()) {
         static double s_t_prev = 0.0; static int s_n = 0;
         double now = perf_now();

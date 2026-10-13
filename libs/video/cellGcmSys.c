@@ -2200,8 +2200,13 @@ u32 cellGcm_display_buffer_count(void)
     return n;
 }
 
+/* Every flip the title asks for; the backend's [SLOWFRAME] line compares it
+ * with the presents that actually happened. */
+unsigned long long g_gcm_flip_requests = 0;
+
 static s32 gcm_flip_request(u32 bufferId, int in_fifo)
 {
+    g_gcm_flip_requests++;
     /* GCM_FLIPCOUNT=1: every flip, with a timestamp. FLIP_DBG caps at 20 lines,
      * which answers "did it ever flip?" and not "is it still flipping, and how
      * fast?" -- the question that matters when a title stops appearing on
