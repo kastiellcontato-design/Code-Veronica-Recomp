@@ -366,6 +366,8 @@ typedef struct rsx_state {
     u32 vp_ucode_write;       /* byte write cursor (from SET_TRANSFORM_PROGRAM_LOAD) */
     u32 vp_ucode_bytes;       /* highest byte written + 1 */
     int vp_dirty;             /* program changed since last translate */
+    u32 vp_ucode_gen;         /* bumped only when a ucode byte actually changes, so
+                               * the backend can skip re-hashing an unchanged store */
 
     /* Dirty flags for incremental state updates */
     int surface_dirty;

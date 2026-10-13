@@ -614,12 +614,13 @@ int rsx_process_method(rsx_state* state, u32 method, u32 data)
         u32 w = state->vp_ucode_write;
         if (w + 4 <= sizeof(state->vp_ucode)) {
             /* data is host-endian already; store as little-endian bytes. */
-            state->vp_ucode[w+0] = (u8)(data);
-            state->vp_ucode[w+1] = (u8)(data >> 8);
-            state->vp_ucode[w+2] = (u8)(data >> 16);
-            state->vp_ucode[w+3] = (u8)(data >> 24);
+            u8 b[4] = { (u8)data, (u8)(data >> 8), (u8)(data >> 16), (u8)(data >> 24) };
+            if (memcmp(&state->vp_ucode[w], b, 4) != 0) {
+                memcpy(&state->vp_ucode[w], b, 4);
+                state->vp_ucode_gen++;
+            }
             state->vp_ucode_write = w + 4;
-            if (w + 4 > state->vp_ucode_bytes) state->vp_ucode_bytes = w + 4;
+            if (w + 4 > state->vp_ucode_bytes) { state->vp_ucode_bytes = w + 4; state->vp_ucode_gen++; }
             state->vp_dirty = 1;
         }
         return 0;

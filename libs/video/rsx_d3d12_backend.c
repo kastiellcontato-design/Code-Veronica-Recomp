@@ -2220,6 +2220,7 @@ static u8*  s_fp_arena = NULL;
 static u32  s_fp_arena_used = 0;
 #define FP_ARENA_CAP  (8u << 20)
 #define FP_ARENA_PAD  4096u      /* decompiler may scan up to 4096 bytes */
+#define FP_SNAP_MAGIC 0x50534E46u   /* "FNSP": header before each snapshot */
 typedef struct { u32 addr, len, snap; } FPSnap;
 static FPSnap s_fp_snaps[64];
 static u32 s_fp_nsnap = 0;
@@ -2245,15 +2246,20 @@ static void fp_snapshot(D3D12DrawRecord* dr)
         s_fp_arena = (u8*)calloc(1, FP_ARENA_CAP + FP_ARENA_PAD);
         if (!s_fp_arena) return;
     }
-    if (s_fp_arena_used + len > FP_ARENA_CAP) {
+    /* [16-byte header: magic, code hash, size][ucode][16 zero bytes]. The
+     * header lets vp_get_fp_pso take the hash computed once here instead of
+     * re-hashing the program for every pipeline lookup (2x per draw). */
+    if (s_fp_arena_used + 16 + len + 16 > FP_ARENA_CAP) {
         static int w = 0;
         if (w++ < 4) fprintf(stderr, "[D3D12] WARNING: FP snapshot arena full%c", 10);
         return;
     }
-    u32 at = s_fp_arena_used;
+    u32 at = s_fp_arena_used + 16;
     memcpy(s_fp_arena + at, src, len);
-    memset(s_fp_arena + at + len, 0, (len < 16) ? 16 : 16);   /* stop marker room */
-    s_fp_arena_used += (len + 15u) & ~15u;
+    memset(s_fp_arena + at + len, 0, 16);   /* stop marker room */
+    { u32 hdr[4] = { FP_SNAP_MAGIC, rsx_fp_code_hash(s_fp_arena + at, 4096), len, 0 };
+      memcpy(s_fp_arena + at - 16, hdr, 16); }
+    s_fp_arena_used = (at + len + 16 + 15u) & ~15u;
     dr->fp_snap = at + 1;
     /* Newest first; the table is a small most-recent window. */
     u32 n = s_fp_nsnap < 64 ? s_fp_nsnap : 63;
@@ -2390,12 +2396,22 @@ static int vp_get_vs(const rsx_state* st)
     if (vstart >= st->vp_ucode_bytes) vstart = 0;
     const u8* vuc = st->vp_ucode + vstart;
     u32 vlen = st->vp_ucode_bytes - vstart;
+    /* Same store generation, start and texture units as the last lookup: same
+     * program. Hashing up to 16 KB of ucode on every draw was a measurable
+     * slice of Code Veronica's 2300-draw frames. */
+    static const rsx_state* l_st; static u32 l_gen, l_start, l_mask; static int l_idx = -1;
+    if (l_idx >= 0 && l_idx < s_d3d.vp_vs_n && l_st == st && l_gen == st->vp_ucode_gen &&
+        l_start == vstart && l_mask == vtex_mask)
+        return l_idx;
     /* The bound vertex-texture units change the compiled program (they
      * declare textures), so they are part of its identity. */
     u32 hash = vp_hash_ucode(vuc, vlen) ^ (vtex_mask * 0x9E3779B1u);
     if (!hash) hash = 1u;
     for (int i = 0; i < s_d3d.vp_vs_n; i++)
-        if (s_d3d.vp_vs[i].hash == hash) return i;
+        if (s_d3d.vp_vs[i].hash == hash) {
+            l_st = st; l_gen = st->vp_ucode_gen; l_start = vstart; l_mask = vtex_mask; l_idx = i;
+            return i;
+        }
 
     static char hlsl[262144];
     int ni = rsx_vp_decompile_ex(vuc, vlen, vtex_mask, hlsl, sizeof hlsl);
@@ -2489,6 +2505,7 @@ static int vp_get_vs(const rsx_state* st)
         compile_vp();
         s_d3d.current_rsx_state = prev;
     }
+    l_st = st; l_gen = st->vp_ucode_gen; l_start = vstart; l_mask = vtex_mask; l_idx = slot;
     return slot;
 }
 
@@ -2651,7 +2668,12 @@ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, in
      * constant buffer the compiled shader is invariant under constant changes,
      * so hashing them made the pipeline key move every draw. */
     u32 uhash;
-    {
+    u32 snap_hdr[4] = { 0 };
+    if (snap) memcpy(snap_hdr, snap - 16, 16);
+    if (snap && snap_hdr[0] == FP_SNAP_MAGIC &&
+        !(getenv("FP_CONSTBUF") && getenv("FP_CONSTBUF")[0] == '0')) {
+        uhash = snap_hdr[1];            /* hashed once, when the draw was recorded */
+    } else {
         u32 usz = rsx_fp_program_size(ucode, 4096);
         if (usz == 0) usz = 64;
         s_perf_pso_hashbytes += (int)usz;
