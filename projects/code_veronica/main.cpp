@@ -212,7 +212,9 @@ static DWORD WINAPI frame_clock(LPVOID)
             cellFiberPpuContextReport();
             diag_at += 10000;
         }
-        Sleep(4);
+        /* 1 ms, not 4: the guest's main thread polls a label this drain
+         * writes, and every ms slept here after a present is a ms it spins. */
+        Sleep(1);
         ULONGLONG now = GetTickCount64();
 
         int fired = 0;

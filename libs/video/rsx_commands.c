@@ -20,6 +20,7 @@
 #include <stdlib.h>   /* getenv -- an implicit decl returns int, truncating the pointer */
 #include <string.h>
 #include "../../runtime/memory/vm.h"    /* VM_HLE_INJECT_BASE */
+#include "rsx_getenv_cache.h"   /* getenv() per call site, cached: per-method path */
 
 /* ---------------------------------------------------------------------------
  * Global backend

@@ -31,6 +31,7 @@ static u32 s_gcm_context_ea = 0;
 #else
 #include <time.h>
 #endif
+#include "rsx_getenv_cache.h"   /* getenv() per call site, cached: FIFO hot path */
 
 /* ---------------------------------------------------------------------------
  * Timestamp helpers (same pattern as sys_timer)
@@ -1480,11 +1481,18 @@ void cellGcm_ref_on_poll(void)
         SetEvent(s_gcm_kick_ev);       /* dry: ask the present thread to walk */
 }
 
+/* Seconds spent draining the FIFO (the backend's [PERF] line reads and resets
+ * it). Includes any catch-up present made from inside the drain. */
+double g_gcm_fifo_secs = 0.0;
 void cellGcm_rsx_process_fifo(void)
 {
+    LARGE_INTEGER f, t0, t1;
+    QueryPerformanceFrequency(&f); QueryPerformanceCounter(&t0);
     AcquireSRWLockExclusive(&s_gcm_fifo_lock);
     gcm_rsx_process_fifo_unlocked();
     ReleaseSRWLockExclusive(&s_gcm_fifo_lock);
+    QueryPerformanceCounter(&t1);
+    g_gcm_fifo_secs += (double)(t1.QuadPart - t0.QuadPart) / (double)f.QuadPart;
 }
 
 static void gcm_rsx_process_fifo_unlocked(void)

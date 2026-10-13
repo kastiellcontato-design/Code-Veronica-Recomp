@@ -41,6 +41,8 @@
 /* We need these GUIDs — define them here to avoid uuid.lib dependency */
 #include <initguid.h>
 
+#include "rsx_getenv_cache.h"   /* getenv() per call site, cached: per-draw paths */
+
 /* Link libraries */
 #pragma comment(lib, "d3d12.lib")
 #pragma comment(lib, "dxgi.lib")
@@ -6155,6 +6157,10 @@ static void render_frame(void)
                     s_perf_pso, 100.0 * s_perf_pso / fr,
                     s_perf_pso_calls, s_perf_pso_miss, s_perf_pso_hashbytes / 1024,
                     fr - s_perf_rf, 100.0 * (fr - s_perf_rf) / fr, 10);
+            { extern double g_gcm_fifo_secs;
+              fprintf(stderr, "[PERF-FIFO] drain %.2fs (%.0f%% of wall, includes catch-up presents)%c",
+                      g_gcm_fifo_secs, 100.0 * g_gcm_fifo_secs / fr, 10);
+              g_gcm_fifo_secs = 0.0; }
             perf_thread_report(fr);
             { extern void spu_coh_stats_report(void*); spu_coh_stats_report(stderr); }
             s_perf_frame = 0.0; s_perf_tex = 0.0; s_perf_vtx = 0.0; s_perf_rf = 0.0;
