@@ -645,14 +645,16 @@ static int init_d3d12(u32 width, u32 height)
 {
     HRESULT hr;
 
-    /* Enable debug layer in debug builds */
-    /* Debug layer: on in debug builds, or in any build when D3D12_DBG is set
-     * (so a Release run can capture exact PSO/validation errors). */
+    /* Debug layer: on in _DEBUG (CRT debug) builds, or in any build when
+     * D3D12_DBG is set (so a Release run can capture exact PSO/validation
+     * errors). Keyed on _DEBUG, not NDEBUG: the optimized build replaces
+     * CMAKE_C_FLAGS_RELEASE without /DNDEBUG, which left the layer validating
+     * every call of every "release" run (~14% of the render thread). */
     if (
-#ifdef NDEBUG
-        getenv("D3D12_DBG")
-#else
+#ifdef _DEBUG
         1
+#else
+        getenv("D3D12_DBG")
 #endif
     ) {
         ID3D12Debug* debug_controller = NULL;
@@ -2276,6 +2278,26 @@ typedef struct { u32 ea, len, data_off, hash; } VTexSnap;
 static VTexSnap s_vtex_snap[16];
 static u32 s_vtex_nsnap = 0;
 
+/* Guest-memory write tracking (vm_base is reserved MEM_WRITE_WATCH by the
+ * host). 0 = no page of [ea, ea+len) was written since the last reset, so a
+ * snapshot of it is still exact; 1 = maybe written (or tracking unavailable). */
+static int s_ww_ok = -1;
+static u64 s_vtex_cmp_bytes, s_vtex_copy_bytes, s_vtex_skip;
+static int vm_range_written(u32 ea, u32 len)
+{
+    extern uint8_t* vm_base;
+    if (s_ww_ok == 0 || !len) return 1;
+    PVOID a[1]; ULONG_PTR n = 1; ULONG g;
+    if (GetWriteWatch(0, vm_base + ea, len, a, &n, &g) != 0) { s_ww_ok = 0; return 1; }
+    s_ww_ok = 1;
+    return n != 0;
+}
+static void vm_range_watch_reset(u32 ea, u32 len)
+{
+    extern uint8_t* vm_base;
+    if (s_ww_ok == 1 && len) ResetWriteWatch(vm_base + ea, len);
+}
+
 static void vtex_record(D3D12DrawRecord* dr, const rsx_state* st)
 {
     extern uint8_t* vm_base;
@@ -2295,14 +2317,19 @@ static void vtex_record(D3D12DrawRecord* dr, const rsx_state* st)
         u32 ea = cellGcmResolveLocated((t->format & 3) != 2, t->offset);
         if (ea == 0xFFFFFFFFu) continue;
         u32 len = row * h;
+        u32 span = (h - 1) * pitch + row;   /* guest bytes the texels occupy */
         const u8* src = vm_base + ea;
-        /* Same bytes as the latest copy of this address? Reuse it. */
+        /* Same bytes as the latest copy of this address? Reuse it. Pages that
+         * nobody wrote since that copy cannot differ, so skip the compare. */
         int reuse = -1;
         for (int i = (int)s_vtex_nsnap - 1; i >= 0 && reuse == -1; i--) {
             const VTexSnap* q = &s_vtex_snap[i];
             if (q->ea != ea || q->len != len) continue;
+            if (!vm_range_written(ea, span)) { reuse = i; s_vtex_skip++; break; }
+            vm_range_watch_reset(ea, span);   /* before reading: later writes stay visible */
             const u8* a = s_vtex_arena + q->data_off;
             int same = 1;
+            s_vtex_cmp_bytes += len;
             if (pitch == row) same = !memcmp(a, src, len);
             else for (u32 y = 0; y < h && same; y++)
                 same = !memcmp(a + (size_t)y * row, src + (size_t)y * pitch, row);
@@ -2323,6 +2350,8 @@ static void vtex_record(D3D12DrawRecord* dr, const rsx_state* st)
             s_vtex_arena = p; s_vtex_arena_cap = cap;
         }
         u8* dst = s_vtex_arena + s_vtex_arena_used;
+        if (reuse == -1) vm_range_watch_reset(ea, span);   /* first copy of this range */
+        s_vtex_copy_bytes += len;
         if (pitch == row) memcpy(dst, src, len);
         else for (u32 y = 0; y < h; y++) memcpy(dst + (size_t)y * row, src + (size_t)y * pitch, row);
         u64 hh = 1469598103934665603ull;   /* FNV-1a over 8-byte words */
@@ -6160,7 +6189,12 @@ static void render_frame(void)
             { extern double g_gcm_fifo_secs;
               fprintf(stderr, "[PERF-FIFO] drain %.2fs (%.0f%% of wall, includes catch-up presents)%c",
                       g_gcm_fifo_secs, 100.0 * g_gcm_fifo_secs / fr, 10);
-              g_gcm_fifo_secs = 0.0; }
+              g_gcm_fifo_secs = 0.0;
+              fprintf(stderr, "[PERF-VTEX] write-watch %s | unchanged (no compare) %llu | compared %.1f MB | copied %.1f MB%c",
+                      s_ww_ok == 1 ? "on" : s_ww_ok == 0 ? "UNAVAILABLE" : "unused",
+                      (unsigned long long)s_vtex_skip, s_vtex_cmp_bytes / 1048576.0,
+                      s_vtex_copy_bytes / 1048576.0, 10);
+              s_vtex_skip = 0; s_vtex_cmp_bytes = 0; s_vtex_copy_bytes = 0; }
             perf_thread_report(fr);
             { extern void spu_coh_stats_report(void*); spu_coh_stats_report(stderr); }
             s_perf_frame = 0.0; s_perf_tex = 0.0; s_perf_vtx = 0.0; s_perf_rf = 0.0;

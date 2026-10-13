@@ -18,8 +18,9 @@ set "CV_AUTOCAP=1300"
 rem Diagnostico: tempo por etapa a cada 20 quadros ([PERF] no log).
 set "PERF=1"
 rem Diagnostico: amostra a thread principal a cada 2 ms ([samp] no log).
-set "PS3_SAMPLE=2"
-set "PS3_SAMPLE_MAIN=1"
+rem set "PS3_SAMPLE=2"
+rem set "PS3_SAMPLE_MAIN=1"
+rem set "PS3_SAMPLE_THREAD=frame_clock"
 rem Diagnostico: onde o jogo chama usleep, a cada 10 s.
 set "PS3_POLLTOP=10"
 set "GAME_EXE=%~dp0build-release\bin\MyGameRecomp.exe"

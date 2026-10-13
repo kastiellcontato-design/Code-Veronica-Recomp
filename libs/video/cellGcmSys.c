@@ -2008,11 +2008,23 @@ static void gcm_rsx_process_fifo_unlocked(void)
           }
       } else burned = 0; }
 
-    { static u32 last = 0xFFFFFFFFu; static int stuck = 0;
-      if (s_fifo_getoff == last && s_fifo_getoff != put) {
-          if (++stuck >= 8) { gcm_fifo_dump_around(s_fifo_getoff);
-                             gcm_fifo_resync_why("stuck-get", &s_fifo_getoff, put); stuck = 0; }
-      } else { stuck = 0; last = s_fifo_getoff; } }
+    /* Stuck = `get` has not moved for GCM_STUCK_MS (default 1000) of wall
+     * time, not for N passes: the pass rate depends on the host loop's sleep,
+     * and cutting the frame clock's sleep from 4 ms to 1 ms made 8 passes
+     * ~10 ms -- Code Veronica's legitimate park was skipped, the label after
+     * it never written, and the game hung polling it. A park still inside its
+     * GCM_PARK_GRACE_MS is handled by the park logic, not here. */
+    { static u32 last = 0xFFFFFFFFu; static unsigned long long since = 0;
+      static long stuck_ms = -1;
+      if (stuck_ms < 0) { const char* e = getenv("GCM_STUCK_MS"); stuck_ms = e ? atol(e) : 1000; }
+      unsigned long long now = ps3_ms_now();
+      if (s_fifo_getoff == last && s_fifo_getoff != put && strcmp(why, "parked-waiting") != 0) {
+          if (now - since >= (unsigned long long)stuck_ms) {
+              gcm_fifo_dump_around(s_fifo_getoff);
+              gcm_fifo_resync_why("stuck-get", &s_fifo_getoff, put);
+              since = now;
+          }
+      } else { last = s_fifo_getoff; since = now; } }
 
     /* Publish progress: get chases put; ref advances at most ONE queued fence
      * per tick (gcm_ref_push/gcm_ref_publish_one above) so every SET_REFERENCE

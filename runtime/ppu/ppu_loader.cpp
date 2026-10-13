@@ -551,6 +551,18 @@ static void samp_rva_hit(uintptr_t rip)
     }
 }
 
+/* How many words above `sp` are committed stack. Reading a fixed 4 KB ran off
+ * the top of a shallow thread's stack (the frame clock during D3D12 init) and
+ * killed the process: __try does not catch it in this C++ TU. */
+static int samp_stack_words(uintptr_t sp, int want)
+{
+    MEMORY_BASIC_INFORMATION mbi;
+    if (!VirtualQuery((LPCVOID)sp, &mbi, sizeof mbi) || mbi.State != MEM_COMMIT) return 0;
+    uintptr_t end = (uintptr_t)mbi.BaseAddress + mbi.RegionSize;
+    uintptr_t n = (end - sp) / sizeof(uintptr_t);
+    return n < (uintptr_t)want ? (int)n : want;
+}
+
 /* PS3_SAMPLE_MAIN: when RIP is outside the exe (ntdll/kernelbase -- a wait,
  * yield or sleep), the first exe return address on the stack: which runtime
  * call put the thread there. */
@@ -567,7 +579,8 @@ static void samp_caller_hit(const CONTEXT* c)
     }
     if (c->Rip >= base && c->Rip < end) return;
     const uintptr_t* sp = (const uintptr_t*)c->Rsp;
-    for (int i = 0; i < 256; i++) {
+    const int lim = samp_stack_words(c->Rsp, 256);
+    for (int i = 0; i < lim; i++) {
         uintptr_t v;
         __try { v = sp[i]; } __except (1) { return; }
         if (v < base || v >= end) continue;
@@ -633,7 +646,7 @@ static void samp_report(void)
                 s_t2_id[k], (unsigned long long)s_t2_guest[k],
                 (unsigned long long)s_t2_ntdll[k], (unsigned long long)s_t2_other[k]);
     }
-    for (int rank = 0; rank < 25; rank++) {
+    for (int rank = 0; rank < 150; rank++) {
         uint64_t best = 0; int bi = -1;
         for (int k = 0; k < SAMP_RVAS; k++)
             if (s_rva_ct[k] > best) { best = s_rva_ct[k]; bi = k; }
@@ -662,7 +675,8 @@ static uint32_t samp_stack_guest(HANDLE h, const CONTEXT* c)
 {
     (void)h;
     const uintptr_t* sp = (const uintptr_t*)c->Rsp;
-    for (int i = 0; i < 512; i++) {          /* 4 KB of stack */
+    const int lim = samp_stack_words(c->Rsp, 512);   /* 4 KB, or to the stack top */
+    for (int i = 0; i < lim; i++) {
         uintptr_t v;
         __try { v = sp[i]; } __except (1) { return 0; }
         uint32_t g = samp_lookup(v);
@@ -684,7 +698,36 @@ static DWORD WINAPI samp_thread(LPVOID p)
     unsigned ei = 0;
     unsigned long long next_report = t0 + early[0];
     samp_build_map();
+    /* PS3_SAMPLE_THREAD=<name prefix>: sample that host thread instead of the
+     * boot thread (names from ps3_host_thread_name, e.g. "frame_clock"). The
+     * thread may not exist yet, so look it up until found. */
+    const char* want_name = getenv("PS3_SAMPLE_THREAD");
+    int found_named = 0;
     for (;;) {
+        if (want_name && !found_named) {
+            typedef HRESULT (WINAPI *get_desc_fn)(HANDLE, PWSTR*);
+            static get_desc_fn gd = NULL;
+            if (!gd) gd = (get_desc_fn)(void*)GetProcAddress(GetModuleHandleA("kernel32.dll"), "GetThreadDescription");
+            HANDLE ss = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+            THREADENTRY32 t2; t2.dwSize = sizeof t2;
+            if (gd && ss != INVALID_HANDLE_VALUE && Thread32First(ss, &t2)) do {
+                if (t2.th32OwnerProcessID != pid) continue;
+                HANDLE th = OpenThread(THREAD_QUERY_LIMITED_INFORMATION, FALSE, t2.th32ThreadID);
+                if (!th) continue;
+                PWSTR w = NULL; char nm[64] = "";
+                if (SUCCEEDED(gd(th, &w)) && w) {
+                    int i = 0; for (; w[i] && i < 63; i++) nm[i] = (char)w[i]; nm[i] = 0; LocalFree(w);
+                }
+                CloseHandle(th);
+                if (nm[0] && !strncmp(nm, want_name, strlen(want_name))) {
+                    s_samp_boot_tid = t2.th32ThreadID; s_samp_main = 1; found_named = 1;
+                    fprintf(stderr, "[samp] sampling thread \"%s\" tid %lu\n", nm, (unsigned long)t2.th32ThreadID);
+                    break;
+                }
+            } while (Thread32Next(ss, &t2));
+            if (ss != INVALID_HANDLE_VALUE) CloseHandle(ss);
+            if (!found_named) { Sleep(200); continue; }
+        }
         /* PS3_SAMPLE_MAIN samples one known thread: skip the system-wide
          * snapshot, which alone held the rate to ~25 samples/s. */
         HANDLE snap = INVALID_HANDLE_VALUE;

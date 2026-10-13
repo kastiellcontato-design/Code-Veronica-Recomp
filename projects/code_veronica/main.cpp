@@ -316,7 +316,12 @@ static bool alloc_guest_vm(void)
 {
 #ifdef _WIN32
     AddVectoredExceptionHandler(1, vm_commit_veh);
-    vm_base = (uint8_t*)VirtualAlloc(NULL, VM_SIZE, MEM_RESERVE, PAGE_READWRITE);
+    /* MEM_WRITE_WATCH: the RSX backend asks GetWriteWatch whether a vertex
+     * texture was written since its last snapshot instead of comparing the
+     * whole thing (a 1 MB matrix texture, dozens of times a frame). */
+    vm_base = (uint8_t*)VirtualAlloc(NULL, VM_SIZE, MEM_RESERVE | MEM_WRITE_WATCH, PAGE_READWRITE);
+    if (!vm_base)   /* not every system grants write-watch on 4 GB; the backend falls back */
+        vm_base = (uint8_t*)VirtualAlloc(NULL, VM_SIZE, MEM_RESERVE, PAGE_READWRITE);
     ppu_vm_size = 0;              /* the whole space is backed; no OOB guard needed */
 #else
     /* No vectored exception handlers off Windows, so the arena is committed up
