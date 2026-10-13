@@ -1127,11 +1127,9 @@ int rsx_fp_extract_consts(const u8* ucode, u32 max_bytes, float* out, int max_ou
         u32 w2 = rsx_fp_read_word(ucode + off + 8);
         u32 w3 = rsx_fp_read_word(ucode + off + 12);
         off += 16;
-        int is_branch = (w2 & FP_BRANCH) != 0;
-        int has_k = !is_branch &&
-            ((((w1 & FP_REG_TYPE_MASK) >> FP_REG_TYPE_SHIFT) == FP_REG_TYPE_CONST) ||
-             (((w2 & FP_REG_TYPE_MASK) >> FP_REG_TYPE_SHIFT) == FP_REG_TYPE_CONST) ||
-             (((w3 & FP_REG_TYPE_MASK) >> FP_REG_TYPE_SHIFT) == FP_REG_TYPE_CONST));
+        /* Same rule as rsx_fp_decompile_internal, branches included: slot i
+         * here must be the slot the buffered decompiler names fp_constants[i]. */
+        int has_k = fp_instruction_has_constant(w1, w2, w3);
         if (has_k) {
             if (off + 16 <= max_bytes) {
                 for (int i = 0; i < 4; i++) {
@@ -1173,11 +1171,9 @@ u32 rsx_fp_code_hash(const u8* ucode, u32 max_bytes)
         u32 w3 = rsx_fp_read_word(ucode + off + 12);
         for (u32 i = 0; i < 16; i++) { h ^= ucode[off + i]; h *= 16777619u; }
         off += 16;
-        int is_branch = (w2 & FP_BRANCH) != 0;
-        int has_k = !is_branch &&
-            ((((w1 & FP_REG_TYPE_MASK) >> FP_REG_TYPE_SHIFT) == FP_REG_TYPE_CONST) ||
-             (((w2 & FP_REG_TYPE_MASK) >> FP_REG_TYPE_SHIFT) == FP_REG_TYPE_CONST) ||
-             (((w3 & FP_REG_TYPE_MASK) >> FP_REG_TYPE_SHIFT) == FP_REG_TYPE_CONST));
+        /* Same rule as rsx_fp_decompile_internal, branches included: slot i
+         * here must be the slot the buffered decompiler names fp_constants[i]. */
+        int has_k = fp_instruction_has_constant(w1, w2, w3);
         if (has_k) off += 16;            /* skip the constant, do not hash it */
         if (w0 & FP_END) break;
     }

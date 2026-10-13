@@ -1292,6 +1292,10 @@ static u32 gcm_spu_block_for_put(u32 put)
  *
  * Dropping DRAWS on a resync is survivable: a frame is lost. Dropping a FENCE
  * is not, it deadlocks the title. Sweep the skipped range first. */
+/* Jump-park the drain is waiting on, and since when (GCM_PARK_GRACE_MS). */
+static u32 s_park_off = 0xFFFFFFFFu;
+static unsigned long long s_park_since = 0;
+
 static void gcm_fifo_resync_why(const char* why, u32* getoff, u32 put)
 {
     static int n = 0;
@@ -1691,11 +1695,31 @@ static void gcm_rsx_process_fifo_unlocked(void)
                    * park standing -- it only patches a park when it reuses that
                    * block. Waiting for a patch that will not come freezes the
                    * FIFO for the rest of the run, so follow the write head. */
-                  if (put != s_fifo_getoff) { gcm_fifo_dump_around(s_fifo_getoff);
-                                              gcm_fifo_resync_why("jump-park", &s_fifo_getoff, put); }
+                  /* GCM_PARK_GRACE_MS: but a title may also leave the park
+                   * standing on purpose while it writes the next segment, and
+                   * patch it later (Code Veronica parks its second command
+                   * block at 0x198060). Skipping to put then drops that
+                   * segment's draws and fences and the guest waits forever.
+                   * Only treat a park as abandoned once it has stood that long. */
+                  static int grace = -1;
+                  if (grace < 0) { const char* e = getenv("GCM_PARK_GRACE_MS"); grace = e ? atoi(e) : 0; }
+                  if (put != s_fifo_getoff) {
+                      unsigned long long now = ps3_ms_now();
+                      if (s_park_off != s_fifo_getoff) { s_park_off = s_fifo_getoff; s_park_since = now; }
+                      if (now - s_park_since >= (unsigned long long)grace) {
+                          { static int n = 0; if (grace > 0 && n++ < 8)
+                              fprintf(stderr, "[cellGcmSys] park at 0x%08X stood %llu ms -- treating as abandoned%c",
+                                      s_fifo_getoff, (unsigned long long)(now - s_park_since), 10); }
+                          s_park_off = 0xFFFFFFFFu;
+                          gcm_fifo_dump_around(s_fifo_getoff);
+                          gcm_fifo_resync_why("jump-park", &s_fifo_getoff, put);
+                      } else {
+                          why = "parked-waiting";
+                      }
+                  }
                   break;
               }
-              s_fifo_getoff = tgt; }
+              s_fifo_getoff = tgt; s_park_off = 0xFFFFFFFFu; }
             continue;
         }
         if ((w & 3) == 2) {                    /* CALL: offset | 2 */

@@ -9,6 +9,10 @@ set "SPU_INTERP_UNLIFTED=1"
 set "CV_AV_CONTINUOUS_PTS=1"
 set "PS3_VERBOSE=0"
 set "SCREEN_AS_TEX=0"
+rem A projecao do jogo e valida mesmo com c0.x fora de (0,8); nao trocar.
+set "VP_NOFIXPROJ=1"
+rem O jogo deixa a FIFO "estacionada" em 0x198060 e a libera depois; nao pular.
+set "GCM_PARK_GRACE_MS=5000"
 set "GAME_EXE=%~dp0build-release\bin\MyGameRecomp.exe"
 set "GAME_ELF=%PS3_VFS_ROOT%\USRDIR\EBOOT.elf"
 set "GAME_LOG=%~dp0run-log-release.txt"
