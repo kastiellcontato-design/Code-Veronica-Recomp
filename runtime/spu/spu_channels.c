@@ -1583,6 +1583,16 @@ void spu_overlay_register_sig(const uint8_t sig[16], int image_id)
     }
 }
 
+/* Signature match with a bounded span: a plugin the title copies to the heap
+ * and streams to a fixed LS address, coexisting with the primary image. Its
+ * functions must be lifted at the LS addresses it runs at (rebase_spu_elf.py). */
+void spu_overlay_register_sig_region(const uint8_t sig[16], uint32_t span, int image_id)
+{
+    if (!span || span > SPU_LS_SIZE || s_ovl_src_count >= SPU_OVL_SRC_MAX) return;
+    spu_overlay_register_sig(sig, image_id);
+    s_ovl_src[s_ovl_src_count - 1].span = span;
+}
+
 /* Called from the MFC GET path after the copy: ls points at the JUST-COPIED
  * bytes. EA match first (exact, cheap), then content signature for sizeable
  * chunks (overlay bodies are >= 0x500 bytes). */
@@ -1641,6 +1651,13 @@ void spu_overlay_note_get(spu_context* ctx, uint32_t ea, const uint8_t* ls, uint
 {
     uint32_t lsa = (uint32_t)(ls - ctx->ls);
     spu_ovl_dump(ctx, ea, lsa, ls, size);
+    /* SPU_GET_WATCH=<hex lsa lo>: log the first GETs landing at or above that
+     * LS address -- where a runtime-loaded module comes from. */
+    { static int64_t s_gw = -2;
+      if (s_gw == -2) { const char* e = getenv("SPU_GET_WATCH"); s_gw = e ? (int64_t)strtoul(e, 0, 16) : -1; }
+      if (s_gw >= 0 && lsa >= (uint32_t)s_gw) { static volatile LONG n;
+          if (InterlockedIncrement(&n) <= 64)
+              fprintf(stderr, "[spu-get] img=%d ea=0x%08X -> LS 0x%05X size=0x%X\n", ctx->image_id, ea, lsa, size); } }
     for (unsigned slot = 0; slot < 4; ++slot) {
         if (!ctx->resident_code[slot].image_id) continue;
         uint32_t base = ctx->resident_code[slot].lsa;
@@ -2342,6 +2359,36 @@ void spu_indirect_branch(spu_context* ctx)
               if (_n++ < 8)
                   fprintf(stderr, "[spu] img=%d interpreting unlifted LS 0x%05X "
                           "(runtime-loaded code)\n", ctx->image_id, p);
+              /* SPU_INTERP_STATS=1: wall time spent interpreting runtime-loaded
+               * code, per image, every 5 s -- tells whether the interpreter is
+               * what keeps a producer (a sound driver's mixer) behind. */
+              /* SPU_INTERP_DUMP=<prefix>: write the whole local store once, at the
+               * 300th entry (runtime-loaded modules are resident by then), so
+               * the code can be located in the ELF and lifted. */
+              { static const char* s_dp = (const char*)1; static volatile LONG s_dn;
+                if (s_dp == (const char*)1) s_dp = getenv("SPU_INTERP_DUMP");
+                if (s_dp && InterlockedIncrement(&s_dn) == 300) {
+                    char path[512]; snprintf(path, sizeof path, "%s_img%d.ls", s_dp, ctx->image_id);
+                    FILE* f = fopen(path, "wb");
+                    if (f) { fwrite(ctx->ls, 1, SPU_LS_SIZE, f); fclose(f);
+                             fprintf(stderr, "[spu-interp] dumped LS of img=%d to %s\n", ctx->image_id, path); } } }
+              static int s_st = -1;
+              if (s_st < 0) s_st = getenv("SPU_INTERP_STATS") ? 1 : 0;
+              if (s_st) {
+                  static LARGE_INTEGER qf, t0; static volatile LONG64 ticks[64], calls[64];
+                  LARGE_INTEGER a, b; if (!qf.QuadPart) { QueryPerformanceFrequency(&qf); QueryPerformanceCounter(&t0); }
+                  QueryPerformanceCounter(&a); spu_interp_run(ctx, p); QueryPerformanceCounter(&b);
+                  unsigned im = (unsigned)ctx->image_id & 63;
+                  InterlockedAdd64(&ticks[im], b.QuadPart - a.QuadPart); InterlockedIncrement64(&calls[im]);
+                  if (b.QuadPart - t0.QuadPart > qf.QuadPart * 5) {
+                      t0 = b;
+                      for (unsigned k = 0; k < 64; k++) if (calls[k]) {
+                          fprintf(stderr, "[spu-interp] img=%u %lld calls, %.1f ms interpreting per second\n",
+                                  k, (long long)calls[k], ticks[k] * 1000.0 / qf.QuadPart / 5.0);
+                          calls[k] = 0; ticks[k] = 0; }
+                  }
+                  return;
+              }
               spu_interp_run(ctx, p);
               return;
           } }

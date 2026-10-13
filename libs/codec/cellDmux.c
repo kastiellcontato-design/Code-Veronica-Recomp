@@ -88,15 +88,17 @@ static DWORD WINAPI dmux_worker(LPVOID arg)
     }
     return 0;
 }
+/* Read once: these traces sit on per-AU paths. */
+static int dmux_trace(void){static int t=-1;if(t<0)t=getenv("CV_AV_TRACE")?1:0;return t;}
 /* Callback messages reside in the guest address space; callbacks are guest OPDs. */
 static void dmux_notify(u32 h, u32 type)
 {
-    if(getenv("CV_AV_TRACE"))fprintf(stderr,"[cellDmux] NOTIFY_BEGIN h=%u type=%u user=%llu\n",h,type,(unsigned long long)s_dmux[h].userData);
+    if(dmux_trace())fprintf(stderr,"[cellDmux] NOTIFY_BEGIN h=%u type=%u user=%llu\n",h,type,(unsigned long long)s_dmux[h].userData);
     u32 ea = VM_HLE_INJECT_BASE + 0x60000 + h * 0x20;
     vm_write32(ea, type); vm_write32(ea+4, 0); vm_write64(ea+8,s_dmux[h].userData);
     if (s_dmux[h].cbFunc && g_ps3_guest_caller)
         g_ps3_guest_caller(s_dmux[h].cbFunc,h,ea,s_dmux[h].cbArg,0,0,0,0,0);
-    if(getenv("CV_AV_TRACE"))fprintf(stderr,"[cellDmux] NOTIFY_END h=%u type=%u\n",h,type);
+    if(dmux_trace())fprintf(stderr,"[cellDmux] NOTIFY_END h=%u type=%u\n",h,type);
 }
 static void dmux_es_notify(u32 h, u32 type)
 {
@@ -359,7 +361,7 @@ s32 cellDmuxResetStreamAndWaitDone(CellDmuxHandle handle)
 static s32 dmux_get_au(u32 h, CellDmuxAuInfo** out, u32* specific, int acquire)
 {
  if(h>=CELL_DMUX_MAX_ES||!s_es[h].in_use||!out||!specific)return (s32)CELL_DMUX_ERROR_ARG;
- if(getenv("CV_AV_TRACE") && s_es[h].hasAu && !s_es[h].acquired)fprintf(stderr,"[cellDmux] GET_AU h=%u acquire=%d has=%d acquired=%d\n",h,acquire,s_es[h].hasAu,s_es[h].acquired);
+ if(dmux_trace() && s_es[h].hasAu && !s_es[h].acquired)fprintf(stderr,"[cellDmux] GET_AU h=%u acquire=%d has=%d acquired=%d\n",h,acquire,s_es[h].hasAu,s_es[h].acquired);
  DmuxEsSlot* es=&s_es[h];if(!es->hasAu||es->acquired)return (s32)CELL_DMUX_ERROR_EMPTY;
  u32 ea=es->resource;CellDmuxAuInfo* au=&es->currentAu;
  memset(vm_ptr8(ea),0,0x100);
@@ -382,7 +384,7 @@ s32 cellDmuxReleaseAu(CellDmuxEsHandle esHandle)
     if (esHandle >= CELL_DMUX_MAX_ES || !s_es[esHandle].in_use)
         return (s32)CELL_DMUX_ERROR_ARG;
 
-    if(getenv("CV_AV_TRACE"))fprintf(stderr,"[cellDmux] RELEASE es=%u\n",esHandle);
+    if(dmux_trace())fprintf(stderr,"[cellDmux] RELEASE es=%u\n",esHandle);
     u32 dmux = s_es[esHandle].dmuxId;
     s_es[esHandle].hasAu = 0;
     if (dmux < CELL_DMUX_MAX_HANDLES && s_dmux[dmux].in_use)

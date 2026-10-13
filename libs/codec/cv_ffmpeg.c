@@ -236,6 +236,12 @@ int cv_audio_pcm(CvAudioDecoder* d,u32 bw,u8* dst,int consume)
    for(unsigned b=0;b<word;b++)*dst++=(u8)(bits>>(8*(word-1-b)));
   }
  }
+ if(consume&&env_flag("CV_VIDEO_PACE_TRACE",&s_pace_trace)){
+   /* Movie audio handed to the game vs wall clock; real time is 1000 ms per second. */
+   static ULONGLONG t0,last;static u64 samples;ULONGLONG now=GetTickCount64();
+   if(!t0||now-last>3000){t0=now;samples=0;}last=now;samples+=f->nb_samples;
+   static ULONGLONG lastLog;if(now-lastLog>=1000){fprintf(stderr,"[cellAdec] delivery wall_ms=%llu audio_ms=%llu queued=%u\n",(unsigned long long)(now-t0),(unsigned long long)(samples*1000/d->frames[i].info.rate),d->write-d->read);lastLog=now;}
+ }
  if(consume){d->frames[i].frame=NULL;d->read++;WakeConditionVariable(&d->space);}
  ReleaseSRWLockExclusive(&d->lock);if(consume)f_av_frame_free(&f);return 1;
 }

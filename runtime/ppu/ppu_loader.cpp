@@ -2343,7 +2343,10 @@ static void icall_hist(ppu_context* ctx, uint32_t tgt, int phase)
 
 extern "C" void ps3_indirect_call(ppu_context* ctx)
 {
-    if (getenv("CV_MEMORY_TRACE") && ctx->lr==0x00247BC0) {
+    /* Every guest indirect call lands here: never call getenv per call. */
+    static int memtrace = -1;
+    if (memtrace < 0) memtrace = getenv("CV_MEMORY_TRACE") ? 1 : 0;
+    if (memtrace && ctx->lr==0x00247BC0) {
         uint32_t tgt=(uint32_t)ctx->ctr;
         fprintf(stderr,"[cv-alloc] tgt=%08X this=%08X bytes=%08X align=%08X r2=%08X\n",
             tgt,(uint32_t)ctx->gpr[3],(uint32_t)ctx->gpr[4],(uint32_t)ctx->gpr[5],(uint32_t)ctx->gpr[2]);
