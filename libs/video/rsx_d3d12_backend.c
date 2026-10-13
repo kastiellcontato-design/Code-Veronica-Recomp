@@ -576,6 +576,23 @@ static int init_d3d12(u32 width, u32 height)
         return -1;
     }
 
+    /* DRED: when the GPU is lost (TDR), record which command-list operation
+     * was running and which address faulted, so dred_report() can name the
+     * culprit in an ordinary log. Must be set before the device exists.
+     * CV_DRED=0 turns it off. */
+    {
+        const char* e = getenv("CV_DRED");
+        if (!e || *e != '0') {
+            ID3D12DeviceRemovedExtendedDataSettings* ds = NULL;
+            if (SUCCEEDED(D3D12GetDebugInterface(&IID_ID3D12DeviceRemovedExtendedDataSettings,
+                                                 (void**)&ds)) && ds) {
+                ds->lpVtbl->SetAutoBreadcrumbsEnablement(ds, D3D12_DRED_ENABLEMENT_FORCED_ON);
+                ds->lpVtbl->SetPageFaultEnablement(ds, D3D12_DRED_ENABLEMENT_FORCED_ON);
+                ds->lpVtbl->Release(ds);
+            }
+        }
+    }
+
     /* Create D3D12 device. On a dual-GPU laptop a NULL adapter usually lands on
      * the integrated GPU; explicitly pick the high-performance (discrete)
      * adapter via IDXGIFactory6. Set CELLMARK_IGPU to force the low-power one
@@ -1222,6 +1239,106 @@ static int init_d3d12(u32 width, u32 height)
  * Frame sync helpers
  * -----------------------------------------------------------------------*/
 
+static const char* dred_op_name(D3D12_AUTO_BREADCRUMB_OP op)
+{
+    switch (op) {
+    case D3D12_AUTO_BREADCRUMB_OP_SETMARKER:                   return "SetMarker";
+    case D3D12_AUTO_BREADCRUMB_OP_DRAWINSTANCED:               return "DrawInstanced";
+    case D3D12_AUTO_BREADCRUMB_OP_DRAWINDEXEDINSTANCED:        return "DrawIndexedInstanced";
+    case D3D12_AUTO_BREADCRUMB_OP_DISPATCH:                    return "Dispatch";
+    case D3D12_AUTO_BREADCRUMB_OP_COPYBUFFERREGION:            return "CopyBufferRegion";
+    case D3D12_AUTO_BREADCRUMB_OP_COPYTEXTUREREGION:           return "CopyTextureRegion";
+    case D3D12_AUTO_BREADCRUMB_OP_COPYRESOURCE:                return "CopyResource";
+    case D3D12_AUTO_BREADCRUMB_OP_RESOLVESUBRESOURCE:          return "ResolveSubresource";
+    case D3D12_AUTO_BREADCRUMB_OP_CLEARRENDERTARGETVIEW:       return "ClearRenderTargetView";
+    case D3D12_AUTO_BREADCRUMB_OP_CLEARDEPTHSTENCILVIEW:       return "ClearDepthStencilView";
+    case D3D12_AUTO_BREADCRUMB_OP_RESOURCEBARRIER:             return "ResourceBarrier";
+    case D3D12_AUTO_BREADCRUMB_OP_EXECUTEBUNDLE:               return "ExecuteBundle";
+    case D3D12_AUTO_BREADCRUMB_OP_PRESENT:                     return "Present";
+    case D3D12_AUTO_BREADCRUMB_OP_EXECUTEINDIRECT:             return "ExecuteIndirect";
+    default:                                                   return "op";
+    }
+}
+
+/* Once per run, after the device is lost: the last operations of each
+ * command list DRED saw (the first not-completed one is the culprit) and the
+ * faulting GPU address, if any. */
+static void dred_report(const char* where)
+{
+    static int done = 0;
+    if (done || !s_d3d.device) return;
+    HRESULT rr = s_d3d.device->lpVtbl->GetDeviceRemovedReason(s_d3d.device);
+    if (rr == S_OK) return;
+    done = 1;
+    fprintf(stderr, "[DRED] GPU device lost (reason 0x%08lX), noticed at %s\n", (long)rr, where);
+    ID3D12DeviceRemovedExtendedData* d = NULL;
+    if (FAILED(s_d3d.device->lpVtbl->QueryInterface(s_d3d.device,
+            &IID_ID3D12DeviceRemovedExtendedData, (void**)&d)) || !d) {
+        fprintf(stderr, "[DRED] no DRED data (CV_DRED=0 or unsupported)\n");
+        return;
+    }
+    D3D12_DRED_AUTO_BREADCRUMBS_OUTPUT bc;
+    if (SUCCEEDED(d->lpVtbl->GetAutoBreadcrumbsOutput(d, &bc))) {
+        int ln = 0;
+        for (const D3D12_AUTO_BREADCRUMB_NODE* n = bc.pHeadAutoBreadcrumbNode; n && ln < 16;
+             n = n->pNext, ln++) {
+            const UINT32 last = n->pLastBreadcrumbValue ? *n->pLastBreadcrumbValue : 0;
+            if (last >= n->BreadcrumbCount) continue;        /* finished cleanly */
+            UINT32 draws = 0;
+            for (UINT32 i = 0; i < last; i++)
+                if (n->pCommandHistory[i] == D3D12_AUTO_BREADCRUMB_OP_DRAWINSTANCED ||
+                    n->pCommandHistory[i] == D3D12_AUTO_BREADCRUMB_OP_DRAWINDEXEDINSTANCED)
+                    draws++;
+            fprintf(stderr, "[DRED] list %p: %u of %u ops completed, %u draws completed; around the stop:\n",
+                    (void*)n->pCommandList, last, n->BreadcrumbCount, draws);
+            const UINT32 lo = last > 4 ? last - 4 : 0;
+            const UINT32 hi = last + 3 < n->BreadcrumbCount ? last + 3 : n->BreadcrumbCount;
+            for (UINT32 i = lo; i < hi; i++)
+                fprintf(stderr, "[DRED]   #%u %s%s\n", i, dred_op_name(n->pCommandHistory[i]),
+                        i == last ? "   <-- did not complete" : "");
+        }
+    }
+    D3D12_DRED_PAGE_FAULT_OUTPUT pf;
+    if (SUCCEEDED(d->lpVtbl->GetPageFaultAllocationOutput(d, &pf)) && pf.PageFaultVA) {
+        fprintf(stderr, "[DRED] page fault at GPU VA 0x%llX\n", (unsigned long long)pf.PageFaultVA);
+        for (const D3D12_DRED_ALLOCATION_NODE* a = pf.pHeadExistingAllocationNode; a; a = a->pNext)
+            fprintf(stderr, "[DRED]   live allocation there: type %d\n", (int)a->AllocationType);
+        for (const D3D12_DRED_ALLOCATION_NODE* a = pf.pHeadRecentFreedAllocationNode; a; a = a->pNext)
+            fprintf(stderr, "[DRED]   recently freed allocation there: type %d\n", (int)a->AllocationType);
+    }
+    d->lpVtbl->Release(d);
+    fflush(stderr);
+}
+
+/* Resources dropped while a frame is being recorded. The open command list,
+ * and the frames still in flight, may reference them, so they are released
+ * only once the frame that recorded them has completed on the GPU -- see
+ * move_to_next_frame. Releasing at once made the GPU read freed memory and
+ * hang (DRED: page fault in a recently freed resource) as soon as gameplay
+ * started reusing texture slots. */
+static ID3D12Resource** s_defer[FRAME_COUNT];
+static u32 s_defer_n[FRAME_COUNT], s_defer_cap[FRAME_COUNT];
+
+static void defer_release(ID3D12Resource* r)
+{
+    if (!r) return;
+    const u32 fi = s_d3d.frame_index;
+    if (s_defer_n[fi] == s_defer_cap[fi]) {
+        u32 cap = s_defer_cap[fi] ? s_defer_cap[fi] * 2 : 64;
+        ID3D12Resource** p = (ID3D12Resource**)realloc(s_defer[fi], cap * sizeof(*p));
+        if (!p) { r->lpVtbl->Release(r); return; }   /* out of memory: old behaviour */
+        s_defer[fi] = p; s_defer_cap[fi] = cap;
+    }
+    s_defer[fi][s_defer_n[fi]++] = r;
+}
+
+static void release_deferred(u32 fi)
+{
+    for (u32 i = 0; i < s_defer_n[fi]; i++)
+        s_defer[fi][i]->lpVtbl->Release(s_defer[fi][i]);
+    s_defer_n[fi] = 0;
+}
+
 static void wait_for_gpu(void)
 {
     u32 fi = s_d3d.frame_index;
@@ -1250,8 +1367,10 @@ static void wait_for_gpu(void)
                    (unsigned long long)s_d3d.fence->lpVtbl->GetCompletedValue(s_d3d.fence),
                    (long)rr);
             fflush(stdout);
-            if (rr != 0 /* S_OK: device still alive, keep waiting a bit */)
+            if (rr != 0 /* S_OK: device still alive, keep waiting a bit */) {
+                dred_report("wait_for_gpu");
                 break;
+            }
         }
     }
 }
@@ -1272,8 +1391,11 @@ static void move_to_next_frame(void)
                    (unsigned long long)s_d3d.fence_values[s_d3d.frame_index],
                    (unsigned long long)s_d3d.fence->lpVtbl->GetCompletedValue(s_d3d.fence),
                    (long)rr);
+            dred_report("move_to_next_frame");
         }
     }
+    /* This slot's previous frame is done: what it dropped can go now. */
+    release_deferred(s_d3d.frame_index);
 
     s_d3d.fence_values[s_d3d.frame_index] = current_fence + 1;
 }
@@ -2476,6 +2598,7 @@ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, in
     pb->lpVtbl->Release(pb);
     if (FAILED(hr)) {
         static int _e3=0; if (_e3++<16) printf("[FP] PSO FAIL (fp=0x%08X, 0x%08lX)\n", fp_addr, hr);
+        if (hr == DXGI_ERROR_DEVICE_REMOVED) dred_report("fragment PSO creation");
         return NULL;
     }
     { static int _ok=0; if (_ok++<32) printf("[FP] guest FP pipeline ready (fp=0x%08X)\n", fp_addr); }
@@ -2749,8 +2872,8 @@ static int vp_upload_tex_slot(u32 off, u32 w, u32 h, u32 fmt, int cube, u32 mips
      * cube path copies 6 subresources and writes a 6x upload buffer -- which
      * crashes. */
     if (t->res && (t->w != w || t->h != h || t->fmt != fmt || t->cube != cube)) {
-        t->res->lpVtbl->Release(t->res); t->res = NULL;
-        if (t->up) { t->up->lpVtbl->Release(t->up); t->up = NULL; }
+        defer_release(t->res); t->res = NULL;
+        defer_release(t->up);  t->up = NULL;
     }
     if (!t->res) {
         D3D12_HEAP_PROPERTIES hp = {0}; hp.Type = D3D12_HEAP_TYPE_DEFAULT;
@@ -3471,8 +3594,8 @@ static int off_rt_get(u32 off, u32 w, u32 h, u32 rsx_fmt)
          * replacement reads back empty. Let the GPU finish first. Recreations are
          * rare (a surface changing size), so the stall costs nothing. */
         wait_for_gpu();
-        r->res->lpVtbl->Release(r->res); r->res = NULL;   /* dims/format changed */
-        if (r->up) { r->up->lpVtbl->Release(r->up); r->up = NULL; }
+        defer_release(r->res); r->res = NULL;   /* dims/format changed */
+        defer_release(r->up);  r->up = NULL;
     } else {
         for (int i = 0; i < MAX_OFF_RTS; i++)
             if (!s_d3d.off_rt[i].res) { slot = i; break; }
@@ -3481,12 +3604,10 @@ static int off_rt_get(u32 off, u32 w, u32 h, u32 rsx_fmt)
                 if (!s_d3d.off_rt[i].used) { slot = i; break; }
             if (slot < 0) return -1;
             wait_for_gpu();   /* same hazard as above: the frame may still use it */
-            s_d3d.off_rt[slot].res->lpVtbl->Release(s_d3d.off_rt[slot].res);
+            defer_release(s_d3d.off_rt[slot].res);
             s_d3d.off_rt[slot].res = NULL;
-            if (s_d3d.off_rt[slot].up) {
-                s_d3d.off_rt[slot].up->lpVtbl->Release(s_d3d.off_rt[slot].up);
-                s_d3d.off_rt[slot].up = NULL;
-            }
+            defer_release(s_d3d.off_rt[slot].up);
+            s_d3d.off_rt[slot].up = NULL;
         }
     }
     OffRT* r = &s_d3d.off_rt[slot];
@@ -5289,7 +5410,8 @@ skip_dump_consider: ;
 
     /* Present */
     if (s_present_this_frame)
-        s_d3d.swap_chain->lpVtbl->Present(s_d3d.swap_chain, 1, 0); /* vsync */   /* skipped for an offscreen-only batch */
+        { HRESULT _ph = s_d3d.swap_chain->lpVtbl->Present(s_d3d.swap_chain, 1, 0); /* vsync */
+          if (_ph == DXGI_ERROR_DEVICE_REMOVED || _ph == DXGI_ERROR_DEVICE_RESET) dred_report("Present"); }   /* skipped for an offscreen-only batch */
 
     move_to_next_frame();
 
