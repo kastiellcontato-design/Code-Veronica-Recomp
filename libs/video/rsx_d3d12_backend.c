@@ -2930,8 +2930,10 @@ typedef struct FpJob {
 } FpJob;
 
 static volatile LONG s_fp_async_skips = 0, s_fp_async_built = 0;
+static volatile LONG s_fp_inflight = 0;                /* submitted, not yet built */
 static SRWLOCK s_fpq_lock = SRWLOCK_INIT;
 static CONDITION_VARIABLE s_fpq_cv = CONDITION_VARIABLE_INIT;
+static CONDITION_VARIABLE s_fpq_done_cv = CONDITION_VARIABLE_INIT;
 static FpJob* s_fpq_head = NULL; static FpJob* s_fpq_tail = NULL;   /* to build */
 static FpJob* s_fpq_done = NULL;                                     /* built */
 static int s_fp_async = -1;
@@ -2951,7 +2953,9 @@ static DWORD WINAPI fp_worker(LPVOID p)
         InterlockedIncrement(&s_fp_async_built);
         AcquireSRWLockExclusive(&s_fpq_lock);
         j->next = s_fpq_done; s_fpq_done = j;
+        InterlockedDecrement(&s_fp_inflight);
         ReleaseSRWLockExclusive(&s_fpq_lock);
+        WakeAllConditionVariable(&s_fpq_done_cv);
     }
 }
 
@@ -2960,7 +2964,10 @@ static int fp_async_on(void)
     if (s_fp_async >= 0) return s_fp_async;
     s_fp_async = 0;
     { const char* e = getenv("FP_ASYNC"); if (e && e[0] == '0') return 0; }
-    int nt = 2;
+    /* Half the logical cores, 2..6: the game's own threads need the rest. */
+    SYSTEM_INFO si; GetSystemInfo(&si);
+    int nt = (int)si.dwNumberOfProcessors / 2;
+    if (nt < 2) nt = 2; if (nt > 6) nt = 6;
     { const char* e = getenv("FP_ASYNC_THREADS"); if (e && atoi(e) > 0) nt = atoi(e); }
     if (nt > 8) nt = 8;
     int started = 0;
@@ -2983,6 +2990,7 @@ static void fp_async_submit(FpJob* j)
     j->next = NULL;
     if (s_fpq_tail) s_fpq_tail->next = j; else s_fpq_head = j;
     s_fpq_tail = j;
+    InterlockedIncrement(&s_fp_inflight);
     ReleaseSRWLockExclusive(&s_fpq_lock);
     WakeConditionVariable(&s_fpq_cv);
 }
@@ -3002,6 +3010,25 @@ static void fp_cache_insert(const VPFPEntry* key, ID3D12PipelineState* pso, int 
     ne->pso = pso; ne->pending = (u8)pending; ne->skip = (u8)skip;
     fp_index_insert(s_d3d.vp_fp_n);
     s_d3d.vp_fp_n++;
+}
+
+/* After the prepass has queued every pipeline this frame is missing: give
+ * the workers a short, bounded wait. With bytecode and pipelines mostly on
+ * disk a build takes a few ms, so most finish in time and are drawn this
+ * frame instead of popping in a frame or two late. The bound keeps a burst
+ * of first-time compiles from turning back into a stall.
+ * FP_ASYNC_WAIT_MS=<ms> (default 8; 0 = never wait). */
+static void fp_async_wait(void)
+{
+    if (s_fp_async <= 0 || !s_fp_inflight) return;
+    static int budget = -1;
+    if (budget < 0) { const char* e = getenv("FP_ASYNC_WAIT_MS"); budget = e ? atoi(e) : 8; }
+    if (budget <= 0) return;
+    const double t0 = perf_now(), lim = budget / 1000.0;
+    AcquireSRWLockExclusive(&s_fpq_lock);
+    while (s_fp_inflight > 0 && perf_now() - t0 < lim)
+        SleepConditionVariableSRW(&s_fpq_done_cv, &s_fpq_lock, 1, 0);   /* woken per finished build */
+    ReleaseSRWLockExclusive(&s_fpq_lock);
 }
 
 /* Render thread, frame start: hand finished builds to their cache entries. */
@@ -3500,9 +3527,19 @@ static int fp_build_pso(FpJob* j)
     return FPB_OK;
 }
 
+/* Draws whose pipeline is built inline even with background builds on: the
+ * final composite onto the display and full-screen passes (one quad, no
+ * depth test -- colour grade, exposure, bloom). Skipping one of those for a
+ * frame changes the whole picture, which showed as a brief screen flicker;
+ * a missing object for a frame is barely visible. */
+static int dr_fp_urgent(const D3D12DrawRecord* dr)
+{
+    return dr->rt_off == 0 || (!dr->dtest && dr->vertex_count <= 6);
+}
+
 static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, int nrt,
                                           DXGI_FORMAT rtfmt, int exp32, u32 cmask, u32 cull,
-                                          u32 cube_mask, const u8* snap)
+                                          u32 cube_mask, const u8* snap, int urgent)
 {
     s_fp_skip_draw = 0;
     if (nrt < 1) nrt = 1; if (nrt > 4) nrt = 4;
@@ -3655,7 +3692,7 @@ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, in
     /* Background build: mark the key pending, skip this draw, and let a
      * worker build it. The finished pipeline is picked up by fp_async_drain
      * at the start of a later frame. */
-    if (fp_async_on()) {
+    if (!urgent && fp_async_on()) {
         fp_cache_insert(&key, NULL, 1, 0);
         fp_async_submit(j);
         s_fp_skip_draw = 1;
@@ -6059,7 +6096,7 @@ static void render_frame_impl(void)
                                        dr->rt_off ? rsx_surface_dxgi(dr->rt_fmt)
                                                   : DXGI_FORMAT_R8G8B8A8_UNORM,
                                        dr->fp_exp32, dr->cmask, dr->cull, dr_cube_mask(dr),
-                                       fp_snap_ptr(dr));
+                                       fp_snap_ptr(dr), dr_fp_urgent(dr));
         if (perf_on()) s_perf_pso += perf_now() - _ps0;
     }
 
@@ -6081,6 +6118,9 @@ static void render_frame_impl(void)
     D3D12_CPU_DESCRIPTOR_HANDLE dsv_handle;
     s_d3d.dsv_heap->lpVtbl->GetCPUDescriptorHandleForHeapStart(s_d3d.dsv_heap, &dsv_handle);
 
+    /* Pipelines the prepass just queued: wait briefly, then pick them up so
+     * the draw loop below (which looks each one up again) can use them. */
+    if (s_fp_inflight) { fp_async_wait(); fp_async_drain(); }
     if (perf_on()) s_perf_pre += perf_now() - _pre0;
     /* Set render target + depth */
     s_d3d.cmd_list->lpVtbl->OMSetRenderTargets(s_d3d.cmd_list, 1, &rtv_handle, FALSE, &dsv_handle);
@@ -6470,7 +6510,7 @@ static void render_frame_impl(void)
                                                            : DXGI_FORMAT_R8G8B8A8_UNORM,
                                                 dr->fp_exp32, dr->cmask,
                                                 dr->cull | ((dr->topology == RSX_TOPOLOGY_LINES) ? 0x100u : 0u),
-                                                dr_cube_mask(dr), fp_snap_ptr(dr)) : NULL;
+                                                dr_cube_mask(dr), fp_snap_ptr(dr), dr_fp_urgent(dr)) : NULL;
                 if (!dpso && dr->fp_addr && s_fp_skip_draw) continue;
                 { ID3D12PipelineState* use = dpso ? dpso : vpso;
                   if (use != last_pso) {
