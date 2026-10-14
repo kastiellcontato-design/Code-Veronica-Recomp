@@ -629,8 +629,24 @@ static void cv_inflate_trace(const char* phase, uint32_t ea, uint32_t task)
 }
 
 static void spu_async_run_impl(spu_async_job* j);
+/* What this host thread is running, and ran before (spu_job_describe). */
+static _Thread_local struct { uint32_t ts, tid, args; int img; unsigned n; } t_job, t_prev_job;
+void spu_job_describe(const void* c)
+{
+    const spu_context* ctx = (const spu_context*)c;
+    fprintf(stderr, "[job] taskset=0x%08X task=%u args=0x%08X img=%d | task #%u on this thread,"
+            " previous taskset=0x%08X task=%u img=%d\n",
+            t_job.ts, t_job.tid, t_job.args, t_job.img, t_job.n,
+            t_prev_job.ts, t_prev_job.tid, t_prev_job.img);
+    fprintf(stderr, "[job] gpr0..15 w0:");
+    for (int i = 0; i < 16; i++) fprintf(stderr, " %08X", ctx->gpr[i]._u32[0]);
+    fprintf(stderr, "\n");
+}
 static void spu_async_run(spu_async_job* j)
 {
+    t_prev_job = t_job;
+    t_job.ts = j->taskset_ea; t_job.tid = j->taskid; t_job.args = j->args_ea;
+    t_job.img = j->image_id; t_job.n++;
 #ifdef _WIN32
     spu_running_set_image(j->image_id);
     /* SPU_TASK_PRIO_IMG=<a,b,...>: run these images' task threads above
@@ -1509,6 +1525,10 @@ int spu_taskset_wait_signal(uint32_t taskset_ea, uint32_t taskId)
 
 /* Explicit per-dispatch ownership. Different PPU threads may create tasks
  * in different tasksets at once; the legacy global bridge is not a queue. */
+/* Set while a creator dispatches a task it already claimed (see
+ * spu_workload_dispatch_task_claimed). */
+static _Thread_local int t_dispatch_preclaimed;
+
 int spu_workload_dispatch_task_async(const uint8_t* image, uint32_t image_size,
                                      uint32_t args_ea, uint32_t taskset_ea,
                                      uint32_t taskid)
@@ -1557,7 +1577,7 @@ int spu_workload_dispatch_task_async(const uint8_t* image, uint32_t image_size,
      * the next CreateTask overwriting the single-slot globals -- with two audio
      * tasks that made both run task 1's descriptor. */
     j->taskset_ea = taskset_ea; j->taskid = taskid;
-    if (!spu_taskset_claim(taskset_ea,taskid)) { free(j); return 1; }
+    if (!t_dispatch_preclaimed && !spu_taskset_claim(taskset_ea,taskid)) { free(j); return 1; }
 
     j->cv_inflate_ea=0;
     if (image_id==13 && taskset_ea && getenv("CV_INFLATE_TRACE")) {
@@ -1643,6 +1663,39 @@ int spu_workload_dispatch_task_async(const uint8_t* image, uint32_t image_size,
     pthread_detach(th);
 #endif
     return 1;
+}
+
+/* Claim (taskset, task) for the caller before the task becomes visible as
+ * ready. cellSpursCreateTask used to set the ready bits first and claim only
+ * inside the dispatch that followed, and a sibling task exiting in between
+ * (spu_taskset_task_exited) could find the task ready and start it. If that
+ * run also FINISHED before the creator reached its own claim -- easy once
+ * task threads start in microseconds (SPU_TASK_POOL) -- the creator claimed
+ * the now-idle slot and ran the task a second time on consumed work: Code
+ * Veronica's image-10 task 27 then DMA'd from a garbage EA and spun on a
+ * null lock line. 1 = claimed. */
+int spu_workload_task_preclaim(uint32_t taskset_ea, uint32_t taskid)
+{
+    return spu_taskset_claim(taskset_ea, taskid);
+}
+
+/* Dispatch a task the caller claimed with spu_workload_task_preclaim. On
+ * failure the claim is dropped. */
+int spu_workload_dispatch_task_claimed(const uint8_t* image, uint32_t image_size,
+                                       uint32_t args_ea, uint32_t taskset_ea,
+                                       uint32_t taskid)
+{
+    t_dispatch_preclaimed = 1;
+    int r = spu_workload_dispatch_task_async(image, image_size, args_ea, taskset_ea, taskid);
+    t_dispatch_preclaimed = 0;
+    if (!r) spu_taskset_mark(taskset_ea, taskid, 0);
+    return r;
+}
+
+/* Drop a claim taken with spu_workload_task_preclaim that will not be run. */
+void spu_workload_task_unclaim(uint32_t taskset_ea, uint32_t taskid)
+{
+    spu_taskset_mark(taskset_ea, taskid, 0);
 }
 
 /* Compatibility for callers without an explicit SPURS task. */

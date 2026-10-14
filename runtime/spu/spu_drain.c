@@ -57,6 +57,17 @@ unsigned spu_recent_pcs(uint32_t* out, unsigned max)
     return k;
 }
 
+/* See spu_step_check. Set to 1 by any registration the slow path serves. */
+int g_spu_step_slow = -1;
+int spu_step_slow_init(void)
+{
+    static const char* const env[] = { "SPU_NO_LS0_END", "SPU_EXITTRACE", "SPU_STEPTRACE" };
+    int slow = 0;
+    for (unsigned i = 0; i < sizeof env / sizeof env[0]; i++) if (getenv(env[i])) slow = 1;
+    if (g_spu_step_slow < 0) g_spu_step_slow = slow;
+    return g_spu_step_slow;
+}
+
 void spu_task_launch_check(spu_context* ctx, void* fn)
 {
     t_recent[t_recent_n++ & 31] = (uint32_t)ctx->pc & SPU_LS_MASK;
@@ -347,6 +358,9 @@ void spu_depth_guard(spu_context* ctx)
     enum { RING = 24 };
     static uint32_t s_ring[RING];
     static uint32_t s_n;
+    /* Shared by every SPU thread, so written only near the limit: a store per
+     * drain from ~10 threads kept its cache line bouncing between cores. */
+    if (ctx->host_depth + 2 * RING < s_max) return;
     s_ring[s_n % RING] = ((uint32_t)ctx->pc & SPU_LS_MASK);
     s_n++;
 
@@ -416,8 +430,8 @@ void spu_drain_call(spu_context* ctx, uint32_t return_pc)
             void (*fn)(spu_context*) = g_spu_trampoline_fn;
             g_spu_trampoline_fn = 0;
             ctx->drain_ret_pc = return_pc & SPU_LS_MASK;   /* re-set: a nested drain changed it */
-            yz_lockstep_tick(ctx);
-            spu_task_launch_check(ctx, (void*)fn);
+            if (g_yz_lockstep_on) yz_lockstep_tick(ctx);
+            spu_step_check(ctx, (void*)fn);
             if (ctx->int_enable && (ctx->event_status & ctx->event_mask)) {
                 void (*vf)(spu_context*) = spu_take_interrupt(ctx, fn);
                 if (!ctx->int_enable) {   /* taken (a take clears the enable; a deferral leaves it) */

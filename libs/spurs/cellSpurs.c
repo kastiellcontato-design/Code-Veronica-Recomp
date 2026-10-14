@@ -1068,9 +1068,14 @@ s32 cellSpursCreateTask(CellSpursTaskset* taskset, CellSpursTaskId* taskId,
             /* Register the task in the REAL BE taskset: writes task_info[slot]
              * (args/elf/context/ls_pattern) + sets enabled+ready bits so the PM's
              * SELECT_TASK picks it. Slot index i = the SPURS taskId (bitset bit). */
+            /* Claim the task and open its join record BEFORE the ready bits
+             * go up: from then on a sibling's exit can start it, and it can
+             * finish before this thread gets any further (see
+             * spu_workload_task_preclaim). */
+            int claimed = elf && spu_workload_task_preclaim(taskset_ea, i);
+            task2_begin(taskset_ea, i);
             spurs_taskset_add_task(taskset_ea, i, (uint64_t)elf_ea,
                                    (uint64_t)context_ea, task_arg, task_lsp);
-            task2_begin(taskset_ea, i);
             /* Bridge to the image-22 dispatch so build_context uses this taskset+task. */
             g_ydkj_real_taskset_ea = taskset_ea;
             g_ydkj_real_taskid     = i;
@@ -1148,11 +1153,16 @@ s32 cellSpursCreateTask(CellSpursTaskset* taskset, CellSpursTaskId* taskId,
                  * as the guest EA (the SPU job's DMA uses guest EAs / r3). */
                 const uint8_t* host_elf = GUEST_PTR(elf, const uint8_t*);
                 size_t sz = spu_elf_image_size(host_elf, 2u * 1024 * 1024);
-                if (sz)
-                    /* Async: SPURS tasks are persistent workers — running them
-                     * inline would block this PPU thread forever (deadlock). */
+                /* Async: SPURS tasks are persistent workers — running them
+                 * inline would block this PPU thread forever (deadlock). */
+                if (sz && claimed)
+                    spu_workload_dispatch_task_claimed(host_elf, (uint32_t)sz,
+                        (uint32_t)(uintptr_t)context, taskset_ea, i);
+                else if (sz)
                     spu_workload_dispatch_task_async(host_elf, (uint32_t)sz,
                         (uint32_t)(uintptr_t)context, taskset_ea, i);
+                else if (claimed)
+                    spu_workload_task_unclaim(taskset_ea, i);
             }
             return CELL_OK;
         }

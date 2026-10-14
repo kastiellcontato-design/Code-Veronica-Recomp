@@ -775,6 +775,7 @@ extern SPU_THREAD_LOCAL unsigned g_spu_pch_n;
 
 /* Central per-transfer hooks (stubbed in spu_drain.c until their milestones). */
 void yz_lockstep_tick(spu_context* ctx);             /* round-robin token gate */
+extern volatile int g_yz_lockstep_on;                /* spu_lockstep.c: 0 = off */
 void spu_task_launch_check(spu_context* ctx, void* fn); /* SPURS task-launch    */
 /* Restore image_id after a call-bracket (adopt-on-serve); re-applies the
  * persistent LS-0xA00 workload module if one is set. */
@@ -845,6 +846,27 @@ static inline void spu_pchist_tick(const spu_context* ctx)
     }
 }
 
+/* The per-step checks of the drain loops, inline. They run on every transfer
+ * between lifted functions -- millions a second in Code Veronica's 3D
+ * cutscenes -- and as a call (spu_task_launch_check, which saves seven
+ * registers, writes a TLS ring and calls spu_check_stack_reset) they were the
+ * biggest runtime cost of its SPU threads after the lifted code itself.
+ * With no step diagnostic armed, no registered stack-reset entry and not a
+ * policy module, the only live check is a job branching to LS 0. */
+extern int g_spu_step_slow;          /* spu_drain.c; -1 until decided */
+int spu_step_slow_init(void);
+static inline void spu_step_check(spu_context* ctx, void* fn)
+{
+    int slow = g_spu_step_slow;
+    if (__builtin_expect(slow < 0, 0)) slow = spu_step_slow_init();
+    if (__builtin_expect(!slow && !ctx->policy_mode, 1)) {
+        if (ctx->steps++ && (ctx->pc & SPU_LS_MASK) == 0 && ctx->image_id > 0)
+            spu_task_launch_check(ctx, fn);   /* LS 0: the job is complete */
+        return;
+    }
+    spu_task_launch_check(ctx, fn);
+}
+
 /* Drain the pending trampoline chain: run each queued transfer target until
  * none remain. The one central hook site for the faithful execution model. */
 #define SPU_DRAIN(ctx) do {                                    \
@@ -865,8 +887,8 @@ static inline void spu_pchist_tick(const spu_context* ctx)
             }                                                              \
             void (*_tf)(spu_context*) = g_spu_trampoline_fn;    \
             g_spu_trampoline_fn = 0;                            \
-            yz_lockstep_tick(ctx);                             \
-            spu_task_launch_check((ctx), (void*)_tf);          \
+            if (g_yz_lockstep_on) yz_lockstep_tick(ctx);       \
+            spu_step_check((ctx), (void*)_tf);                 \
             if ((ctx)->int_enable &&                            \
                 ((ctx)->event_status & (ctx)->event_mask))      \
                 _tf = spu_take_interrupt((ctx), _tf);          \

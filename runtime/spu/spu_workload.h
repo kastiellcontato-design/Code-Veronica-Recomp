@@ -125,6 +125,12 @@ int spu_workload_dispatch(const uint8_t* image, uint32_t image_size,
 int spu_workload_dispatch_async(const uint8_t* image, uint32_t image_size,
                                 uint32_t args_ea);
 /* Captures ownership from the creating PPU call, without shared globals. */
+/* Claim a taskset task before making it ready, then dispatch it (or unclaim). */
+int spu_workload_task_preclaim(uint32_t taskset_ea, uint32_t taskid);
+int spu_workload_dispatch_task_claimed(const uint8_t* image, uint32_t image_size,
+                                       uint32_t args_ea, uint32_t taskset_ea,
+                                       uint32_t taskid);
+void spu_workload_task_unclaim(uint32_t taskset_ea, uint32_t taskid);
 int spu_workload_dispatch_task_async(const uint8_t* image, uint32_t image_size,
                                      uint32_t args_ea, uint32_t taskset_ea,
                                      uint32_t taskid);

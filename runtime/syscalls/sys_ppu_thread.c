@@ -1091,7 +1091,36 @@ int64_t sys_ppu_thread_yield(ppu_context* ctx)
       } }
     (void)ctx;
 #ifdef _WIN32
-    SwitchToThread();
+    /* A thread that does nothing but yield is spin-waiting -- Code Veronica's
+     * 30 fps limiter usleeps to ~1 ms before its deadline and then loops on
+     * yield + timebase until it passes, about a fifth of its main thread's
+     * time. On a PS3 that costs nothing; here each SwitchToThread returns at
+     * once and the core spins. After 16 yields less than 200 us apart, nap
+     * PPU_YIELD_NAP_US (default 100 us) on a high-resolution timer instead.
+     * 0 turns it off. */
+    { static int nap_us = -1;
+      if (nap_us < 0) { const char* e = getenv("PPU_YIELD_NAP_US"); nap_us = e ? atoi(e) : 100; }
+      static _Thread_local LONGLONG t_last;
+      static _Thread_local unsigned t_run;
+      static _Thread_local HANDLE t_timer;
+      static LARGE_INTEGER qf;
+      if (!qf.QuadPart) QueryPerformanceFrequency(&qf);
+      LARGE_INTEGER now; QueryPerformanceCounter(&now);
+      if (t_last && (now.QuadPart - t_last) * 1000000 / qf.QuadPart < 200) t_run++;
+      else t_run = 0;
+      if (nap_us > 0 && t_run >= 16) {
+          if (!t_timer)   /* CREATE_WAITABLE_TIMER_HIGH_RESOLUTION; plain timer before Win10 1803 */
+              t_timer = CreateWaitableTimerExW(NULL, NULL, 0x2, TIMER_ALL_ACCESS);
+          if (!t_timer) t_timer = CreateWaitableTimerExW(NULL, NULL, 0, TIMER_ALL_ACCESS);
+          LARGE_INTEGER due; due.QuadPart = -(LONGLONG)nap_us * 10;
+          if (t_timer && SetWaitableTimer(t_timer, &due, 0, NULL, NULL, FALSE))
+              WaitForSingleObject(t_timer, INFINITE);
+          else
+              SwitchToThread();
+      } else {
+          SwitchToThread();
+      }
+      QueryPerformanceCounter(&now); t_last = now.QuadPart; }
 #else
     sched_yield();
 #endif

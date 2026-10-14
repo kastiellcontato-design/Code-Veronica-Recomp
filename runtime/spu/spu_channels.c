@@ -297,6 +297,47 @@ int spu_run_with_halt(void (*entry)(spu_context*), spu_context* ctx)
  *     stored both took the same slot and then shared one engine's queue and tag
  *     state -- one SPU's tag wait satisfied by the other SPU's transfer.
  * ===========================================================================*/
+/* GETLLAR polling. A task that waits for a lock line to change by re-reading
+ * it -- GETLLAR, compare, GETLLAR again, never a PUTLLC -- spins at full speed
+ * through the lock-line lock. Code Veronica's image-10 tasks did ~1 million
+ * GETLLARs a second on ONE line (0x43CB5400) that changes ~3700 times a
+ * second, and that lock was the biggest single cost of their threads.
+ *
+ * Once a context re-reads an unchanged line it still holds a reservation on
+ * SPU_POLL_N times in a row, it sleeps until the line is written. Every
+ * writer the line can have -- a peer's PUTLLC or DMA PUT, a coherent PPU
+ * store -- drops the reservation and wakes the context (spu_coh_notify_write,
+ * this context is registered since its GETLLAR), so the sleep ends at the
+ * write. The 1 ms timeout only covers a writer that does not notify.
+ * SPU_POLL_WAIT=0 turns it off. */
+#define SPU_POLL_N 16
+static _Thread_local uint32_t t_poll_ea;
+static _Thread_local unsigned t_poll_n;
+volatile long long g_spu_poll_sleeps;
+static void spu_getllar_poll_wait(spu_context* ctx, uint32_t ea, const uint8_t* mem)
+{
+    static int on = -1;
+    if (on < 0) { const char* e = getenv("SPU_POLL_WAIT"); on = (e && *e == '0') ? 0 : 1; }
+    if (!on) return;
+    if (ea != t_poll_ea || !ctx->resv_valid || ctx->resv_ea != ea ||
+        memcmp(mem, ctx->resv_line, MFC_ATOMIC_LINE) != 0) {
+        t_poll_ea = ea; t_poll_n = 0;
+        return;
+    }
+    if (++t_poll_n < SPU_POLL_N) return;
+    AcquireSRWLockExclusive((SRWLOCK*)&ctx->ch_wait_lock);
+    if (ctx->resv_valid && memcmp(mem, ctx->resv_line, MFC_ATOMIC_LINE) == 0) {
+        _InterlockedIncrement64(&g_spu_poll_sleeps);
+        SleepConditionVariableSRW((CONDITION_VARIABLE*)&ctx->ch_wait_cv,
+                                  (SRWLOCK*)&ctx->ch_wait_lock, 1, 0);
+    }
+    ReleaseSRWLockExclusive((SRWLOCK*)&ctx->ch_wait_lock);
+}
+
+/* SPU_LL_HIST counters (racy; diagnostics only). */
+unsigned long long g_ll_ok, g_ll_fail, g_ll_top_ok, g_ll_top_fail;
+uint32_t g_ll_top;
+
 #define SPU_MAX_CONTEXTS 64   /* lighter scene: ~40 SPU tasks at once; 8 left the rest sharing one engine */
 
 typedef struct {
@@ -607,7 +648,29 @@ static int spu_mfc_atomic(spu_context* ctx, uint32_t cmd)
          * peer that must WRITE the line waits for it (canersaka ticks the
          * GETLLAR fast+slow paths for exactly this reason). */
         yz_lockstep_tick(ctx);
+        spu_getllar_poll_wait(ctx, ea, mem);
         spu_lockline_lock();
+        /* SPU_LL_HIST=1: which lines the SPUs reserve, every 5 s (under the lock). */
+        { extern unsigned long long g_ll_ok, g_ll_fail, g_ll_top_ok, g_ll_top_fail; extern uint32_t g_ll_top;
+          static int on = -1; if (on < 0) on = getenv("SPU_LL_HIST") ? 1 : 0;
+          if (on) { enum { N = 256 }; static uint32_t ln[N], ct[N]; static unsigned long long tot, t0;
+            uint32_t l = ea & ~127u; unsigned h = (l >> 7) * 2654435761u >> 24;
+            for (unsigned k = 0; k < N; k++) { unsigned s = (h + k) & (N - 1);
+                if (ln[s] == l || !ct[s]) { ln[s] = l; ct[s]++; break; } }
+            tot++;
+            unsigned long long now = GetTickCount64(); if (!t0) t0 = now;
+            if (now - t0 >= 5000) { t0 = now;
+                fprintf(stderr, "[ll-hist] %llu GETLLAR/s:", tot / 5);
+                for (int r = 0; r < 8; r++) { int b = -1;
+                    for (int k = 0; k < N; k++) if (ct[k] && (b < 0 || ct[k] > ct[b])) b = k;
+                    if (b < 0) break;
+                    if (r == 0) g_ll_top = ln[b];
+                    fprintf(stderr, " %08X=%u", ln[b], ct[b] / 5); ct[b] = 0; }
+                fprintf(stderr, " | PUTLLC/s ok %llu fail %llu, top line ok %llu fail %llu",
+                        g_ll_ok / 5, g_ll_fail / 5, g_ll_top_ok / 5, g_ll_top_fail / 5);
+                g_ll_ok = g_ll_fail = g_ll_top_ok = g_ll_top_fail = 0;
+                fprintf(stderr, "\n"); tot = 0;
+                for (int k = 0; k < N; k++) { ct[k] = 0; ln[k] = 0; } } } }
         /* Tell the PPU store paths this line is live, so a store into it goes
          * through the lock and raises SPU_EVENT_LR here instead of landing
          * unannounced. Nothing else about this transaction changes. */
@@ -762,8 +825,10 @@ static int spu_mfc_atomic(spu_context* ctx, uint32_t cmd)
                                 w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7]); } } }
             spu_coh_notify_write(ea);
             ctx->atomic_stat = 0;                      /* PUTLLC_SUCCESS */
+            g_ll_ok++; if ((ea & ~127u) == g_ll_top) g_ll_top_ok++;
         } else {
             ctx->atomic_stat = 1;                      /* PUTLLC_FAILURE -> retry */
+            g_ll_fail++; if ((ea & ~127u) == g_ll_top) g_ll_top_fail++;
             /* SPU_PUTLLC_WHY=1: which of the three conditions failed.
              * A PUTLLC retry loop that never succeeds is a livelock, and
              * "failed" alone cannot distinguish a lost reservation from a line
@@ -1024,6 +1089,13 @@ static int spu_ch_ready(spu_context* ctx, uint32_t channel)
 void spu_ch_wake(spu_context* ctx)
 {
     if (!ctx) return;
+    /* Pass through the waiter's lock first: a waiter that checked its
+     * predicate is then either still before the check (and sees the new
+     * state) or already asleep (and gets this wake). Without it a wake could
+     * land between the check and the sleep and cost the waiter its timeout
+     * (spu_getllar_poll_wait). */
+    AcquireSRWLockExclusive((SRWLOCK*)&ctx->ch_wait_lock);
+    ReleaseSRWLockExclusive((SRWLOCK*)&ctx->ch_wait_lock);
     WakeAllConditionVariable((CONDITION_VARIABLE*)&ctx->ch_wait_cv);
 }
 
@@ -1571,6 +1643,8 @@ void spu_register_stack_reset_entry(uint32_t entry, int image_id)
     if (s_stack_reset_count < 16) {
         s_stack_reset[s_stack_reset_count].entry = entry & SPU_LS_MASK;
         s_stack_reset[s_stack_reset_count++].image_id = image_id;
+        extern int g_spu_step_slow;
+        g_spu_step_slow = 1;   /* spu_check_stack_reset runs on the slow step path */
     }
 }
 

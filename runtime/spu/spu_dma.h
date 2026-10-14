@@ -238,6 +238,7 @@ static inline int mfc_do_transfer(spu_context* spu, uint32_t lsa, uint64_t ea,
                                   " cmd=0x%X lsa=0x%05X ea=0x%08X size=%u\n",
                           spu->image_id, (uint32_t)spu->pc & SPU_LS_MASK, cmd,
                           lsa, (uint32_t)ea, size);
+              if (_n <= 2) { extern void spu_job_describe(const void* ctx); spu_job_describe(spu); }
               return 0;
           } } }
     /* SPU_DMACHK=1: report transfers that break the MFC rules the guest's own
