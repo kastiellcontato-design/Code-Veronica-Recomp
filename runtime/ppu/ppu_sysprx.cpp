@@ -108,6 +108,9 @@ static void sys_process_is_stack(ppu_context* ctx)
 #define LWM_SELF(ctx) ((uint32_t)(ctx)->thread_id ? (uint32_t)(ctx)->thread_id : 0x7FFFFFFEu)
 
 #ifdef _WIN32
+/* LWM_COUNT=1, read once: create/destroy run thousands of times a frame and
+ * the CRT getenv takes a lock on every call. */
+static int lwm_count_dbg(void) { static int v = -1; if (v < 0) v = getenv("LWM_COUNT") ? 1 : 0; return v; }
 struct LwmSlot;
 static struct LwmSlot* lwm_sem(uint32_t addr);   /* fwd (defined below) */
 static void lwm_release(struct LwmSlot* s);
@@ -117,7 +120,7 @@ static void sys_lwmutex_create(ppu_context* ctx)
     uint32_t lwm  = (uint32_t)ctx->gpr[3];
     uint32_t attr = (uint32_t)ctx->gpr[4];
     { static long long _n=0; _n++;
-      if (getenv("LWM_COUNT") && (_n<=24 || (_n%50000)==0))
+      if (lwm_count_dbg() && (_n<=24 || (_n%50000)==0))
         fprintf(stderr, "[LWM] create #%lld lwm=0x%08X attr=0x%08X\n", _n, lwm, attr); }
     uint32_t protocol = attr ? vm_read32(attr + 0) : 0;
     vm_write32(lwm + 0x00, 0);          /* owner */
@@ -484,7 +487,7 @@ static void crt_ok(ppu_context* ctx) { ctx->gpr[3] = 0; }
 static void sys_lwmutex_destroy_counted(ppu_context* ctx)
 {
     { static long long _n=0; _n++;
-      if (getenv("LWM_COUNT") && (_n<=24 || (_n%50000)==0))
+      if (lwm_count_dbg() && (_n<=24 || (_n%50000)==0))
         fprintf(stderr, "[LWM] destroy #%lld lwm=0x%08X r4=0x%08X r5=0x%08X\n", _n,
                 (uint32_t)ctx->gpr[3], (uint32_t)ctx->gpr[4], (uint32_t)ctx->gpr[5]); }
     ctx->gpr[3] = 0;

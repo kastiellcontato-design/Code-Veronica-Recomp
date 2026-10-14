@@ -571,11 +571,21 @@ static uint32_t s_caller_key[SAMP_CALLERS];
 static uint64_t s_caller_ct[SAMP_CALLERS];
 static void samp_caller_hit(const CONTEXT* c)
 {
-    static uintptr_t base, end;
+    static uintptr_t base, end, s_text_lo, s_text_hi;
     if (!base) {
         base = (uintptr_t)GetModuleHandleA(NULL);
         const IMAGE_NT_HEADERS* nt = (const IMAGE_NT_HEADERS*)(base + ((const IMAGE_DOS_HEADER*)base)->e_lfanew);
         end = base + nt->OptionalHeader.SizeOfImage;
+        /* Only words inside an executable section can be return addresses:
+         * pointers to globals (.bss is huge here) sit on the stack too and
+         * were being reported as "callers". */
+        const IMAGE_SECTION_HEADER* sh = IMAGE_FIRST_SECTION(nt);
+        for (unsigned i = 0; i < nt->FileHeader.NumberOfSections; i++)
+            if (sh[i].Characteristics & IMAGE_SCN_MEM_EXECUTE) {
+                s_text_lo = base + sh[i].VirtualAddress;
+                s_text_hi = s_text_lo + sh[i].Misc.VirtualSize;
+                break;
+            }
     }
     if (c->Rip >= base && c->Rip < end) return;
     const uintptr_t* sp = (const uintptr_t*)c->Rsp;
@@ -583,7 +593,7 @@ static void samp_caller_hit(const CONTEXT* c)
     for (int i = 0; i < lim; i++) {
         uintptr_t v;
         __try { v = sp[i]; } __except (1) { return; }
-        if (v < base || v >= end) continue;
+        if (v < s_text_lo || v >= s_text_hi) continue;
         uint32_t key = (uint32_t)(v - base) + 1;   /* exact return address */
         for (uint32_t j = (key * 2654435761u) % SAMP_CALLERS, n = 0; n < SAMP_CALLERS; n++, j = (j + 1) % SAMP_CALLERS) {
             if (s_caller_key[j] == key) { s_caller_ct[j]++; return; }

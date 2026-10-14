@@ -967,17 +967,30 @@ static int task2_begin(u32 ea, u32 id)
     if (t && id<128) { t->state[id]=1; t->code[id]=0; }
     TASK2_UNLOCK(); return t != NULL && id<128;
 }
+/* Bumped on every task2 exit/finish; cellSpursJoinTask2 sleeps on it. */
+#ifdef _WIN32
+static volatile LONG s_task2_gen = 0;
+static void task2_wake(void)
+{
+    InterlockedIncrement(&s_task2_gen);
+    WakeByAddressAll((PVOID)&s_task2_gen);
+}
+#else
+static void task2_wake(void) {}
+#endif
 void spurs_task2_exit(u32 ea, u32 id, s32 code)
 {
     TASK2_LOCK(); Task2Completion* t=task2_find(ea,0);
     if (t && id<128) { t->code[id]=code; t->state[id]=2; }
     TASK2_UNLOCK();
+    task2_wake();
 }
 void spurs_task2_finished(u32 ea, u32 id)
 {
     TASK2_LOCK(); Task2Completion* t=task2_find(ea,0);
     if (t && id<128) t->state[id]=(t->state[id]==2 ? 3 : 4);
     TASK2_UNLOCK();
+    task2_wake();
 }
 
 s32 cellSpursCreateTask(CellSpursTaskset* taskset, CellSpursTaskId* taskId,
@@ -3531,6 +3544,19 @@ s32 cellSpursTryJoinTask2(CellSpursTaskset* taskset, u32 id, u32 out)
 s32 cellSpursJoinTask2(CellSpursTaskset* taskset, u32 id, u32 out)
 {
     s32 rc;
+#ifdef _WIN32
+    /* Sleep until a task finishes rather than Sleep(1) between polls: a 1 ms
+     * sleep is 1-2 ms on Windows, and Code Veronica's main thread joins SPU
+     * tasks several times a frame -- the polls alone were ~28% of it. The
+     * timeout only guards a completion published some other way. */
+    for (;;) {
+        LONG gen = s_task2_gen;
+        rc = cellSpursTryJoinTask2(taskset,id,out);
+        if (rc != CELL_SPURS_TASK_ERROR_AGAIN) break;
+        WaitOnAddress(&s_task2_gen, &gen, sizeof gen, 2);
+    }
+    return rc;
+#endif
     while ((rc=cellSpursTryJoinTask2(taskset,id,out))==CELL_SPURS_TASK_ERROR_AGAIN) {
 #ifdef _WIN32
         Sleep(1);
