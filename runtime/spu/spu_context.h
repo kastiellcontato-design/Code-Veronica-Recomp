@@ -287,6 +287,9 @@ typedef struct spu_context {
      * path recognizes a registered overlay's source EA and records which
      * overlay is now resident; dispatch retries a missed lookup against it. */
     int resident_ovl;
+    /* 1 + the MFC engine slot this context last held (spu_channels.c
+     * mfc_for); 0 = none. Checked against the slot before use. */
+    int mfc_slot1;
     /* Independently streamed code buffers can coexist with the policy overlay.
      * Each mapping records which translated image owns that local-store span. */
     struct {

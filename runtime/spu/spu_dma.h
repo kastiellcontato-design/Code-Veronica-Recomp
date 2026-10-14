@@ -710,7 +710,10 @@ static inline int mfc_do_transfer(spu_context* spu, uint32_t lsa, uint64_t ea,
          * (0x40003000-0x40005000) or carry the 0xC708C708 poison? This host-side
          * memcpy bypasses vm_write32/AWATCH, so it's the prime suspect for the
          * garbage fn-ptr fields that cause the 0xC708C708 vcall crash. */
-        { uint32_t e = (uint32_t)ea;
+        /* SPU_POISON_DMA=1. It scanned every PUT's whole payload, word by
+         * word, on every title -- most of this function's own time. */
+        static int s_pd = -1; if (s_pd < 0) s_pd = getenv("SPU_POISON_DMA") ? 1 : 0;
+        if (s_pd) { uint32_t e = (uint32_t)ea;
           int hitregion = (e < 0x40005000u && e + size > 0x40003000u);
           int haspoison = 0;
           for (uint32_t o = 0; o + 4 <= size; o += 4) {

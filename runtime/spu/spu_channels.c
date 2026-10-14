@@ -348,22 +348,17 @@ typedef struct {
 static spu_mfc_slot s_mfc_slots[SPU_MAX_CONTEXTS];
 static SRWLOCK      s_mfc_claim_lock = SRWLOCK_INIT;
 
-/* The slot this thread last found its context in: every MFC channel access
- * comes through here, and scanning 64 slots each time showed up in profiles.
- * Re-checked against the slot, so a stale hint only costs the scan. */
-#ifdef _MSC_VER
-static __declspec(thread) int t_mfc_hint = -1;
-#else
-static __thread int t_mfc_hint = -1;
-#endif
+/* Every MFC channel access comes through here, and scanning 64 slots each
+ * time showed up in profiles: the context keeps the slot it last held
+ * (mfc_slot1), re-checked against the slot, so a stale hint costs a scan. */
 
 static mfc_engine* mfc_for(spu_context* ctx)
 {
-    { int h = t_mfc_hint;
+    { int h = ctx->mfc_slot1 - 1;   /* the context's own hint: no TLS, no scan */
       if (h >= 0 && s_mfc_slots[h].ctx == ctx) return &s_mfc_slots[h].mfc; }
     for (int i = 0; i < SPU_MAX_CONTEXTS; i++)
         if (s_mfc_slots[i].ctx == ctx) {
-            t_mfc_hint = i;
+            ctx->mfc_slot1 = i + 1;
             return &s_mfc_slots[i].mfc;
         }
 
@@ -376,7 +371,7 @@ static mfc_engine* mfc_for(spu_context* ctx)
         mfc_engine_init(&s_mfc_slots[i].mfc);
         s_mfc_slots[i].ctx = ctx;
         e = &s_mfc_slots[i].mfc;
-        t_mfc_hint = i;
+        ctx->mfc_slot1 = i + 1;
     }
     if (!e) {
         /* Out of slots: fall back to a shared engine (correct for single-SPU).
@@ -2503,6 +2498,16 @@ void spu_indirect_branch(spu_context* ctx)
               if (_n++ < 8)
                   fprintf(stderr, "[spu] img=%d interpreting unlifted LS 0x%05X "
                           "(runtime-loaded code)\n", ctx->image_id, p);
+              /* SPU_INTERP_LOGALL=1: every distinct (image, entry) the interpreter
+               * takes -- the entry list a lift of runtime-loaded code needs. */
+              { static int la = -1; if (la < 0) la = getenv("SPU_INTERP_LOGALL") ? 1 : 0;
+                if (la) { static uint32_t seen[512]; static volatile LONG ns;
+                  uint32_t key = ((uint32_t)ctx->image_id << 20) | p; int dup = 0;
+                  for (LONG k = 0; k < ns && k < 512; k++) if (seen[k] == key) { dup = 1; break; }
+                  if (!dup) { LONG k = InterlockedIncrement(&ns) - 1;
+                      if (k < 512) { seen[k] = key;
+                          fprintf(stderr, "[spu-interp-entry] img=%d LS 0x%05X lr=0x%05X\n",
+                                  ctx->image_id, p, ctx->gpr[0]._u32[0] & SPU_LS_MASK); } } } }
               /* SPU_INTERP_STATS=1: wall time spent interpreting runtime-loaded
                * code, per image, every 5 s -- tells whether the interpreter is
                * what keeps a producer (a sound driver's mixer) behind. */
