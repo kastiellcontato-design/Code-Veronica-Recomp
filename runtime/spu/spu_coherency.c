@@ -92,9 +92,16 @@ unsigned char s_coh_bitmap[SPU_COH_BITMAP_SZ];
 int s_coh_armed;
 
 /* The SPU contexts that have reserved a line. Sized to match the MFC engine
- * registry in spu_channels.c, which is the ceiling on live SPU contexts. */
-#define SPU_COH_MAX_CTX 8
+ * registry in spu_channels.c, which is the ceiling on live SPU contexts. It
+ * was 8 while that registry grew to 64: Code Veronica runs ~40 tasks at once,
+ * and a task left out of this table never got its lock-line-lost wakeup --
+ * every such wait ran to the 10 ms channel timeout, which is the whole
+ * budget of one audio mixer round. */
+#define SPU_COH_MAX_CTX 64
 static spu_context* s_coh_ctxs[SPU_COH_MAX_CTX];
+/* One past the highest slot ever used; walkers scan only that far. Raised
+ * under the lock-line lock, never lowered. */
+static volatile int s_coh_n = 0;
 
 unsigned long g_spu_lr_raise = 0;
 
@@ -107,7 +114,11 @@ void spu_coh_reserve(spu_context* ctx, uint32_t ea)
     if (!ctx) return;
     for (int i = 0; i < SPU_COH_MAX_CTX; i++) {
         if (s_coh_ctxs[i] == ctx) return;
-        if (s_coh_ctxs[i] == NULL) { s_coh_ctxs[i] = ctx; return; }
+        if (s_coh_ctxs[i] == NULL) {
+            s_coh_ctxs[i] = ctx;
+            if (i >= s_coh_n) s_coh_n = i + 1;
+            return;
+        }
     }
     /* More live SPU contexts than the registry holds. The ones already in it
      * still get their events; this one would silently never wake, so say so. */
@@ -144,7 +155,7 @@ void spu_coh_unregister(spu_context* ctx)
      * (or its whole async thread) was gone. GH3 at -O2 crashed that way in
      * spu_coh_notify_write, reading a freed thread stack. */
     spu_lockline_lock();
-    for (int i = 0; i < SPU_COH_MAX_CTX; i++)
+    for (int i = 0, n = s_coh_n; i < n; i++)
         if (s_coh_ctxs[i] == ctx) { s_coh_ctxs[i] = NULL; break; }
     spu_lockline_unlock();
 }
@@ -159,7 +170,7 @@ void spu_coh_forget_range(uintptr_t lo, uintptr_t hi)
 {
     { extern void spu_mfc_forget_range(uintptr_t, uintptr_t); spu_mfc_forget_range(lo, hi); }
     spu_lockline_lock();
-    for (int i = 0; i < SPU_COH_MAX_CTX; i++) {
+    for (int i = 0, n = s_coh_n; i < n; i++) {
         uintptr_t c = (uintptr_t)s_coh_ctxs[i];
         if (c >= lo && c < hi) {
             static int _n = 0;
@@ -192,7 +203,7 @@ int spu_coh_is_reserved(uint32_t addr)
 void spu_coh_notify_write_except(uint32_t ea, const void* self)
 {
     uint32_t line = ea & ~127u;
-    for (int i = 0; i < SPU_COH_MAX_CTX; i++) {
+    for (int i = 0, n = s_coh_n; i < n; i++) {
         spu_context* c = s_coh_ctxs[i];
         if (!c || (const void*)c == self) continue;
         if (c->resv_valid && (c->resv_ea & ~127u) == line) {
@@ -239,7 +250,7 @@ void spu_coh_notify_write(uint32_t ea)
     s_coh_stores++;
     { int i = (int)((line >> 7) * 2654435761u >> 28) & (SPU_COH_HOT - 1);
       if (s_coh_hot_line[i] == line || !s_coh_hot_ct[i]) { s_coh_hot_line[i] = line; s_coh_hot_ct[i]++; } }
-    for (int i = 0; i < SPU_COH_MAX_CTX; i++) {
+    for (int i = 0, n = s_coh_n; i < n; i++) {
         spu_context* c = s_coh_ctxs[i];
         if (!c) continue;
         if (c->resv_valid && (c->resv_ea & ~127u) == line) {

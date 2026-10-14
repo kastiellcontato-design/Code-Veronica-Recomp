@@ -1048,14 +1048,38 @@ static DWORD WINAPI spu_async_thread(LPVOID p) {
  *
  * OFF by default (SPU_TASK_POOL=1 to enable): measured in Code Veronica's
  * lighter scene it made things far worse -- ~25 -> 6-11 fps, the main
- * thread's SPU joins growing from ~10 to 36-75 ms a frame. Not understood
- * yet; kept for that investigation. */
+ * thread's SPU joins growing from ~10 to 36-75 ms a frame. One suspect, now
+ * fixed: raised thread priorities leaked from task to task (see
+ * spu_pool_task_reset). */
 typedef struct spu_pool_item { spu_async_job* j; unsigned taskid; struct spu_pool_item* next; } spu_pool_item;
 static SRWLOCK            s_pool_lock = SRWLOCK_INIT;
 static CONDITION_VARIABLE s_pool_cv   = CONDITION_VARIABLE_INIT;
 static spu_pool_item*     s_pool_head = NULL;
 static spu_pool_item*     s_pool_tail = NULL;
 static int s_pool_idle = 0, s_pool_queued = 0, s_pool_threads = 0;
+
+/* Set once a service task's thread has been raised to highest priority. */
+static __declspec(thread) int t_spu_service_boosted = 0;
+
+/* A pooled thread carries its last task's per-thread state into the next
+ * one. Priority above all: a thread a service task or SPU_TASK_PRIO_IMG
+ * raised stayed raised for every later batch task, and the pool slowly
+ * filled with above-normal threads crowding out the PPU main thread. */
+static void spu_pool_task_reset(void)
+{
+    extern void spu_channels_job_reset(void);
+    extern __declspec(thread) uint32_t g_spurs_job_mbox, g_spurs_job_mbox_intr, g_spurs_job_cmd;
+    extern __declspec(thread) int g_spurs_job_mbox_valid;
+    spu_channels_job_reset();
+    g_spu_trampoline_fn = 0;
+    g_spu_pch_n = 0;
+    g_spurs_job_mbox = g_spurs_job_mbox_intr = g_spurs_job_cmd = 0;
+    g_spurs_job_mbox_valid = 0;
+    if (t_spu_service_boosted || GetThreadPriority(GetCurrentThread()) != THREAD_PRIORITY_NORMAL) {
+        SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_NORMAL);
+        t_spu_service_boosted = 0;
+    }
+}
 
 static int spu_pool_on(void)
 {
@@ -1070,7 +1094,7 @@ static DWORD WINAPI spu_pool_worker(LPVOID p)
     { ULONG g = 256 * 1024; SetThreadStackGuarantee(&g); }
     ULONG_PTR lo, hi; GetCurrentThreadStackLimits(&lo, &hi);
     extern void spu_coh_forget_range(uintptr_t, uintptr_t);
-    extern void spu_channels_job_reset(void);
+    extern void ps3_samp_spu_thread(int enter);
     for (;;) {
         AcquireSRWLockExclusive(&s_pool_lock);
         while (!s_pool_head) {
@@ -1085,8 +1109,10 @@ static DWORD WINAPI spu_pool_worker(LPVOID p)
         ReleaseSRWLockExclusive(&s_pool_lock);
 
         ps3_host_thread_name(GetCurrentThread(), "spu:task %u", it->taskid);
-        spu_channels_job_reset();         /* per-task thread-local state */
+        spu_pool_task_reset();            /* per-task thread-local state */
+        ps3_samp_spu_thread(1);
         spu_async_run(it->j);
+        ps3_samp_spu_thread(0);
         spu_coh_forget_range((uintptr_t)lo, (uintptr_t)hi);
         free(it);
         ps3_host_thread_name(GetCurrentThread(), "spu:pool (idle)");
@@ -1378,11 +1404,12 @@ int spu_taskset_wait_signal(uint32_t taskset_ea, uint32_t taskId)
      * among ~1200 batch tasks a second in the 3D cutscenes, its rounds
      * stretched to 11-14 ms and the sound fell behind the picture.
      * SPU_SERVICE_PRIO=0 leaves these at normal priority. */
-    { static _Thread_local int boosted;
-      static int on = -1;
+    { static int on = -1;
       if (on < 0) { const char* e = getenv("SPU_SERVICE_PRIO"); on = (e && *e == '0') ? 0 : 1; }
-      if (on && !boosted) {
-          boosted = 1;
+      if (!t_spu_service_boosted)   /* PS3_SAMPLE_THREAD=spu:svc picks these out */
+          ps3_host_thread_name(GetCurrentThread(), "spu:svc %08X t%u", taskset_ea, taskId);
+      if (on && !t_spu_service_boosted) {
+          t_spu_service_boosted = 1;
           SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
       } }
 #endif

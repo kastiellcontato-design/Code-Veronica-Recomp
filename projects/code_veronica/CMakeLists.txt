@@ -89,6 +89,20 @@ if(CMAKE_C_COMPILER_ID MATCHES "Clang" AND MSVC)
         APPEND PROPERTY COMPILE_OPTIONS "/O2" "/Ob2")
 endif()
 
+# SPU_ARCH (default AVX2): /arch for the lifted SPU code and the runtime's SPU
+# files (interpreter, DMA, channels). Without it they built for bare SSE2 --
+# shufb fell back to its byte loop and every fma was a call into ucrt's
+# software fmaf -- and Code Veronica's audio mixer could not finish a 10.7 ms
+# round in the 3D cutscenes. Contraction stays off: only the SPU's own fma
+# instructions fuse. Empty = SSE2.
+set(SPU_ARCH "AVX2" CACHE STRING "clang-cl /arch for SPU code (empty = SSE2)")
+if(SPU_ARCH AND CMAKE_C_COMPILER_ID MATCHES "Clang" AND MSVC)
+    file(GLOB SPU_RUNTIME_SOURCES "${PS3RECOMP_DIR}/runtime/spu/*.c")
+    set_property(SOURCE ${SPU_RUNTIME_SOURCES}
+        TARGET_DIRECTORY ps3recomp_runtime
+        APPEND PROPERTY COMPILE_OPTIONS "/arch:${SPU_ARCH}" "-ffp-contract=off")
+endif()
+
 # ---------------------------------------------------------------------------
 # The HLE NID table
 # ---------------------------------------------------------------------------
@@ -197,6 +211,10 @@ if(SPU_SOURCES)
         COMPILE_DEFINITIONS SPU_USE_DISPATCH_MT)
     if(NOT MSVC OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
         set_source_files_properties(${SPU_SOURCES} PROPERTIES COMPILE_OPTIONS "-O2")
+        if(SPU_ARCH)   # see SPU_ARCH above
+            set_property(SOURCE ${SPU_SOURCES} APPEND PROPERTY COMPILE_OPTIONS
+                "/arch:${SPU_ARCH}" "-ffp-contract=off")
+        endif()
     endif()
 endif()
 
