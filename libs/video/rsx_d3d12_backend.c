@@ -380,6 +380,7 @@ typedef struct {
     u32                   merge_first_end;
     int                   merge_prev_draw;      /* 1 = triangle list, 6 = strip, 7 = fan */
     u32                   merge_strip_first;    /* first vertex of the strip/fan being extended */
+    u32                   merge_pending_epoch;  /* BEGIN/END of a strip head too short to draw */
     ID3D12DescriptorHeap* rt_rtv_heap;          /* MAX_OFF_RTS RTVs (CPU only)   */
 
     /* Frame-parity double buffering for the per-draw upload streams (vp_vb
@@ -8575,6 +8576,17 @@ static void d3d12_draw_indexed(void* ud, u32 primitive, u32 first, u32 count)
      * dropped and each icon lost its second triangle (the diagonal cut), and
      * longer split strips lost the triangles joining the entries. Re-expand
      * the whole run in place of the previous record. */
+    /* The run may also START with an entry too short to make a triangle (1 or
+     * 2 indices -- the File tab's frame edge arrives as 1 + 3): nothing was
+     * recorded for it, so prepend it to this entry instead. */
+    if ((primitive == RSX_PRIMITIVE_TRIANGLE_STRIP || primitive == RSX_PRIMITIVE_TRIANGLE_FAN) &&
+        s_d3d.current_rsx_state && s_d3d.merge_prev_draw == (int)primitive + 0x200 &&
+        s_d3d.merge_first_end == first &&
+        s_d3d.merge_pending_epoch == s_d3d.current_rsx_state->begin_epoch) {
+        count = first + count - s_d3d.merge_strip_first;
+        first = s_d3d.merge_strip_first;
+        s_d3d.merge_prev_draw = 0;
+    }
     if ((primitive == RSX_PRIMITIVE_TRIANGLE_STRIP || primitive == RSX_PRIMITIVE_TRIANGLE_FAN) &&
         s_d3d.current_rsx_state && s_d3d.merge_prev_draw == (int)primitive + 0x100 &&
         s_d3d.draw_count > 0 && s_d3d.merge_first_end == first) {
@@ -8693,6 +8705,16 @@ static void d3d12_draw_indexed(void* ud, u32 primitive, u32 first, u32 count)
                                  primitive == RSX_PRIMITIVE_TRIANGLE_FAN) ? (int)primitive + 0x100 : 0;
         s_d3d.merge_first_end = first + count;
         s_d3d.merge_strip_first = first;
+        return;
+    }
+    /* A strip/fan head with too few indices for a triangle: keep it pending
+     * for the entry that continues it (see the top of this function). */
+    if (!emitted && count < 3 && s_d3d.current_rsx_state &&
+        (primitive == RSX_PRIMITIVE_TRIANGLE_STRIP || primitive == RSX_PRIMITIVE_TRIANGLE_FAN)) {
+        s_d3d.merge_prev_draw = (int)primitive + 0x200;
+        s_d3d.merge_strip_first = first;
+        s_d3d.merge_first_end = first + count;
+        s_d3d.merge_pending_epoch = s_d3d.current_rsx_state->begin_epoch;
     }
 }
 
