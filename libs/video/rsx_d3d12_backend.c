@@ -7561,6 +7561,9 @@ static DWORD WINAPI render_thread_main(LPVOID p)
     return 0;
 }
 
+/* Bumped whenever the recording draw list starts over (render_frame). */
+static unsigned s_draw_gen;
+
 static void render_frame(void)
 {
     if (s_rt_async < 0) {
@@ -7597,6 +7600,7 @@ static void render_frame(void)
     /* ...and point recording at the other buffers. */
     s_d3d.draws = (s_d3d.draws == s_draw_bufs[0]) ? s_draw_bufs[1] : s_draw_bufs[0];
     s_d3d.draw_count = 0;
+    s_draw_gen++;   /* rsx_d3d12_backend_present's incremental display scan */
     s_d3d.vb_offset = 0;
     s_d3d.vp_vb_offset = 0;
     s_d3d.vp_parity ^= 1;
@@ -9501,11 +9505,21 @@ void rsx_d3d12_backend_present(void)
      * (wave: black flashes and layout flicker between frames). */
     static int s_seen_content = 0;
     int has_display = (s_d3d.draw_count == 0 && !s_seen_content);
-    for (u32 _i = 0; _i < s_d3d.draw_count && _i < MAX_DRAWS; _i++)
-        if (!s_d3d.draws[_i].is_clear && s_d3d.draws[_i].rt_off == 0) {
-            has_display = 1;
-            break;
-        }
+    /* Is any recorded draw on the display? The list only grows between
+     * render_frame calls, so scan just what was added since the last call
+     * (re-checking the last record, which can still be amended). Rescanning
+     * every record each time walked ~3800 large records per frame in Code
+     * Veronica's 3D cutscenes, a quarter of the frame_clock thread. */
+    { static unsigned scan_gen = ~0u; static u32 scanned; static int found;
+      if (scan_gen != s_draw_gen || s_d3d.draw_count < scanned) {
+          scan_gen = s_draw_gen; scanned = 0; found = 0; }
+      if (!found) {
+          u32 end = s_d3d.draw_count < MAX_DRAWS ? s_d3d.draw_count : MAX_DRAWS;
+          for (u32 _i = scanned ? scanned - 1 : 0; _i < end; _i++)
+              if (!s_d3d.draws[_i].is_clear && s_d3d.draws[_i].rt_off == 0) { found = 1; break; }
+          scanned = end;
+      }
+      if (found) has_display = 1; }
     /* The guest-framebuffer present needs the pass to run at all. */
     { static int gfb = -1;
       if (gfb < 0) { const char* e = getenv("GCM_GUEST_FB"); gfb = e ? 1 : 0; }

@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 float rsx_rd_bef(const u8* p)
 {
@@ -147,6 +148,23 @@ void rsx_fetch_plan_build(const rsx_state* st, rsx_fetch_plan* plan)
         p->off0 = a->offset & 0x7FFFFFFFu;
         p->page = ~0u; p->page_base = NULL;
     }
+    /* RSX_VA_HIST=1: which 1 MB regions of guest memory the draws' vertex
+     * arrays come from, every 5 s (draw count per region). */
+    { static int on = -1; if (on < 0) on = getenv("RSX_VA_HIST") ? 1 : 0;
+      if (on && vm_base) {
+          static unsigned cnt[4096]; static unsigned long long t0; static unsigned draws;
+          draws++;
+          for (int i = 0; i < 16; i++) {
+              const rsx_attr_plan* p = &plan->a[i];
+              if (!p->active) continue;
+              u32 ea = cellGcmResolveLocated(p->main_mem ? 0 : 1, p->off0);
+              cnt[(ea >> 20) & 4095]++;
+          }
+          unsigned long long now = (unsigned long long)clock() * 1000ull / CLOCKS_PER_SEC; if (!t0) t0 = now;
+          if (now - t0 >= 5000) { t0 = now;
+              fprintf(stderr, "[va-hist] %u draws/5s, attribute arrays by EA MB:", draws);
+              for (int k = 0; k < 4096; k++) if (cnt[k]) { fprintf(stderr, " %03X=%u", k, cnt[k]); cnt[k] = 0; }
+              fprintf(stderr, "\n"); draws = 0; } } }
 }
 
 static inline u32 rd_be32(const u8* p)

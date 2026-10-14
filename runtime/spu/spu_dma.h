@@ -366,6 +366,23 @@ static inline int mfc_do_transfer(spu_context* spu, uint32_t lsa, uint64_t ea,
                       spu->image_id, (uint32_t)spu->pc & SPU_LS_MASK,
                       (uint32_t)ea, size, lsa);
       } }
+    /* SPU_IMG_DMA=<image>: bytes that image GETs and PUTs, by 1 MB region of
+     * EA, every 5 s -- what a task family reads and where its results go. */
+    { static int s_im = -2; if (s_im == -2) { const char* e = getenv("SPU_IMG_DMA"); s_im = e ? atoi(e) : -1; }
+      if (s_im >= 0 && spu->image_id == s_im && (mfc_is_get(cmd) || mfc_is_put(cmd))) {
+          static volatile long long gb[4096], pb[4096], gn[4096], pn[4096]; static volatile long long t0;
+          unsigned k = ((uint32_t)ea >> 20) & 4095;
+          if (mfc_is_get(cmd)) { _InterlockedExchangeAdd64(&gb[k], size); _InterlockedIncrement64(&gn[k]); }
+          else                 { _InterlockedExchangeAdd64(&pb[k], size); _InterlockedIncrement64(&pn[k]); }
+          long long now = (long long)GetTickCount64(), was = t0;
+          if (!was) t0 = now;
+          else if (now - was >= 5000 && _InterlockedCompareExchange64(&t0, now, was) == was) {
+              fprintf(stderr, "[img-dma] img=%d per s (EA MB: KB in GETs/n , KB in PUTs/n):", s_im);
+              for (unsigned i = 0; i < 4096; i++) if (gn[i] || pn[i]) {
+                  fprintf(stderr, " %03X: G %lld/%lld P %lld/%lld;", i, gb[i] / 5120, gn[i] / 5,
+                          pb[i] / 5120, pn[i] / 5);
+                  gb[i] = pb[i] = gn[i] = pn[i] = 0; }
+              fprintf(stderr, "\n"); } } }
     /* Validate size */
     if (size == 0 || size > MFC_MAX_DMA_SIZE)
         return -1;
