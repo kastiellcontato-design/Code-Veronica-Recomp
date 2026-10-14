@@ -341,6 +341,28 @@ unsigned char g_rsx_method_seen[0x800];
 int rsx_process_method(rsx_state* state, u32 method, u32 data)
 {
     if (method < 0x2000) { g_rsx_method_val[method >> 2] = data; g_rsx_method_seen[method >> 2] = 1; }
+    /* Diagnostic: while an F12 rsxcap is pending, log every method from each
+     * BEGIN to its END (up to 300 blocks per capture), so the way a draw is
+     * actually submitted -- strip split across entries, inline vertices,
+     * indexed -- can be read off directly. PRIMDBG=0 disables it. */
+    { extern volatile int g_rsx_cap_request;
+      static int off = -1; if (off < 0) { const char* e = getenv("PRIMDBG"); off = (e && e[0] == '0'); }
+      static u32 buf[64][2]; static int nb = 0, inblk = 0, blocks = 0, lastreq = 0;
+      if (!off) {
+          int req = g_rsx_cap_request;
+          if (req && !lastreq) blocks = 0;
+          lastreq = req;
+          if (req && blocks < 300) {
+              if (method == NV4097_SET_BEGIN_END && data) { inblk = 1; nb = 0; }
+              if (inblk && nb < 64) { buf[nb][0] = method; buf[nb][1] = data; nb++; }
+              if (method == NV4097_SET_BEGIN_END && !data && inblk) {
+                  inblk = 0; blocks++;
+                  fprintf(stderr, "[PRIMDBG] block %d (%d methods):", blocks, nb);
+                  for (int i = 0; i < nb; i++) fprintf(stderr, " %04X=%08X", buf[i][0], buf[i][1]);
+                  fputc(10, stderr);
+              }
+          }
+      } }
     /* NV4097_SET_SHADER_PACKER: sRGB-encode colour writes (RPCS3
      * framebuffer_srgb_enabled). Code Veronica writes its scene this way and
      * decodes it in the grade pass; ignored, the scene came out ~10x darker. */

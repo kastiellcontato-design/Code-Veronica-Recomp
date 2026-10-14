@@ -378,7 +378,8 @@ typedef struct {
      * past the last batch, and whether the current BEGIN/END may still be
      * extended. */
     u32                   merge_first_end;
-    int                   merge_prev_draw;
+    int                   merge_prev_draw;      /* 1 = triangle list, 6 = strip, 7 = fan */
+    u32                   merge_strip_first;    /* first vertex of the strip/fan being extended */
     ID3D12DescriptorHeap* rt_rtv_heap;          /* MAX_OFF_RTS RTVs (CPU only)   */
 
     /* Frame-parity double buffering for the per-draw upload streams (vp_vb
@@ -2675,6 +2676,23 @@ static u32 rsx_cull_key(const rsx_state* st)
     return k;
 }
 
+/* Guest depth state, packed into the same PSO key word as culling:
+ * bit12 = present, bit13 = test enabled, bit14 = depth writes, bits16-18 =
+ * compare function (GL NEVER..ALWAYS as 0..7). Every guest-FP pipeline used
+ * to test LESS_EQUAL and write depth whatever the title asked for. Code
+ * Veronica's inventory draws its panels with depth writes off; written, they
+ * hid half of the 3D item models drawn behind them in the item boxes (the
+ * diagonal cut through the lighter). DEPTH_LEGACY=1 restores the old state. */
+static u32 rsx_depth_key(const rsx_state* st)
+{
+    static int legacy = -1;
+    if (legacy < 0) legacy = getenv("DEPTH_LEGACY") ? 1 : 0;
+    if (!st || legacy) return 0;
+    u32 f = (st->depth_func >= 0x200u && st->depth_func <= 0x207u) ? st->depth_func - 0x200u : 3u;
+    return 0x1000u | (st->depth_test_enable ? 0x2000u : 0u) |
+           (st->depth_mask ? 0x4000u : 0u) | (f << 16);
+}
+
 static u32 rsx_blend_key(const rsx_state* st, int enable)
 {
     { static int _bd = -1; if (_bd < 0) _bd = getenv("BLENDDBG") ? 1 : 0;
@@ -3502,6 +3520,12 @@ static int fp_build_pso(FpJob* j)
     pd.DepthStencilState.DepthEnable = TRUE;
     pd.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
     pd.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
+    if (cull & 0x1000u) {   /* guest depth state (rsx_depth_key) */
+        pd.DepthStencilState.DepthEnable = (cull & 0x2000u) ? TRUE : FALSE;
+        pd.DepthStencilState.DepthWriteMask = (cull & 0x4000u) ? D3D12_DEPTH_WRITE_MASK_ALL
+                                                                : D3D12_DEPTH_WRITE_MASK_ZERO;
+        pd.DepthStencilState.DepthFunc = (D3D12_COMPARISON_FUNC)(((cull >> 16) & 7u) + 1u);
+    }
     pd.DepthStencilState.StencilEnable = FALSE;
     /* DEPTH_OFF=1: drop the depth test for guest-FP draws, so submission order
      * alone decides what is on top. Paired with DRAW_LAST_TEX this puts one
@@ -8180,10 +8204,14 @@ static u32 upload_strip_vp_indexed(const rsx_state* state, u32 first, u32 count,
         if (k < total && !(restart && idx == sentinel)) { seg_len++; continue; }
         /* Segment [seg, seg + seg_len) closed by a sentinel or the end. */
         for (u32 t = (seg == 0 ? skip : 0); t + 2 < seg_len && o + 3 <= tris * 3; t++) {
-            u32 i0 = fan ? 0 : t;
-            read_vp_vertex(state, read_guest_index(state, base + seg + i0),    &out[o*16]); o++;
-            read_vp_vertex(state, read_guest_index(state, base + seg + t + 1), &out[o*16]); o++;
-            read_vp_vertex(state, read_guest_index(state, base + seg + t + 2), &out[o*16]); o++;
+            u32 i0 = fan ? 0 : t, i1 = t + 1, i2 = t + 2;
+            /* Strip parity: every other triangle is wound the other way and
+             * the hardware flips it back. Guest face culling reaches the PSO
+             * now, so unflipped odd triangles were culled. */
+            if (!fan && (t & 1)) { u32 tmp = i1; i1 = i2; i2 = tmp; }
+            read_vp_vertex(state, read_guest_index(state, base + seg + i0), &out[o*16]); o++;
+            read_vp_vertex(state, read_guest_index(state, base + seg + i1), &out[o*16]); o++;
+            read_vp_vertex(state, read_guest_index(state, base + seg + i2), &out[o*16]); o++;
         }
         if (k == total) {   /* the entry ended inside this segment: remember it */
             s_carry_start = base + seg; s_carry_len = seg_len;
@@ -8263,6 +8291,7 @@ static void d3d12_draw_arrays(void* ud, u32 primitive, u32 first, u32 count)
                     ((s_d3d.current_rsx_state->shader_control & 0x40) != 0) : 1;
                 dr->cull = rsx_cull_key(s_d3d.current_rsx_state);
                 if (s_d3d.current_rsx_state && s_d3d.current_rsx_state->shader_packer && !getenv("NO_SRGB_OUT")) dr->cull |= 0x200u;
+                dr->cull |= rsx_depth_key(s_d3d.current_rsx_state);
         dr->begin_epoch = s_d3d.current_rsx_state ? s_d3d.current_rsx_state->begin_epoch : 0;
             dr->begin_epoch = s_d3d.current_rsx_state ? s_d3d.current_rsx_state->begin_epoch : 0;
                 dr->cmask = 0xF;
@@ -8358,6 +8387,31 @@ static void d3d12_draw_arrays(void* ud, u32 primitive, u32 first, u32 count)
          || primitive == RSX_PRIMITIVE_TRIANGLE_FAN || is_line) &&
         s_d3d.vp_vb_mapped && s_d3d.vp_root_sig &&
         s_d3d.current_rsx_state && s_d3d.current_rsx_state->vp_ucode_bytes >= 16) {
+        /* A strip or fan continued by the next DRAW_ARRAYS entry of the same
+         * BEGIN/END is ONE primitive on RSX. Expanding each entry on its own
+         * lost the triangles that join them -- Code Veronica sends its
+         * inventory icon quads as a 3-vertex strip plus one more vertex, and
+         * only the first triangle of each icon was drawn (the diagonal cut).
+         * Re-expand the whole run in place of the previous record. */
+        if ((primitive == RSX_PRIMITIVE_TRIANGLE_STRIP || primitive == RSX_PRIMITIVE_TRIANGLE_FAN) &&
+            s_d3d.merge_prev_draw == (int)primitive && s_d3d.draw_count > 0 &&
+            s_d3d.merge_first_end == first) {
+            D3D12DrawRecord* pv = &s_d3d.draws[s_d3d.draw_count - 1];
+            u32 fpnow = s_d3d.current_rsx_state->shader_program;
+            if (pv->is_vp && pv->fp_addr == fpnow &&
+                pv->begin_epoch == s_d3d.current_rsx_state->begin_epoch &&
+                pv->vb_byte_offset + pv->vertex_count * VP_VERT_STRIDE == s_d3d.vp_vb_offset) {
+                s_d3d.vp_vb_offset = pv->vb_byte_offset;   /* drop the partial expansion */
+                u32 total = first + count - s_d3d.merge_strip_first;
+                pv->vertex_count = upload_strip_vp(s_d3d.current_rsx_state, s_d3d.merge_strip_first,
+                                                   total, primitive == RSX_PRIMITIVE_TRIANGLE_FAN);
+                s_d3d.merge_first_end = first + count;
+                { static int n = 0; if (n++ < 4)
+                    fprintf(stderr, "[STRIPJOIN] prim=%u joined %u vertices from %u%c",
+                            primitive, total, s_d3d.merge_strip_first, 10); }
+                return;
+            }
+        }
         u32 rec = s_d3d.vp_vb_offset;
         u32 emitted = (primitive == RSX_PRIMITIVE_LINES) ? upload_tris_vp(s_d3d.current_rsx_state, first, count & ~1u)
             : (primitive == RSX_PRIMITIVE_LINE_STRIP) ? upload_linestrip_vp(s_d3d.current_rsx_state, first, count)
@@ -8373,7 +8427,7 @@ static void d3d12_draw_arrays(void* ud, u32 primitive, u32 first, u32 count)
          * rendered as spike triangles with a zero texcoord along the tub rim.
          * The batches land contiguously in the vertex buffer, so extending the
          * previous record is all that is needed to restore the stream. */
-        if (emitted && s_d3d.merge_prev_draw && s_d3d.draw_count > 0 &&
+        if (emitted && s_d3d.merge_prev_draw == 1 && s_d3d.draw_count > 0 &&
             s_d3d.merge_first_end == first) {
             D3D12DrawRecord* pv = &s_d3d.draws[s_d3d.draw_count - 1];
             u32 fpnow = s_d3d.current_rsx_state
@@ -8401,6 +8455,7 @@ static void d3d12_draw_arrays(void* ud, u32 primitive, u32 first, u32 count)
                 ((s_d3d.current_rsx_state->shader_control & 0x40) != 0) : 1;
             dr->cull = rsx_cull_key(s_d3d.current_rsx_state);
             if (s_d3d.current_rsx_state && s_d3d.current_rsx_state->shader_packer && !getenv("NO_SRGB_OUT")) dr->cull |= 0x200u;
+            dr->cull |= rsx_depth_key(s_d3d.current_rsx_state);
         dr->begin_epoch = s_d3d.current_rsx_state ? s_d3d.current_rsx_state->begin_epoch : 0;
             dr->begin_epoch = s_d3d.current_rsx_state ? s_d3d.current_rsx_state->begin_epoch : 0;
             dr->cmask = 0xF;
@@ -8451,8 +8506,11 @@ static void d3d12_draw_arrays(void* ud, u32 primitive, u32 first, u32 count)
                 vp_record_cb(s_d3d.draw_count, dr->vs_idx, dr);
             s_d3d.draw_count++;
             /* Anchor for merging the next DRAW_ARRAYS batch of this stream. */
-            s_d3d.merge_prev_draw  = (primitive == RSX_PRIMITIVE_TRIANGLES);
+            s_d3d.merge_prev_draw  = (primitive == RSX_PRIMITIVE_TRIANGLES) ? 1
+                                   : (primitive == RSX_PRIMITIVE_TRIANGLE_STRIP ||
+                                      primitive == RSX_PRIMITIVE_TRIANGLE_FAN) ? (int)primitive : 0;
             s_d3d.merge_first_end  = first + count;
+            s_d3d.merge_strip_first = first;
         }
         return;
     }
@@ -8511,6 +8569,32 @@ static void d3d12_draw_indexed(void* ud, u32 primitive, u32 first, u32 count)
     /* Expand through the VP path (indices resolved CPU-side): QUADS -> two
      * triangles per quad, TRIANGLES straight through, STRIP/FAN -> triangle
      * list. Other primitives are skipped rather than drawn wrong. */
+    /* An indexed strip/fan continued by the next DRAW_INDEX_ARRAY entry of the
+     * same BEGIN/END is one primitive. Code Veronica sends its inventory icon
+     * quads as 3 indices + 1 index; expanded per entry, the lone index was
+     * dropped and each icon lost its second triangle (the diagonal cut), and
+     * longer split strips lost the triangles joining the entries. Re-expand
+     * the whole run in place of the previous record. */
+    if ((primitive == RSX_PRIMITIVE_TRIANGLE_STRIP || primitive == RSX_PRIMITIVE_TRIANGLE_FAN) &&
+        s_d3d.current_rsx_state && s_d3d.merge_prev_draw == (int)primitive + 0x100 &&
+        s_d3d.draw_count > 0 && s_d3d.merge_first_end == first) {
+        D3D12DrawRecord* pv = &s_d3d.draws[s_d3d.draw_count - 1];
+        if (pv->is_vp && pv->fp_addr == s_d3d.current_rsx_state->shader_program &&
+            pv->begin_epoch == s_d3d.current_rsx_state->begin_epoch &&
+            pv->vb_byte_offset + pv->vertex_count * VP_VERT_STRIDE == s_d3d.vp_vb_offset) {
+            s_d3d.vp_vb_offset = pv->vb_byte_offset;   /* drop the partial expansion */
+            u32 total = first + count - s_d3d.merge_strip_first;
+            u32 n = upload_strip_vp_indexed(s_d3d.current_rsx_state, s_d3d.merge_strip_first, total,
+                                            primitive == RSX_PRIMITIVE_TRIANGLE_FAN);
+            if (n) pv->vertex_count = n;
+            else   s_d3d.vp_vb_offset = pv->vb_byte_offset + pv->vertex_count * VP_VERT_STRIDE;
+            s_d3d.merge_first_end = first + count;
+            { static int k = 0; if (k++ < 4)
+                fprintf(stderr, "[STRIPJOIN] indexed prim=%u joined %u indices from %u -> %u vertices%c",
+                        primitive, total, s_d3d.merge_strip_first, n, 10); }
+            return;
+        }
+    }
     u32 emitted = 0;
     u32 rec = s_d3d.vp_vb_offset;
     if (primitive == RSX_PRIMITIVE_QUADS)             emitted = upload_quads_vp_indexed(s_d3d.current_rsx_state, first, count);
@@ -8526,7 +8610,7 @@ static void d3d12_draw_indexed(void* ud, u32 primitive, u32 first, u32 count)
     /* Same BEGIN/END batch concatenation as the non-indexed path: this title's
      * fluid arrives as ~3000 DRAW_INDEX_ARRAY batches of 256, and 256 is not a
      * multiple of 3, so every batch after the first assembled out of phase. */
-    if (emitted && s_d3d.merge_prev_draw && s_d3d.draw_count > 0 &&
+    if (emitted && s_d3d.merge_prev_draw == 1 && s_d3d.draw_count > 0 &&
         s_d3d.merge_first_end == first && primitive == RSX_PRIMITIVE_TRIANGLES) {
         D3D12DrawRecord* pv = &s_d3d.draws[s_d3d.draw_count - 1];
         u32 fpnow = s_d3d.current_rsx_state
@@ -8554,6 +8638,7 @@ static void d3d12_draw_indexed(void* ud, u32 primitive, u32 first, u32 count)
             ((s_d3d.current_rsx_state->shader_control & 0x40) != 0) : 1;
         dr->cull = rsx_cull_key(s_d3d.current_rsx_state);
         if (s_d3d.current_rsx_state && s_d3d.current_rsx_state->shader_packer && !getenv("NO_SRGB_OUT")) dr->cull |= 0x200u;
+        dr->cull |= rsx_depth_key(s_d3d.current_rsx_state);
         dr->begin_epoch = s_d3d.current_rsx_state ? s_d3d.current_rsx_state->begin_epoch : 0;
         dr->cmask = 0xF;
         if (s_d3d.current_rsx_state) {
@@ -8603,8 +8688,11 @@ static void d3d12_draw_indexed(void* ud, u32 primitive, u32 first, u32 count)
                 vp_record_cb(s_d3d.draw_count, dr->vs_idx, dr);
         s_d3d.draw_count++;
         /* Anchor for merging the next batch of this indexed stream. */
-        s_d3d.merge_prev_draw = (primitive == RSX_PRIMITIVE_TRIANGLES);
+        s_d3d.merge_prev_draw = (primitive == RSX_PRIMITIVE_TRIANGLES) ? 1
+                              : (primitive == RSX_PRIMITIVE_TRIANGLE_STRIP ||
+                                 primitive == RSX_PRIMITIVE_TRIANGLE_FAN) ? (int)primitive + 0x100 : 0;
         s_d3d.merge_first_end = first + count;
+        s_d3d.merge_strip_first = first;
     }
 }
 
