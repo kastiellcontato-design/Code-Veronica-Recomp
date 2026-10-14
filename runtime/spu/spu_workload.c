@@ -39,6 +39,57 @@ uint64_t spu_workload_fingerprint(const void* data, size_t n)
     return h;
 }
 
+/* The dispatch paths fingerprint the image on every task, and Code Veronica
+ * dispatches ~1000 tasks a second from its main thread: a byte-serial FNV
+ * over the whole image was ~30% of that thread's busy time. Remember the
+ * fingerprint per (address, size), with a copy of the bytes it was taken
+ * from -- a memcmp is several times cheaper than the hash and keeps the
+ * answer exact if the title loads different code at the same address. */
+#define SPU_FP_CACHE 16
+typedef struct { const void* p; size_t n; uint64_t fp; uint8_t* copy; } spu_fp_cache_entry;
+static spu_fp_cache_entry s_fp_cache[SPU_FP_CACHE];
+static unsigned s_fp_cache_next = 0;
+#ifdef _WIN32
+static SRWLOCK s_fp_cache_lock = SRWLOCK_INIT;
+#define FPC_LOCK_SH()   AcquireSRWLockShared(&s_fp_cache_lock)
+#define FPC_UNLOCK_SH() ReleaseSRWLockShared(&s_fp_cache_lock)
+#define FPC_LOCK_EX()   AcquireSRWLockExclusive(&s_fp_cache_lock)
+#define FPC_UNLOCK_EX() ReleaseSRWLockExclusive(&s_fp_cache_lock)
+#else
+static pthread_mutex_t s_fp_cache_lock = PTHREAD_MUTEX_INITIALIZER;
+#define FPC_LOCK_SH()   pthread_mutex_lock(&s_fp_cache_lock)
+#define FPC_UNLOCK_SH() pthread_mutex_unlock(&s_fp_cache_lock)
+#define FPC_LOCK_EX()   pthread_mutex_lock(&s_fp_cache_lock)
+#define FPC_UNLOCK_EX() pthread_mutex_unlock(&s_fp_cache_lock)
+#endif
+
+static uint64_t spu_workload_fingerprint_cached(const void* data, size_t n)
+{
+    static int off = -1;
+    if (off < 0) off = getenv("SPU_FP_NOCACHE") ? 1 : 0;
+    if (off) return spu_workload_fingerprint(data, n);
+    FPC_LOCK_SH();
+    for (unsigned i = 0; i < SPU_FP_CACHE; i++) {
+        spu_fp_cache_entry* e = &s_fp_cache[i];
+        if (e->p == data && e->n == n && e->copy && memcmp(e->copy, data, n) == 0) {
+            uint64_t fp = e->fp;
+            FPC_UNLOCK_SH();
+            return fp;
+        }
+    }
+    FPC_UNLOCK_SH();
+    uint8_t* copy = (uint8_t*)malloc(n);
+    if (!copy) return spu_workload_fingerprint(data, n);
+    memcpy(copy, data, n);
+    uint64_t fp = spu_workload_fingerprint(copy, n);   /* of exactly the bytes kept */
+    FPC_LOCK_EX();
+    spu_fp_cache_entry* e = &s_fp_cache[s_fp_cache_next++ % SPU_FP_CACHE];
+    free(e->copy);
+    e->p = data; e->n = n; e->fp = fp; e->copy = copy;
+    FPC_UNLOCK_EX();
+    return fp;
+}
+
 /* ---- registry ---------------------------------------------------------- */
 
 #ifndef SPU_WORKLOAD_MAX
@@ -200,7 +251,7 @@ int spu_workload_dispatch(const uint8_t* image, uint32_t image_size,
 {
     if (!image || image_size == 0) return 0;
 
-    uint64_t fp = spu_workload_fingerprint(image, image_size);
+    uint64_t fp = spu_workload_fingerprint_cached(image, image_size);
     spu_lifted_entry_fn fn = NULL;
     int image_id = 0;
     for (unsigned i = 0; i < s_registry_count; i++)
@@ -385,8 +436,50 @@ static int spu_serial_enabled(void)
 { static int _s = -1; if (_s < 0) _s = getenv("LBP_SPU_SERIAL") ? 1 : 0; return _s; }
 #ifdef _WIN32
 static SRWLOCK s_spu_serial = SRWLOCK_INIT;
-void spu_serial_acquire(void){ if (spu_serial_enabled()) AcquireSRWLockExclusive(&s_spu_serial); }
-void spu_serial_release(void){ if (spu_serial_enabled()) ReleaseSRWLockExclusive(&s_spu_serial); }
+/* SPU_MAX_RUNNING=<n>: at most n SPU tasks execute at once, the way the PS3
+ * has six SPUs for them; the same release points apply (a task parked in
+ * WAIT_SIGNAL gives its turn up). Unbounded host threads let tasks that
+ * spin on each other's lock lines crowd every core. Off by default. */
+static HANDLE spu_running_sem(void)
+{
+    static HANDLE volatile h = NULL; static volatile LONG init = 0;
+    if (init == 2) return h;
+    if (InterlockedCompareExchange(&init, 1, 0) == 0) {
+        const char* e = getenv("SPU_MAX_RUNNING");
+        int n = e ? atoi(e) : 0;
+        if (n > 0) h = CreateSemaphoreA(NULL, n, n, NULL);
+        InterlockedExchange(&init, 2);
+    }
+    while (init != 2) YieldProcessor();
+    return h;
+}
+/* Only the images named in SPU_MAX_RUNNING_IMG (comma list, default "10":
+ * Code Veronica's lighter/geometry tasks) take a turn. Audio tasks have a
+ * deadline per block; queued behind the heavy ones they crackled. */
+static __declspec(thread) int t_spu_capped = 0;
+static int spu_img_capped(int image_id)
+{
+    const char* e = getenv("SPU_MAX_RUNNING_IMG");
+    if (!e) e = "10";
+    for (const char* q = e; *q; ) {
+        if (atoi(q) == image_id) return 1;
+        while (*q && *q != ',') q++;
+        if (*q == ',') q++;
+    }
+    return 0;
+}
+static void spu_running_set_image(int image_id)
+{
+    t_spu_capped = spu_running_sem() && spu_img_capped(image_id);
+}
+void spu_serial_acquire(void){
+    if (spu_serial_enabled()) AcquireSRWLockExclusive(&s_spu_serial);
+    if (t_spu_capped) WaitForSingleObject(spu_running_sem(), INFINITE);
+}
+void spu_serial_release(void){
+    if (t_spu_capped) ReleaseSemaphore(spu_running_sem(), 1, NULL);
+    if (spu_serial_enabled()) ReleaseSRWLockExclusive(&s_spu_serial);
+}
 #else
 static pthread_mutex_t s_spu_serial = PTHREAD_MUTEX_INITIALIZER;
 void spu_serial_acquire(void){ if (spu_serial_enabled()) pthread_mutex_lock(&s_spu_serial); }
@@ -538,6 +631,9 @@ static void cv_inflate_trace(const char* phase, uint32_t ea, uint32_t task)
 static void spu_async_run_impl(spu_async_job* j);
 static void spu_async_run(spu_async_job* j)
 {
+#ifdef _WIN32
+    spu_running_set_image(j->image_id);
+#endif
     if (!spu_stat_on()) { spu_async_run_impl(j); return; }
     const int img = j->image_id;
     const unsigned long long t_start = spu_stat_now_us();
@@ -1022,7 +1118,7 @@ int spu_workload_dispatch_job(const uint8_t* image, uint32_t image_size,
 {
     if (!image || image_size == 0) return 0;
 
-    uint64_t fp = spu_workload_fingerprint(image, image_size);
+    uint64_t fp = spu_workload_fingerprint_cached(image, image_size);
     spu_lifted_entry_fn fn = NULL;
     int image_id = 0;
     for (unsigned i = 0; i < s_registry_count; i++)
@@ -1363,7 +1459,7 @@ int spu_workload_dispatch_task_async(const uint8_t* image, uint32_t image_size,
 {
     if (!image || image_size == 0) return 0;
 
-    uint64_t fp = spu_workload_fingerprint(image, image_size);
+    uint64_t fp = spu_workload_fingerprint_cached(image, image_size);
     spu_lifted_entry_fn fn = NULL;
     int image_id = 0;
     for (unsigned i = 0; i < s_registry_count; i++)

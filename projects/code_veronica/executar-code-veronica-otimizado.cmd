@@ -6,6 +6,8 @@ set "PS3_VFS_ROOT=D:\ps3recomp\JOGO\NPEB00553"
 set "PS3_DEV_FLASH=D:\Jogos\rpcs3-v0.0.33-17018-0a57c459_win64\dev_flash"
 set "PS3_RAP_DIR=D:\Jogos\rpcs3-v0.0.33-17018-0a57c459_win64\dev_hdd0\home\00000001\exdata"
 set "SPU_INTERP_UNLIFTED=1"
+rem Limite de tarefas de SPU rodando ao mesmo tempo (teste).
+set "SPU_MAX_RUNNING=6"
 set "CV_AV_CONTINUOUS_PTS=1"
 set "PS3_VERBOSE=0"
 set "SCREEN_AS_TEX=0"

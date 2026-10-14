@@ -299,6 +299,14 @@ install(TARGETS ${PROJECT_NAME} RUNTIME DESTINATION bin)
 # FFmpeg 7.1 headers; matching shared libraries are packaged beside the executable.
 target_sources(ps3recomp_runtime PRIVATE "${PS3RECOMP_DIR}/libs/codec/cv_ffmpeg.c")
 target_include_directories(ps3recomp_runtime PRIVATE "${PS3RECOMP_DIR}/third_party/ffmpeg/include")
+# Debug info for the runtime only (not the lifted game code, which would make
+# the link enormous): profiler samples then resolve to exact functions,
+# static ones included, with llvm-symbolizer. The /OPT flags keep the release
+# link identical to one without /DEBUG.
+if(MSVC)
+    target_compile_options(ps3recomp_runtime PRIVATE /Z7)
+    target_link_options(${PROJECT_NAME} PRIVATE /DEBUG /OPT:REF /OPT:ICF)
+endif()
 
 foreach(FFMPEG_DLL avcodec-61.dll avutil-59.dll swscale-8.dll swresample-5.dll)
     add_custom_command(TARGET MyGameRecomp POST_BUILD
