@@ -2061,6 +2061,63 @@ static void rsx_capture_frame(u32 fi, u32 ndraws, u32 capidx)
            (unsigned long long)s_d3d.frame_count, dir, ndraws);
 }
 
+/* On-disk shader cache. FXC takes tens of milliseconds per translated
+ * program, and every new area brings dozens -- the stutter when walking into
+ * a room. Bytecode is stored under shader_cache/ keyed by a 64-bit hash of
+ * the exact HLSL text and target, so a program compiles once ever; any change
+ * to the translator changes the text and so the key. SHADER_CACHE=0 turns it
+ * off. Safe from the record and render threads (distinct files; temp file
+ * then rename). */
+static volatile LONG s_shc_hits = 0, s_shc_miss = 0;
+
+static HRESULT shader_compile_cached(const char* src, size_t len, const char* name,
+                                     const char* target, ID3DBlob** out, ID3DBlob** err)
+{
+    static int on = -1;
+    if (on < 0) {
+        const char* e = getenv("SHADER_CACHE");
+        on = (e && e[0] == '0') ? 0 : 1;
+        if (on) CreateDirectoryA("shader_cache", NULL);
+    }
+    *out = NULL; if (err) *err = NULL;
+    char path[96] = "";
+    if (on) {
+        unsigned long long h = 14695981039346656037ull;   /* FNV-1a 64 */
+        for (size_t i = 0; i < len; i++) { h ^= (u8)src[i]; h *= 1099511628211ull; }
+        for (const char* t = target; *t; t++) { h ^= (u8)*t; h *= 1099511628211ull; }
+        snprintf(path, sizeof path, "shader_cache/%s_%016llX.cso", target, h);
+        FILE* f = fopen(path, "rb");
+        if (f) {
+            fseek(f, 0, SEEK_END); long n = ftell(f); fseek(f, 0, SEEK_SET);
+            ID3DBlob* b = NULL;
+            if (n > 32 && SUCCEEDED(D3DCreateBlob((SIZE_T)n, &b)) &&
+                fread(b->lpVtbl->GetBufferPointer(b), 1, (size_t)n, f) == (size_t)n &&
+                !memcmp(b->lpVtbl->GetBufferPointer(b), "DXBC", 4)) {
+                fclose(f);
+                InterlockedIncrement(&s_shc_hits);
+                *out = b;
+                return S_OK;
+            }
+            if (b) b->lpVtbl->Release(b);
+            fclose(f);   /* short or corrupt: recompile and overwrite */
+        }
+    }
+    HRESULT hr = D3DCompile(src, len, name, NULL, NULL, "main", target, 0, 0, out, err);
+    if (on && SUCCEEDED(hr) && *out) {
+        InterlockedIncrement(&s_shc_miss);
+        char tmp[112];
+        snprintf(tmp, sizeof tmp, "%s.%lu.tmp", path, (unsigned long)GetCurrentThreadId());
+        FILE* f = fopen(tmp, "wb");
+        if (f) {
+            size_t n = (*out)->lpVtbl->GetBufferSize(*out);
+            int ok = fwrite((*out)->lpVtbl->GetBufferPointer(*out), 1, n, f) == n;
+            ok = (fclose(f) == 0) && ok;
+            if (!ok || !MoveFileExA(tmp, path, MOVEFILE_REPLACE_EXISTING)) DeleteFileA(tmp);
+        }
+    }
+    return hr;
+}
+
 /* Decompile the captured RSX vertex program to HLSL and build the VP PSO
  * (decompiled VS + atlas alpha-test PS). One-shot per program. */
 static void compile_vp(void)
@@ -2525,8 +2582,7 @@ static int vp_get_vs(const rsx_state* st)
         }
     }
     ID3DBlob* vb = NULL; ID3DBlob* e = NULL;
-    HRESULT hr = D3DCompile(hlsl, strlen(hlsl), "guest_vp2", NULL, NULL,
-                            "main", "vs_5_0", 0, 0, &vb, &e);
+    HRESULT hr = shader_compile_cached(hlsl, strlen(hlsl), "guest_vp2", "vs_5_0", &vb, &e);
     if (e) e->lpVtbl->Release(e);
     if (FAILED(hr) || !vb) {
         static int _e=0; if (_e++<4) printf("[VP] per-draw VS compile FAIL (hash=0x%08X)\n", hash);
@@ -3216,8 +3272,7 @@ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, in
         if (rp) memcpy(rp, "return float4(1,0,1,1)", 23);
     }
     ID3DBlob* pb = NULL; ID3DBlob* e = NULL;
-    HRESULT hr = D3DCompile(hlsl, strlen(hlsl), "guest_fp", NULL, NULL,
-                            "main", "ps_5_0", 0, 0, &pb, &e);
+    HRESULT hr = shader_compile_cached(hlsl, strlen(hlsl), "guest_fp", "ps_5_0", &pb, &e);
     if (FAILED(hr) || !pb) {
         static int _e2=0; if (_e2++<16)
             printf("[FP] PS compile FAIL (fp=0x%08X): %s\n", fp_addr,
@@ -6418,7 +6473,11 @@ static void render_frame_impl(void)
                       s_ww_ok == 1 ? "on" : s_ww_ok == 0 ? "UNAVAILABLE" : "unused",
                       (unsigned long long)s_vtex_skip, s_vtex_cmp_bytes / 1048576.0,
                       s_vtex_copy_bytes / 1048576.0, 10);
-              s_vtex_skip = 0; s_vtex_cmp_bytes = 0; s_vtex_copy_bytes = 0; }
+              s_vtex_skip = 0; s_vtex_cmp_bytes = 0; s_vtex_copy_bytes = 0;
+              { LONG hh = InterlockedExchange(&s_shc_hits, 0), mm = InterlockedExchange(&s_shc_miss, 0);
+                if (hh || mm)
+                    fprintf(stderr, "[PERF-SHADER] disk cache: %ld loaded, %ld compiled and saved%c",
+                            (long)hh, (long)mm, 10); } }
             perf_thread_report(fr);
             { extern void spu_coh_stats_report(void*); spu_coh_stats_report(stderr); }
             s_perf_frame = 0.0; s_perf_tex = 0.0; s_perf_vtx = 0.0; s_perf_rf = 0.0;

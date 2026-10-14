@@ -129,3 +129,4 @@ projects/*/spu-run-*.txt
 # FFmpeg DLLs are fetched separately (see the port's README)
 third_party/ffmpeg/bin/
 .mcp.json
+projects/*/shader_cache/
