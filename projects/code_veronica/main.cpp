@@ -212,7 +212,21 @@ static DWORD WINAPI frame_clock(LPVOID)
             rsx_ok ? "OK -- window open" : "FAILED");
 
     g_gcm_catchup_present = catchup_present;
-    ULONGLONG next_tick = GetTickCount64();
+    /* The vblank clock, in microseconds off the performance counter.
+     * GetTickCount64 advances in ~15.6 ms steps, so a 16 ms tick scheduled on
+     * it fired in bursts: no vblank for one step, two at once on the next.
+     * The title paces its frames on vblank counts, so even a steady 30 fps
+     * left the screen at uneven intervals (a jagged frametime line in menus
+     * that run at exactly 30). VBLANK_HZ overrides the 60 Hz rate. */
+    LARGE_INTEGER qpf; QueryPerformanceFrequency(&qpf);
+    auto now_us = [&qpf]() -> long long {
+        LARGE_INTEGER c; QueryPerformanceCounter(&c);
+        return (long long)(c.QuadPart / qpf.QuadPart) * 1000000ll
+             + (long long)(c.QuadPart % qpf.QuadPart) * 1000000ll / qpf.QuadPart;
+    };
+    double vblank_us = 1000000.0 / 60.0;
+    { const char* e = getenv("VBLANK_HZ"); if (e && atof(e) > 1.0) vblank_us = 1000000.0 / atof(e); }
+    double next_tick = (double)now_us();
 
     ULONGLONG diag_at = GetTickCount64() + 20000;
     int progress_diag = getenv("CV_PROGRESS_DIAG") != nullptr;
@@ -231,10 +245,10 @@ static DWORD WINAPI frame_clock(LPVOID)
             Sleep(1);
             ps3_tl_sleep_end();
         }
-        ULONGLONG now = GetTickCount64();
+        const double now = (double)now_us();
 
         int fired = 0;
-        while ((long long)(now - next_tick) >= 0 && fired < 240) {
+        while (now >= next_tick && fired < 240) {
             ps3_tl_begin(11);
             cellGcmTickVBlank();
             cellGcmTickFlip();
@@ -252,7 +266,7 @@ static DWORD WINAPI frame_clock(LPVOID)
              * labels the game's per-frame logic blocks on, so it has to keep
              * advancing at 60 Hz even while present() throttles. */
             if (rsx_ok) cellGcm_rsx_process_fifo();
-            next_tick += 16;             /* ~60 Hz */
+            next_tick += vblank_us;      /* 60 Hz */
             fired++;
         }
         if (fired >= 240) next_tick = now;   /* fell too far behind -- resync */

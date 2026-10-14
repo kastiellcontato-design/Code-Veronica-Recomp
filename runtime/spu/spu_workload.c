@@ -843,6 +843,91 @@ static DWORD WINAPI spu_async_thread(LPVOID p) {
       spu_coh_forget_range((uintptr_t)lo, (uintptr_t)hi); }
     return 0;
 }
+
+/* SPU task pool. Every task used to get a fresh host thread (256 MB stack
+ * reservation), created and torn down per task. Code Veronica's main thread
+ * creates and joins SPU tasks ~39 times a frame and spent ~10 ms a frame in
+ * those joins. Finished task threads now park here and take the next task;
+ * a task still never waits for a thread -- with none idle, a new one is
+ * started, exactly as before.
+ *
+ * OFF by default (SPU_TASK_POOL=1 to enable): measured in Code Veronica's
+ * lighter scene it made things far worse -- ~25 -> 6-11 fps, the main
+ * thread's SPU joins growing from ~10 to 36-75 ms a frame. Not understood
+ * yet; kept for that investigation. */
+typedef struct spu_pool_item { spu_async_job* j; unsigned taskid; struct spu_pool_item* next; } spu_pool_item;
+static SRWLOCK            s_pool_lock = SRWLOCK_INIT;
+static CONDITION_VARIABLE s_pool_cv   = CONDITION_VARIABLE_INIT;
+static spu_pool_item*     s_pool_head = NULL;
+static spu_pool_item*     s_pool_tail = NULL;
+static int s_pool_idle = 0, s_pool_queued = 0, s_pool_threads = 0;
+
+static int spu_pool_on(void)
+{
+    static int v = -1;
+    if (v < 0) { const char* e = getenv("SPU_TASK_POOL"); v = (e && *e && *e != '0') ? 1 : 0; }
+    return v;
+}
+
+static DWORD WINAPI spu_pool_worker(LPVOID p)
+{
+    (void)p;
+    { ULONG g = 256 * 1024; SetThreadStackGuarantee(&g); }
+    ULONG_PTR lo, hi; GetCurrentThreadStackLimits(&lo, &hi);
+    extern void spu_coh_forget_range(uintptr_t, uintptr_t);
+    extern void spu_channels_job_reset(void);
+    for (;;) {
+        AcquireSRWLockExclusive(&s_pool_lock);
+        while (!s_pool_head) {
+            s_pool_idle++;
+            SleepConditionVariableSRW(&s_pool_cv, &s_pool_lock, INFINITE, 0);
+            s_pool_idle--;
+        }
+        spu_pool_item* it = s_pool_head;
+        s_pool_head = it->next;
+        if (!s_pool_head) s_pool_tail = NULL;
+        s_pool_queued--;
+        ReleaseSRWLockExclusive(&s_pool_lock);
+
+        ps3_host_thread_name(GetCurrentThread(), "spu:task %u", it->taskid);
+        spu_channels_job_reset();         /* per-task thread-local state */
+        spu_async_run(it->j);
+        spu_coh_forget_range((uintptr_t)lo, (uintptr_t)hi);
+        free(it);
+        ps3_host_thread_name(GetCurrentThread(), "spu:pool (idle)");
+    }
+    return 0;
+}
+
+/* 1 = queued for a pooled thread, 0 = could not (caller falls back). */
+static int spu_pool_submit(spu_async_job* j, unsigned taskid)
+{
+    spu_pool_item* it = (spu_pool_item*)malloc(sizeof *it);
+    if (!it) return 0;
+    it->j = j; it->taskid = taskid; it->next = NULL;
+    AcquireSRWLockExclusive(&s_pool_lock);
+    if (s_pool_tail) s_pool_tail->next = it; else s_pool_head = it;
+    s_pool_tail = it;
+    s_pool_queued++;
+    int need_thread = s_pool_idle < s_pool_queued;   /* every queued task gets a thread */
+    if (need_thread) s_pool_threads++;
+    ReleaseSRWLockExclusive(&s_pool_lock);
+    if (need_thread) {
+        HANDLE th = CreateThread(NULL, 256u << 20, spu_pool_worker, NULL,
+                                 STACK_SIZE_PARAM_IS_A_RESERVATION, NULL);
+        if (!th) {
+            /* No new thread: the task stays queued for the next idle one. */
+            AcquireSRWLockExclusive(&s_pool_lock);
+            s_pool_threads--;
+            ReleaseSRWLockExclusive(&s_pool_lock);
+            return 1;
+        }
+        CloseHandle(th);
+    } else {
+        WakeConditionVariable(&s_pool_cv);
+    }
+    return 1;
+}
 #else
 static void* spu_async_thread(void* p) { spu_async_run((spu_async_job*)p); return NULL; }
 #endif
@@ -1289,6 +1374,7 @@ int spu_workload_dispatch_task_async(const uint8_t* image, uint32_t image_size,
      * chains are deep host call chains with fat lifted frames -- a 1MB stack
      * blew the guard page (STATUS_GUARD_PAGE_VIOLATION 0x80000001, silent
      * process death) the moment the real decode path first executed. */
+    if (spu_pool_on() && spu_pool_submit(j, (unsigned)taskid)) return 1;
     HANDLE th = CreateThread(NULL, 256u << 20, spu_async_thread, j,
                              STACK_SIZE_PARAM_IS_A_RESERVATION, NULL);
     if (!th) { spu_taskset_mark(taskset_ea,taskid,0); free(j); return 0; }

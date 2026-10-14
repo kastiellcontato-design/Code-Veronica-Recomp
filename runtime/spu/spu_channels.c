@@ -107,6 +107,10 @@ void spu_ls_watch_slow(uint32_t lsa, int is_write, const uint8_t* p, uint32_t pc
 
 static SPU_TLS jmp_buf s_spu_halt_env;
 static SPU_TLS int     s_spu_halt_armed = 0;
+/* image 22's bootstrap EXIT count, per task; reset when a pooled thread
+ * takes a new task (spu_channels_job_reset). */
+static SPU_TLS int     s_exit_seen = 0;
+void spu_channels_job_reset(void) { s_exit_seen = 0; s_spu_halt_armed = 0; }
 
 /* A non-local return replaces the old host call chain without changing
  * any architectural registers, local store, or pending guest work. */
@@ -1789,7 +1793,6 @@ void spu_spurs_taskset_syscall(spu_context* ctx)   /* non-static: also called by
      * it re-enter and spin (observed: 6x num=0 from link 0x26E18 once the task is
      * woken). Honour the first call, halt on the rest. Each task runs on its own
      * host thread, so a thread-local count is per task. */
-    static _Thread_local int s_exit_seen = 0;
     if (num == 0 && ctx->image_id == 22 && !getenv("YDKJ_CRI_EXIT_HALT")) {
         if (s_exit_seen++ == 0) { ctx->gpr[3]._u32[0] = 0; return; }   /* bootstrap */
         { static int _n = 0; if (_n++ < 8)

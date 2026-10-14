@@ -88,12 +88,12 @@ static double tl_now(void)
     LARGE_INTEGER t; ensure_qpc_init(); QueryPerformanceCounter(&t);
     return (double)t.QuadPart / (double)s_qpc_freq.QuadPart;
 }
-enum { TL_N = 16 };
+enum { TL_N = 20 };
 static double s_tl_t0[TL_N];          /* begin stamp; each slot has one writer thread */
 static double s_tl_acc[TL_N];         /* seconds this window */
 static u32    s_tl_cnt[TL_N];
 static const char* const s_tl_name[TL_N] = {
-    "drain", "fc-sleep", "present", "wait-render", "render", "gpu-wait", NULL, "fc-sleep-behind", "vtx-upload", "draw-calls", "fc-pump", "fc-ticks", "MAIN-join", "MAIN-evflag", "MAIN-lwmutex",
+    "drain", "fc-sleep", "present", "wait-render", "render", "gpu-wait", NULL, "fc-sleep-behind", "vtx-upload", "draw-calls", "fc-pump", "fc-ticks", NULL, NULL, "MAIN-spu-join", "MAIN-evflag", "MAIN-lwmutex",
 };
 void ps3_tl_begin(int ev) { if (tl_on() && ev >= 0 && ev < TL_N) s_tl_t0[ev] = tl_now(); }
 static int gcm_fifo_has_work(void);   /* with the FIFO walker below */

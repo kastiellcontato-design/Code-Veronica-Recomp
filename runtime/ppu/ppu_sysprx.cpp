@@ -276,6 +276,43 @@ static void* lwm_sem(uint32_t) { return nullptr; }
  * diagnostic code may set it around a suspect wait to uncap the [LWM-BLOCK]
  * logging during that window only (park hunts: gate on state, not counts). */
 volatile int g_nd_inpump = 0;
+
+/* PS3_LWM_STAT=1: where the guest's main thread (tid 1) waits on contended
+ * lwmutexes -- per (lock, call site): total wait, count, and the guest thread
+ * that held it. Reported every 5 s, busiest first. The call site is the
+ * guest lr at the lock call: look it up in Ghidra to see what is guarded. */
+#ifdef _WIN32
+static int lwm_stat_on(void) { static int v = -1; if (v < 0) { const char* e = getenv("PS3_LWM_STAT"); v = (e && *e && *e != '0') ? 1 : 0; } return v; }
+static struct { uint32_t lwm, lr, owner, n; long long us; } s_lwms[64];
+static long long s_lwms_t0 = 0;
+static void lwm_stat_add(uint32_t lwm, uint32_t lr, uint32_t owner, long long us)
+{
+    int f = -1;
+    for (int i = 0; i < 64; i++)
+        if (s_lwms[i].n && s_lwms[i].lwm == lwm && s_lwms[i].lr == lr) { f = i; break; }
+    if (f < 0) for (int i = 0; i < 64; i++) if (!s_lwms[i].n) { f = i; break; }
+    if (f >= 0) {
+        s_lwms[f].lwm = lwm; s_lwms[f].lr = lr; s_lwms[f].owner = owner;
+        s_lwms[f].n++; s_lwms[f].us += us;
+    }
+    long long now = lwm_now_us();
+    if (!s_lwms_t0) s_lwms_t0 = now;
+    if (now - s_lwms_t0 < 5000000) return;
+    double secs = (now - s_lwms_t0) / 1e6;
+    for (int r = 0; r < 6; r++) {
+        int b = -1;
+        for (int i = 0; i < 64; i++) if (s_lwms[i].n && (b < 0 || s_lwms[i].us > s_lwms[b].us)) b = i;
+        if (b < 0) break;
+        fprintf(stderr, "[LWM-STAT] main waited %.1f ms/s on lwm 0x%08X from lr 0x%08X"
+                        " (%u waits, avg %.0f us, last holder guest tid %u)\n",
+                s_lwms[b].us / 1000.0 / secs, s_lwms[b].lwm, s_lwms[b].lr, s_lwms[b].n,
+                (double)s_lwms[b].us / s_lwms[b].n, s_lwms[b].owner);
+        s_lwms[b].n = 0;
+    }
+    memset(s_lwms, 0, sizeof s_lwms);
+    s_lwms_t0 = now;
+}
+#endif
 static void sys_lwmutex_lock(ppu_context* ctx)
 {
     uint32_t lwm = (uint32_t)ctx->gpr[3];
@@ -313,7 +350,10 @@ static void sys_lwmutex_lock(ppu_context* ctx)
             if (timeout_us) { uint64_t m = (timeout_us + 999) / 1000; ms = m > 0xFFFFFFFEull ? 0xFFFFFFFEu : (DWORD)m; }
             ps3_tl_lwm_note(lwm, (unsigned)s->host_holder);
             ps3_tl_main_begin(16);
+            long long _st0 = (lwm_stat_on() && ctx->thread_id == 1) ? lwm_now_us() : 0;
+            uint32_t _sto = _st0 ? vm_read32(lwm + LWM_OWNER) : 0;
             int got = lwm_acquire(s, ms);
+            if (_st0) lwm_stat_add(lwm, (uint32_t)ctx->lr, _sto, lwm_now_us() - _st0);
             ps3_tl_main_end(16);
             if (!got) {           /* honor the timeout: ETIMEDOUT, no acquire */
                 if (lwm_trace()) fprintf(stderr, "[LWM-CONVOY] tid=%llu TIMED-OUT on lwm=0x%08X after %lldus (ETIMEDOUT, retry)\n",
