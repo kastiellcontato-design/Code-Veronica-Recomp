@@ -269,6 +269,8 @@ typedef struct {
                              * and a 2D variant of the same program are different
                              * pipelines and must not share a cache entry. */
     ID3D12PipelineState* pso;
+    u8 pending;             /* a shader worker is still building it */
+    u8 skip;                /* untranslatable program: drop its draws */
 } VPFPEntry;
 /* Guest-FP PSO cache. 16 entries thrashed badly: this title needs far more
  * distinct (fp, vs, blend, rt, cmask, ucode-hash) combinations than that in a
@@ -2789,140 +2791,254 @@ static void fp_index_rebuild(void)
     for (int i = 0; i < s_d3d.vp_fp_n; i++) fp_index_insert(i);
 }
 
-static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, int nrt,
-                                          DXGI_FORMAT rtfmt, int exp32, u32 cmask, u32 cull,
-                                          u32 cube_mask, const u8* snap)
+/* ---------------------------------------------------------------------------
+ * Pipeline library: PSOs persisted to shader_cache/pipelines.bin. With the
+ * bytecode already on disk, what is left of a first sighting is the driver
+ * building the pipeline (several ms each, dozens on entering an area). A
+ * stored pipeline loads instead. Keyed by a hash of the shader bytecode and
+ * every fixed-function field of the desc. PSO_LIBRARY=0 disables it.
+ * -------------------------------------------------------------------------*/
+static ID3D12PipelineLibrary* s_plib = NULL;
+static void* s_plib_blob = NULL;           /* must outlive s_plib */
+static SRWLOCK s_plib_lock = SRWLOCK_INIT;
+static volatile LONG s_plib_dirty = 0, s_plib_loaded = 0;
+static ULONGLONG s_plib_saved_at = 0;
+static int s_plib_state = 0;               /* 0 untried, 1 ready, -1 off */
+
+static void plib_init(void)
 {
-    s_fp_skip_draw = 0;
-    if (nrt < 1) nrt = 1; if (nrt > 4) nrt = 4;
-    if (rtfmt == 0) rtfmt = DXGI_FORMAT_R8G8B8A8_UNORM;
-    extern uint8_t* vm_base;
-    extern u32 cellGcmResolveOffset(u32);
-    if (!fp_addr || !vm_base) return NULL;
-    { static int _off=-1; if(_off<0)_off=getenv("FP_OFF")?1:0; if(_off) return NULL; }
-    /* Resolve the VS: the draw's cached per-VP blob, else the primary. */
-    ID3DBlob* vsb = NULL; u32 vs_hash = 0;
-    if (vs_idx >= 0 && vs_idx < s_d3d.vp_vs_n) {
-        vsb = s_d3d.vp_vs[vs_idx].vs; vs_hash = s_d3d.vp_vs[vs_idx].hash;
+    if (s_plib_state) return;
+    s_plib_state = -1;
+    { const char* e = getenv("PSO_LIBRARY"); if (e && e[0] == '0') return; }
+    ID3D12Device1* d1 = NULL;
+    if (FAILED(s_d3d.device->lpVtbl->QueryInterface(s_d3d.device, &IID_ID3D12Device1, (void**)&d1)) || !d1)
+        return;
+    CreateDirectoryA("shader_cache", NULL);
+    FILE* f = fopen("shader_cache/pipelines.bin", "rb");
+    size_t n = 0;
+    if (f) {
+        fseek(f, 0, SEEK_END); long sz = ftell(f); fseek(f, 0, SEEK_SET);
+        if (sz > 0 && (s_plib_blob = malloc((size_t)sz)) != NULL &&
+            fread(s_plib_blob, 1, (size_t)sz, f) == (size_t)sz) n = (size_t)sz;
+        fclose(f);
     }
-    if (!vsb) { vsb = s_d3d.vp_vs_blob; vs_idx = -1; }
-    if (!vsb) return NULL;
+    HRESULT hr = n ? d1->lpVtbl->CreatePipelineLibrary(d1, s_plib_blob, n,
+                                                        &IID_ID3D12PipelineLibrary, (void**)&s_plib)
+                   : E_FAIL;
+    if (FAILED(hr)) {   /* none yet, or written by another driver/GPU: start empty */
+        if (n) fprintf(stderr, "[PSOLIB] stored library rejected (0x%08lX), starting a new one%c", hr, 10);
+        free(s_plib_blob); s_plib_blob = NULL; n = 0;
+        hr = d1->lpVtbl->CreatePipelineLibrary(d1, NULL, 0, &IID_ID3D12PipelineLibrary, (void**)&s_plib);
+    }
+    d1->lpVtbl->Release(d1);
+    if (FAILED(hr) || !s_plib) { s_plib = NULL; return; }
+    s_plib_state = 1;
+    s_plib_saved_at = GetTickCount64();
+    fprintf(stderr, "[PSOLIB] pipeline library ready (%zu KB loaded)%c", n / 1024, 10);
+}
 
-    /* SET_SHADER_PROGRAM low bits = location+1 (same as textures): 1 = LOCAL
-     * (VRAM), 2 = MAIN (gcm/cube emits 0x00B90001 for its VRAM-resident FP). */
-    extern u32 cellGcmResolveLocated(int local, u32 offset);
-    u32 off = cellGcmResolveLocated((fp_addr & 0x3u) == 1, fp_addr & ~0x3u);
-    if (off == 0xFFFFFFFFu) return NULL;
-    /* The ucode as it was when the draw was recorded (see fp_snapshot). */
-    const u8* ucode = snap ? snap : vm_base + off;
-
-    /* Content hash: inline constants are patched in place per frame (wave's
-     * stamp), so identity is the BYTES, not the address. */
-    /* Hash the CODE, not the constants: with fp_k[] hoisted into the per-draw
-     * constant buffer the compiled shader is invariant under constant changes,
-     * so hashing them made the pipeline key move every draw. */
-    u32 uhash;
-    u32 snap_hdr[4] = { 0 };
-    if (snap) memcpy(snap_hdr, snap - 16, 16);
-    if (snap && snap_hdr[0] == FP_SNAP_MAGIC &&
-        !(getenv("FP_CONSTBUF") && getenv("FP_CONSTBUF")[0] == '0')) {
-        uhash = snap_hdr[1];            /* hashed once, when the draw was recorded */
-    } else {
-        u32 usz = rsx_fp_program_size(ucode, 4096);
-        if (usz == 0) usz = 64;
-        s_perf_pso_hashbytes += (int)usz;
-        if (getenv("FP_CONSTBUF") && getenv("FP_CONSTBUF")[0] == '0') {
-            uhash = 2166136261u;
-            const u8* up = ucode;
-            for (u32 i = 0; i < usz; i++) { uhash ^= up[i]; uhash *= 16777619u; }
-        } else {
-            uhash = rsx_fp_code_hash(ucode, 4096);
+static void plib_save(void)
+{
+    if (s_plib_state != 1 || !s_plib_dirty) return;
+    AcquireSRWLockExclusive(&s_plib_lock);
+    SIZE_T n = s_plib->lpVtbl->GetSerializedSize(s_plib);
+    void* buf = n ? malloc(n) : NULL;
+    HRESULT hr = buf ? s_plib->lpVtbl->Serialize(s_plib, buf, n) : E_FAIL;
+    InterlockedExchange(&s_plib_dirty, 0);
+    ReleaseSRWLockExclusive(&s_plib_lock);
+    if (SUCCEEDED(hr)) {
+        FILE* f = fopen("shader_cache/pipelines.bin.tmp", "wb");
+        if (f) {
+            int ok = fwrite(buf, 1, n, f) == n;
+            ok = (fclose(f) == 0) && ok;
+            if (!ok || !MoveFileExA("shader_cache/pipelines.bin.tmp", "shader_cache/pipelines.bin",
+                                    MOVEFILE_REPLACE_EXISTING))
+                DeleteFileA("shader_cache/pipelines.bin.tmp");
         }
     }
+    free(buf);
+    s_plib_saved_at = GetTickCount64();
+}
 
-    s_perf_pso_calls++;
-    /* Keyed by content, not address: Code Veronica streams its programs
-     * through a ring, so the same shader lands at a new address every frame
-     * and an address key recompiled it each time (PSO creation was 60-90%
-     * of the frame, 0.3-4 fps in gameplay). */
-    /* Hash index over the cache: the linear scan walked up to 4096 entries
-     * twice per draw (~4600 lookups a Code Veronica frame). */
-    {
-        VPFPEntry key;
-        memset(&key, 0, sizeof key);
-        key.vs_idx = vs_idx; key.vs_hash = vs_hash; key.gen = s_d3d.vp_gen;
-        key.blend = blend; key.nrt = nrt; key.rtfmt = (u32)rtfmt; key.exp32 = exp32;
-        key.ucode_hash = uhash; key.cmask = cmask; key.cull = cull; key.cube_mask = cube_mask;
-        int hit = fp_index_find(&key);
-        if (hit >= 0) return s_d3d.vp_fp[hit].pso;
-    }
-    s_perf_pso_miss++;      /* falls through to a full decompile + D3DCompile */
-    /* PSOMISSDBG=1: on a miss, name the key field that differs from an existing
-     * entry for the same program. "the cache misses" is not actionable; "it
-     * misses on ucode_hash" is. */
-    /* HASHDBG=1: how many DISTINCT ucode hashes each program produces. Inline
-     * constants are patched into the shader bytes, so a program whose constants
-     * animate yields a new hash -- and a new pipeline -- every time. */
-    { static int hd = -1;
-      if (hd < 0) { const char* e = getenv("HASHDBG"); hd = e ? atoi(e) : 0; }
-      if (hd) { static u32 fps[32]; static u32 cnt[32]; static int nf = 0;
-        int idx = -1;
-        for (int i = 0; i < nf; i++) if (fps[i] == fp_addr) idx = i;
-        if (idx < 0 && nf < 32) { idx = nf++; fps[idx] = fp_addr; cnt[idx] = 0; }
-        if (idx >= 0) { cnt[idx]++;
-          if ((cnt[idx] % 200) == 0)
-            fprintf(stderr, "[HASHDBG] fp=0x%X has produced %u distinct compiles%c",
-                    fp_addr, cnt[idx], 10); } } }
-    /* PSOMISSDBG=1: every miss (up to 400), with each key field that differs
-     * from the nearest cached entry of the same program, old -> new. A miss
-     * with no same-program entry is a first compile and says so. */
-    { static int md = -1;
-      if (md < 0) { const char* e = getenv("PSOMISSDBG"); md = e ? atoi(e) : 0; }
-      if (md) { static int n = 0;
-        VPFPEntry* best = NULL; int best_d = 99;
-        for (int i = 0; i < s_d3d.vp_fp_n; i++) {
-            VPFPEntry* q = &s_d3d.vp_fp[i];
-            if (q->fp_addr != fp_addr) continue;
-            int d = (q->vs_idx != vs_idx) + (q->vs_hash != vs_hash) + (q->gen != s_d3d.vp_gen) +
-                    (q->blend != blend) + (q->nrt != nrt) + (q->rtfmt != (u32)rtfmt) +
-                    (q->exp32 != exp32) + (q->ucode_hash != uhash) + (q->cmask != cmask) +
-                    (q->cull != cull) + (q->cube_mask != cube_mask);
-            if (d < best_d) { best_d = d; best = q; }
+/* Save at most every 10 s while new pipelines keep arriving: the game is
+ * usually closed with the window's X, so shutdown cannot be relied on. */
+static void plib_maybe_save(void)
+{
+    if (s_plib_state == 1 && s_plib_dirty && GetTickCount64() - s_plib_saved_at >= 10000)
+        plib_save();
+}
+
+static HRESULT pso_create_cached(const D3D12_GRAPHICS_PIPELINE_STATE_DESC* pd, ID3D12PipelineState** out)
+{
+    *out = NULL;
+    if (s_plib_state == 1) {
+        unsigned long long h = 14695981039346656037ull;
+#define PH(p, n) do { const u8* _q = (const u8*)(p); for (size_t _i = 0; _i < (size_t)(n); _i++) { h ^= _q[_i]; h *= 1099511628211ull; } } while (0)
+        PH(pd->VS.pShaderBytecode, pd->VS.BytecodeLength);
+        PH(pd->PS.pShaderBytecode, pd->PS.BytecodeLength);
+        PH(&pd->BlendState, sizeof pd->BlendState);
+        PH(&pd->SampleMask, sizeof pd->SampleMask);
+        PH(&pd->RasterizerState, sizeof pd->RasterizerState);
+        PH(&pd->DepthStencilState, sizeof pd->DepthStencilState);
+        PH(&pd->PrimitiveTopologyType, sizeof pd->PrimitiveTopologyType);
+        PH(&pd->NumRenderTargets, sizeof pd->NumRenderTargets);
+        PH(pd->RTVFormats, sizeof pd->RTVFormats);
+        PH(&pd->DSVFormat, sizeof pd->DSVFormat);
+        PH(&pd->InputLayout.NumElements, sizeof pd->InputLayout.NumElements);
+#undef PH
+        WCHAR name[40];
+        swprintf(name, 40, L"fp_%016llX", h);
+        AcquireSRWLockExclusive(&s_plib_lock);
+        HRESULT hr = s_plib->lpVtbl->LoadGraphicsPipeline(s_plib, name, pd,
+                                                           &IID_ID3D12PipelineState, (void**)out);
+        ReleaseSRWLockExclusive(&s_plib_lock);
+        if (SUCCEEDED(hr) && *out) { InterlockedIncrement(&s_plib_loaded); return hr; }
+        *out = NULL;
+        hr = s_d3d.device->lpVtbl->CreateGraphicsPipelineState(s_d3d.device, pd,
+                                                                &IID_ID3D12PipelineState, (void**)out);
+        if (SUCCEEDED(hr) && *out) {
+            AcquireSRWLockExclusive(&s_plib_lock);
+            if (SUCCEEDED(s_plib->lpVtbl->StorePipeline(s_plib, name, *out)))
+                InterlockedIncrement(&s_plib_dirty);
+            ReleaseSRWLockExclusive(&s_plib_lock);
         }
-        if (n++ < 400) {
-            if (!best) fprintf(stderr, "[PSOMISS] fp=0x%08X first compile (cache %d/%d)%c",
-                               fp_addr, s_d3d.vp_fp_n, VP_FP_CACHE, 10);
-            else {
-                char why[512]; int w = 0; why[0] = 0;
-#define PM(cond, fmt, a, b) if (cond && w < 440) w += snprintf(why + w, sizeof why - w, fmt, a, b)
-                PM(best->vs_idx != vs_idx,        " vs_idx %d->%d", best->vs_idx, vs_idx);
-                PM(best->vs_hash != vs_hash,      " vs_hash %08X->%08X", best->vs_hash, vs_hash);
-                PM(best->gen != s_d3d.vp_gen,     " gen %u->%u", (unsigned)best->gen, (unsigned)s_d3d.vp_gen);
-                PM(best->blend != blend,          " blend %08X->%08X", best->blend, blend);
-                PM(best->nrt != nrt,              " nrt %d->%d", best->nrt, nrt);
-                PM(best->rtfmt != (u32)rtfmt,     " rtfmt %u->%u", best->rtfmt, (u32)rtfmt);
-                PM(best->exp32 != exp32,          " exp32 %d->%d", best->exp32, exp32);
-                PM(best->ucode_hash != uhash,     " ucode %08X->%08X", best->ucode_hash, uhash);
-                PM(best->cmask != cmask,          " cmask %X->%X", best->cmask, cmask);
-                PM(best->cull != cull,            " cull %X->%X", best->cull, cull);
-                PM(best->cube_mask != cube_mask,  " cube %X->%X", best->cube_mask, cube_mask);
-#undef PM
-                fprintf(stderr, "[PSOMISS] fp=0x%08X differs:%s (cache %d/%d)%c",
-                        fp_addr, why, s_d3d.vp_fp_n, VP_FP_CACHE, 10);
-            }
-        } } }
-    /* CUBEKEYDBG=1: which (program, cube mask) pairs are being compiled. If one
-     * program shows several masks, the mask is unstable and is the reason the
-     * pipeline cache thrashes with cube support on. */
-    { static int ck = -1;
-      if (ck < 0) { const char* e = getenv("CUBEKEYDBG"); ck = e ? atoi(e) : 0; }
-      if (ck) { static u32 seen[64][2]; static int ns = 0; int known = 0;
-        for (int i = 0; i < ns; i++)
-            if (seen[i][0] == fp_addr && seen[i][1] == cube_mask) known = 1;
-        if (!known && ns < 64) { seen[ns][0] = fp_addr; seen[ns][1] = cube_mask; ns++;
-            fprintf(stderr, "[CUBEKEY] fp=0x%X cube_mask=0x%X (distinct pairs=%d)%c",
-                    fp_addr, cube_mask, ns, 10); } } }
-    static char hlsl[32768];
+        return hr;
+    }
+    return s_d3d.device->lpVtbl->CreateGraphicsPipelineState(s_d3d.device, pd,
+                                                              &IID_ID3D12PipelineState, (void**)out);
+}
+
+/* ---------------------------------------------------------------------------
+ * Background pipeline builds. A miss used to decompile, compile and create
+ * the PSO inline on the render thread -- the stutter on entering an area.
+ * Now the key is cached as pending, the draws that need it are skipped for
+ * the few frames the build takes (the object pops in, as with RPCS3's async
+ * shaders), and worker threads do the work. FP_ASYNC=0 builds inline;
+ * FP_ASYNC_THREADS=<n> sets the worker count (default 2).
+ * -------------------------------------------------------------------------*/
+#define FP_HLSL_CAP 32768
+enum { FPB_OK = 0, FPB_FAIL = 1, FPB_SKIP = 2 };
+typedef struct FpJob {
+    struct FpJob* next;
+    VPFPEntry key;              /* full cache key */
+    ID3DBlob* vsb;              /* AddRef'd: the VS cache may evict its slot */
+    u32 off;
+    int status;
+    ID3D12PipelineState* pso;   /* result */
+    u8 ucode[4096];             /* the draw's program; its arena is recycled */
+    char hlsl[FP_HLSL_CAP];
+} FpJob;
+
+static volatile LONG s_fp_async_skips = 0, s_fp_async_built = 0;
+static SRWLOCK s_fpq_lock = SRWLOCK_INIT;
+static CONDITION_VARIABLE s_fpq_cv = CONDITION_VARIABLE_INIT;
+static FpJob* s_fpq_head = NULL; static FpJob* s_fpq_tail = NULL;   /* to build */
+static FpJob* s_fpq_done = NULL;                                     /* built */
+static int s_fp_async = -1;
+
+static int fp_build_pso(FpJob* j);
+
+static DWORD WINAPI fp_worker(LPVOID p)
+{
+    (void)p;
+    for (;;) {
+        AcquireSRWLockExclusive(&s_fpq_lock);
+        while (!s_fpq_head) SleepConditionVariableSRW(&s_fpq_cv, &s_fpq_lock, INFINITE, 0);
+        FpJob* j = s_fpq_head;
+        s_fpq_head = j->next; if (!s_fpq_head) s_fpq_tail = NULL;
+        ReleaseSRWLockExclusive(&s_fpq_lock);
+        j->status = fp_build_pso(j);
+        InterlockedIncrement(&s_fp_async_built);
+        AcquireSRWLockExclusive(&s_fpq_lock);
+        j->next = s_fpq_done; s_fpq_done = j;
+        ReleaseSRWLockExclusive(&s_fpq_lock);
+    }
+}
+
+static int fp_async_on(void)
+{
+    if (s_fp_async >= 0) return s_fp_async;
+    s_fp_async = 0;
+    { const char* e = getenv("FP_ASYNC"); if (e && e[0] == '0') return 0; }
+    int nt = 2;
+    { const char* e = getenv("FP_ASYNC_THREADS"); if (e && atoi(e) > 0) nt = atoi(e); }
+    if (nt > 8) nt = 8;
+    int started = 0;
+    for (int i = 0; i < nt; i++) {
+        HANDLE th = CreateThread(NULL, 0, fp_worker, NULL, 0, NULL);
+        if (!th) continue;
+        SetThreadPriority(th, THREAD_PRIORITY_BELOW_NORMAL);
+        ps3_host_thread_name(th, "shader:worker %d", i);
+        CloseHandle(th);
+        started++;
+    }
+    s_fp_async = started > 0;
+    if (started) fprintf(stderr, "[FP] background pipeline builds on (%d workers)%c", started, 10);
+    return s_fp_async;
+}
+
+static void fp_async_submit(FpJob* j)
+{
+    AcquireSRWLockExclusive(&s_fpq_lock);
+    j->next = NULL;
+    if (s_fpq_tail) s_fpq_tail->next = j; else s_fpq_head = j;
+    s_fpq_tail = j;
+    ReleaseSRWLockExclusive(&s_fpq_lock);
+    WakeConditionVariable(&s_fpq_cv);
+}
+
+/* Cache insert (evicting the oldest when full). pending: a worker is
+ * building it; skip: the program cannot be translated, drop its draws. */
+static void fp_cache_insert(const VPFPEntry* key, ID3D12PipelineState* pso, int pending, int skip)
+{
+    if (s_d3d.vp_fp_n >= VP_FP_CACHE) {
+        if (s_d3d.vp_fp[0].pso) s_d3d.vp_fp[0].pso->lpVtbl->Release(s_d3d.vp_fp[0].pso);
+        memmove(&s_d3d.vp_fp[0], &s_d3d.vp_fp[1], sizeof(VPFPEntry) * (VP_FP_CACHE - 1));
+        s_d3d.vp_fp_n = VP_FP_CACHE - 1;
+        fp_index_rebuild();   /* every entry moved down one slot */
+    }
+    VPFPEntry* ne = &s_d3d.vp_fp[s_d3d.vp_fp_n];
+    *ne = *key;
+    ne->pso = pso; ne->pending = (u8)pending; ne->skip = (u8)skip;
+    fp_index_insert(s_d3d.vp_fp_n);
+    s_d3d.vp_fp_n++;
+}
+
+/* Render thread, frame start: hand finished builds to their cache entries. */
+static void fp_async_drain(void)
+{
+    if (s_fp_async <= 0) return;
+    AcquireSRWLockExclusive(&s_fpq_lock);
+    FpJob* j = s_fpq_done; s_fpq_done = NULL;
+    ReleaseSRWLockExclusive(&s_fpq_lock);
+    while (j) {
+        FpJob* nx = j->next;
+        int idx = fp_index_find(&j->key);
+        if (idx >= 0 && s_d3d.vp_fp[idx].pending) {
+            VPFPEntry* e = &s_d3d.vp_fp[idx];
+            e->pso = j->pso; e->pending = 0; e->skip = (j->status == FPB_SKIP);
+        } else if (j->pso) {
+            j->pso->lpVtbl->Release(j->pso);   /* evicted while building */
+        }
+        j->vsb->lpVtbl->Release(j->vsb);
+        free(j);
+        j = nx;
+    }
+}
+
+/* Build one guest-FP pipeline: decompile, compile (disk-cached), create the
+ * PSO (pipeline-library cached). Touches no cache state, so it runs on the
+ * shader workers as well as inline. */
+static int fp_build_pso(FpJob* j)
+{
+    const u32 fp_addr = j->key.fp_addr; const int vs_idx = j->key.vs_idx;
+    const u32 uhash = j->key.ucode_hash; const u32 blend = j->key.blend;
+    const int nrt = j->key.nrt; const DXGI_FORMAT rtfmt = (DXGI_FORMAT)j->key.rtfmt;
+    const int exp32 = j->key.exp32; u32 cmask = j->key.cmask;
+    const u32 cull = j->key.cull; const u32 cube_mask = j->key.cube_mask;
+    const u8* ucode = j->ucode; const u32 off = j->off; ID3DBlob* vsb = j->vsb;
+    (void)off; (void)uhash; (void)vs_idx;
+    char* hlsl = j->hlsl;
     /* fp_exp32 snapshots SET_SHADER_CONTROL bit 6 for this draw. Convert
      * the boolean back to the control bit expected by the decompiler.
      * AUTO mistakes fp32 temporaries for exports when final color is h0. */
@@ -2963,7 +3079,7 @@ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, in
      * with the first one's (zero) lights -- the whole scene rendered black. */
     u32 nk = 0;
     int n = rsx_fp_decompile_buffered_ex(ucode, 4096, exp32 ? 0x40u : 0u, 0u,
-                                         hlsl + k_pre, sizeof(hlsl) - k_pre, &nk);
+                                         hlsl + k_pre, FP_HLSL_CAP - k_pre, &nk);
     if (n > 0 && nk <= FP_MAX_K) {
         char* body = hlsl + k_pre;
         char* cb = strstr(body, "cbuffer PSConstants");
@@ -2977,9 +3093,9 @@ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, in
         }
         *w = '\0';
     } else {
-        n = rsx_fp_decompile(ucode, 4096, exp32 ? 0x40u : 0u, hlsl + k_pre, sizeof(hlsl) - k_pre);
+        n = rsx_fp_decompile(ucode, 4096, exp32 ? 0x40u : 0u, hlsl + k_pre, FP_HLSL_CAP - k_pre);
     }
-    if (n <= 0) { static int _e=0; if(_e++<16) printf("[FP] decompile fail (fp=0x%08X)\n", fp_addr); return NULL; }
+    if (n <= 0) { static int _e=0; if(_e++<16) printf("[FP] decompile fail (fp=0x%08X)\n", fp_addr); return FPB_FAIL; }
     /* An opcode the decompiler does not know produces a program that writes
      * nothing and exports zero. Code Veronica's full-screen grade pass
      * (draw ~1465, rewrites the scene RT in place) came out that way and
@@ -2996,7 +3112,7 @@ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, in
             const char* t = strstr(hlsl + k_pre, "/* TODO");
             if (t) { const char* e = strchr(t, 10); fprintf(stderr, "[FP]   %.*s%c", e ? (int)(e - t) : 60, t, 10); }
         }
-        if (!getenv("FP_KEEP_UNHANDLED")) { s_fp_skip_draw = 1; return NULL; }
+        if (!getenv("FP_KEEP_UNHANDLED")) return FPB_SKIP;
     }
     /* A program that already declares b1 keeps pass-through coordinates. */
     if (strstr(hlsl + k_pre, "register(b1)")) memmove(hlsl, hlsl + k_pre, strlen(hlsl + k_pre) + 1);
@@ -3008,9 +3124,9 @@ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, in
      * (mean 5.4 -> 0.4) and the LUT that follows turned it into a negative. */
 #define RSX_SRGB_FN "float3 rsx_srgb(float3 c) { c = saturate(c); return c <= 0.0031308 ? c * 12.92 : 1.055 * pow(c, 1.0 / 2.4) - 0.055; } "
     if ((cull & 0x200u) && strstr(hlsl, "float4 main(PSInput input) : SV_TARGET")) {
-        hlsl_replace_all(hlsl, sizeof hlsl, "float4 main(PSInput input) : SV_TARGET",
+        hlsl_replace_all(hlsl, FP_HLSL_CAP, "float4 main(PSInput input) : SV_TARGET",
             RSX_SRGB_FN "float4 main(PSInput input) : SV_TARGET");
-        hlsl_replace_all(hlsl, sizeof hlsl, "return (_o == _o) ? _o : (float4)0;",
+        hlsl_replace_all(hlsl, FP_HLSL_CAP, "return (_o == _o) ? _o : (float4)0;",
             "_o = (_o == _o) ? _o : (float4)0; _o.rgb = rsx_srgb(_o.rgb); return _o;");
     } else if ((cull & 0x200u) && strstr(hlsl, "PSOutput main(PSInput input)")) {
         char enc[256] = "";
@@ -3022,9 +3138,9 @@ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, in
             strncat(enc, line, sizeof enc - strlen(enc) - 1);
         }
         strncat(enc, "return _out;", sizeof enc - strlen(enc) - 1);
-        hlsl_replace_all(hlsl, sizeof hlsl, "PSOutput main(PSInput input)",
+        hlsl_replace_all(hlsl, FP_HLSL_CAP, "PSOutput main(PSInput input)",
             RSX_SRGB_FN "PSOutput main(PSInput input)");
-        hlsl_replace_all(hlsl, sizeof hlsl, "return _out;", enc);
+        hlsl_replace_all(hlsl, FP_HLSL_CAP, "return _out;", enc);
     }
 #undef RSX_SRGB_FN
     if (getenv("CV_VIDEO_CAPTURE")) { char pn[100];snprintf(pn,sizeof pn,"ps_%08X_%08X.hlsl",fp_addr,uhash);FILE* f=fopen(pn,"w");if(f){fprintf(f,"/* vs_idx=%d exports32=%d */\n%s",vs_idx,exp32,hlsl);fclose(f);} }
@@ -3033,7 +3149,7 @@ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, in
         char* ret = strstr(hlsl, "return (_o == _o) ? _o : (float4)0;");
         if (ret) {
             const char* mode=getenv("CV_COMPOSITE_PROBE");
-            snprintf(ret,sizeof(hlsl)-(size_t)(ret-hlsl),
+            snprintf(ret,FP_HLSL_CAP-(size_t)(ret-hlsl),
                 "%s\n}\n",atoi(mode)==1 ?
                 "return float4(input.tc0.xyz,1.0);" :
                 "return float4(rsx_tex[0].Sample(rsx_samp[0],input.tc1.xy).rgb,1.0);");
@@ -3085,7 +3201,7 @@ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, in
                   static const char rep[] = "_po.c0 = (1.0).xxxx";
                   size_t oldlen = (size_t)(semi - rp), newlen = sizeof(rep) - 1;
                   size_t tail = strlen(semi) + 1;
-                  if ((rp - hlsl) + newlen + tail < sizeof(hlsl)) {
+                  if ((rp - hlsl) + newlen + tail < FP_HLSL_CAP) {
                       memmove(rp + newlen, semi, tail);
                       memcpy(rp, rep, newlen);
                   }
@@ -3110,7 +3226,7 @@ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, in
           if (rp) {
               const char* ins = "discard; ";
               size_t nl = strlen(ins), tail = strlen(rp) + 1;
-              if ((size_t)(rp - hlsl) + nl + tail < sizeof(hlsl)) {
+              if ((size_t)(rp - hlsl) + nl + tail < FP_HLSL_CAP) {
                   memmove(rp + nl, rp, tail);
                   memcpy(rp, ins, nl);
                   fprintf(stderr, "[FPKILL] fp=0x%X discards%c", fp_addr, 10);
@@ -3126,7 +3242,7 @@ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, in
                 char rep[256];
                 snprintf(rep, sizeof rep, "_po.c0 = float4((%s).xyz, 1.0)", sh);
                 size_t newlen = strlen(rep), tail = strlen(semi) + 1;
-                if ((size_t)(rp - hlsl) + newlen + tail < sizeof(hlsl)) {
+                if ((size_t)(rp - hlsl) + newlen + tail < FP_HLSL_CAP) {
                     memmove(rp + newlen, semi, tail);
                     memcpy(rp, rep, newlen);
                     fprintf(stderr, "[FPSHOW] fp=0x%X output replaced with %s%c",
@@ -3144,13 +3260,13 @@ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, in
             char f1[64], r1[64], f2[64], r2[64];
             snprintf(f1, sizeof f1, "Texture2D    rsx_tex%d", _u);
             snprintf(r1, sizeof r1, "TextureCube  rsx_tex%d", _u);
-            hlsl_replace_all(hlsl, sizeof hlsl, f1, r1);
+            hlsl_replace_all(hlsl, FP_HLSL_CAP, f1, r1);
             snprintf(f1, sizeof f1, "Texture2D rsx_tex%d", _u);
             snprintf(r1, sizeof r1, "TextureCube rsx_tex%d", _u);
-            hlsl_replace_all(hlsl, sizeof hlsl, f1, r1);
+            hlsl_replace_all(hlsl, FP_HLSL_CAP, f1, r1);
             snprintf(f2, sizeof f2, ".xy * rsx_texscale[%d].xy", _u);
             snprintf(r2, sizeof r2, ".xyz");
-            hlsl_replace_all(hlsl, sizeof hlsl, f2, r2);
+            hlsl_replace_all(hlsl, FP_HLSL_CAP, f2, r2);
         }
         { static int _n = 0; if (_n++ < 4)
             fprintf(stderr, "[CUBE] fp=0x%X compiled with cube units mask 0x%X%c",
@@ -3180,7 +3296,7 @@ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, in
                 char rep[128];
                 snprintf(rep, sizeof rep, "_po.c0 = float4(%.3f,%.3f,%.3f,1.0)", cr, cg, cb);
                 size_t newlen = strlen(rep), tail = strlen(semi) + 1;
-                if ((size_t)(rp - hlsl) + newlen + tail < sizeof(hlsl)) {
+                if ((size_t)(rp - hlsl) + newlen + tail < FP_HLSL_CAP) {
                     memmove(rp + newlen, semi, tail);
                     memcpy(rp, rep, newlen);
                     fprintf(stderr, "[FPID] fp=0x%X -> rgb(%.0f,%.0f,%.0f)%c",
@@ -3232,7 +3348,7 @@ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, in
                 size_t newlen = strlen(rep), tail = strlen(semi) + 1;
                 fprintf(stderr, "[FP_TEX] program 0x%X rewritten to sample unit %d%c",
                         fp_addr, _un, 10);
-                if ((size_t)(rp - hlsl) + newlen + tail < sizeof(hlsl)) {
+                if ((size_t)(rp - hlsl) + newlen + tail < FP_HLSL_CAP) {
                     memmove(rp + newlen, semi, tail);
                     memcpy(rp, rep, newlen);
                 }
@@ -3256,7 +3372,7 @@ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, in
                     ? "return float4(1.0, 0.0, 1.0, 1.0)"
                     : "_po.c0 = float4(1.0, 0.0, 1.0, 1.0)";
                 size_t newlen = strlen(rep), tail = strlen(semi) + 1;
-                if ((size_t)(rp - hlsl) + newlen + tail < sizeof hlsl) {
+                if ((size_t)(rp - hlsl) + newlen + tail < FP_HLSL_CAP) {
                     memmove(rp + newlen, semi, tail);
                     memcpy(rp, rep, newlen);
                     fprintf(stderr, "[FPSOLID] program 0x%X output forced magenta%c",
@@ -3286,25 +3402,7 @@ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, in
                                e ? (const char*)e->lpVtbl->GetBufferPointer(e) : "?", hlsl);
                        fclose(f); _dumped++; } } }
         if (e) e->lpVtbl->Release(e);
-        /* Negative cache: remember the failure under the full key, or every
-         * draw using this program recompiles it. Code Veronica's lighter
-         * cutscene hit ~225 failing compiles per 20 frames (0.3 fps). The
-         * draw falls back exactly as before (NULL pipeline). */
-        if (s_d3d.vp_fp_n >= VP_FP_CACHE) {
-            if (s_d3d.vp_fp[0].pso) s_d3d.vp_fp[0].pso->lpVtbl->Release(s_d3d.vp_fp[0].pso);
-            memmove(&s_d3d.vp_fp[0], &s_d3d.vp_fp[1], sizeof(VPFPEntry) * (VP_FP_CACHE - 1));
-            s_d3d.vp_fp_n = VP_FP_CACHE - 1;
-            fp_index_rebuild();
-        }
-        { VPFPEntry* ne = &s_d3d.vp_fp[s_d3d.vp_fp_n];
-          memset(ne, 0, sizeof *ne);
-          ne->fp_addr = fp_addr; ne->vs_idx = vs_idx; ne->vs_hash = vs_hash; ne->gen = s_d3d.vp_gen;
-          ne->blend = blend; ne->nrt = nrt; ne->rtfmt = (u32)rtfmt; ne->exp32 = exp32;
-          ne->ucode_hash = uhash; ne->cmask = cmask; ne->cull = cull; ne->cube_mask = cube_mask;
-          ne->pso = NULL;
-          fp_index_insert(s_d3d.vp_fp_n);
-          s_d3d.vp_fp_n++; }
-        return NULL;
+        return FPB_FAIL;   /* cached as a failure by the caller */
     }
     if (e) e->lpVtbl->Release(e);
 
@@ -3390,38 +3488,185 @@ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, in
     pd.SampleDesc.Count = 1;
 
     ID3D12PipelineState* pso = NULL;
-    hr = s_d3d.device->lpVtbl->CreateGraphicsPipelineState(
-        s_d3d.device, &pd, &IID_ID3D12PipelineState, (void**)&pso);
+    hr = pso_create_cached(&pd, &pso);
     pb->lpVtbl->Release(pb);
     if (FAILED(hr)) {
         static int _e3=0; if (_e3++<16) printf("[FP] PSO FAIL (fp=0x%08X, 0x%08lX)\n", fp_addr, hr);
         if (hr == DXGI_ERROR_DEVICE_REMOVED) dred_report("fragment PSO creation");
-        return NULL;
+        return FPB_FAIL;
     }
     { static int _ok=0; if (_ok++<32) printf("[FP] guest FP pipeline ready (fp=0x%08X)\n", fp_addr); }
+    j->pso = pso;
+    return FPB_OK;
+}
 
-    /* insert (evict oldest when full) */
-    if (s_d3d.vp_fp_n >= VP_FP_CACHE) {
-        if (s_d3d.vp_fp[0].pso) s_d3d.vp_fp[0].pso->lpVtbl->Release(s_d3d.vp_fp[0].pso);
-        memmove(&s_d3d.vp_fp[0], &s_d3d.vp_fp[1], sizeof(VPFPEntry) * (VP_FP_CACHE - 1));
-        s_d3d.vp_fp_n = VP_FP_CACHE - 1;
-        fp_index_rebuild();   /* every entry moved down one slot */
+static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, int nrt,
+                                          DXGI_FORMAT rtfmt, int exp32, u32 cmask, u32 cull,
+                                          u32 cube_mask, const u8* snap)
+{
+    s_fp_skip_draw = 0;
+    if (nrt < 1) nrt = 1; if (nrt > 4) nrt = 4;
+    if (rtfmt == 0) rtfmt = DXGI_FORMAT_R8G8B8A8_UNORM;
+    extern uint8_t* vm_base;
+    extern u32 cellGcmResolveOffset(u32);
+    if (!fp_addr || !vm_base) return NULL;
+    { static int _off=-1; if(_off<0)_off=getenv("FP_OFF")?1:0; if(_off) return NULL; }
+    /* Resolve the VS: the draw's cached per-VP blob, else the primary. */
+    ID3DBlob* vsb = NULL; u32 vs_hash = 0;
+    if (vs_idx >= 0 && vs_idx < s_d3d.vp_vs_n) {
+        vsb = s_d3d.vp_vs[vs_idx].vs; vs_hash = s_d3d.vp_vs[vs_idx].hash;
     }
-    s_d3d.vp_fp[s_d3d.vp_fp_n].fp_addr = fp_addr;
-    s_d3d.vp_fp[s_d3d.vp_fp_n].vs_idx  = vs_idx;
-    s_d3d.vp_fp[s_d3d.vp_fp_n].vs_hash = vs_hash;
-    s_d3d.vp_fp[s_d3d.vp_fp_n].gen     = s_d3d.vp_gen;
-    s_d3d.vp_fp[s_d3d.vp_fp_n].blend   = blend;
-    s_d3d.vp_fp[s_d3d.vp_fp_n].nrt     = nrt;
-    s_d3d.vp_fp[s_d3d.vp_fp_n].rtfmt   = (u32)rtfmt;
-    s_d3d.vp_fp[s_d3d.vp_fp_n].exp32   = exp32;
-    s_d3d.vp_fp[s_d3d.vp_fp_n].ucode_hash = uhash;
-    s_d3d.vp_fp[s_d3d.vp_fp_n].cmask   = cmask;
-    s_d3d.vp_fp[s_d3d.vp_fp_n].cull    = cull;
-    s_d3d.vp_fp[s_d3d.vp_fp_n].cube_mask = cube_mask;
-    s_d3d.vp_fp[s_d3d.vp_fp_n].pso     = pso;
-    fp_index_insert(s_d3d.vp_fp_n);
-    s_d3d.vp_fp_n++;
+    if (!vsb) { vsb = s_d3d.vp_vs_blob; vs_idx = -1; }
+    if (!vsb) return NULL;
+
+    /* SET_SHADER_PROGRAM low bits = location+1 (same as textures): 1 = LOCAL
+     * (VRAM), 2 = MAIN (gcm/cube emits 0x00B90001 for its VRAM-resident FP). */
+    extern u32 cellGcmResolveLocated(int local, u32 offset);
+    u32 off = cellGcmResolveLocated((fp_addr & 0x3u) == 1, fp_addr & ~0x3u);
+    if (off == 0xFFFFFFFFu) return NULL;
+    /* The ucode as it was when the draw was recorded (see fp_snapshot). */
+    const u8* ucode = snap ? snap : vm_base + off;
+
+    /* Content hash: inline constants are patched in place per frame (wave's
+     * stamp), so identity is the BYTES, not the address. */
+    /* Hash the CODE, not the constants: with fp_k[] hoisted into the per-draw
+     * constant buffer the compiled shader is invariant under constant changes,
+     * so hashing them made the pipeline key move every draw. */
+    u32 uhash;
+    u32 snap_hdr[4] = { 0 };
+    if (snap) memcpy(snap_hdr, snap - 16, 16);
+    if (snap && snap_hdr[0] == FP_SNAP_MAGIC &&
+        !(getenv("FP_CONSTBUF") && getenv("FP_CONSTBUF")[0] == '0')) {
+        uhash = snap_hdr[1];            /* hashed once, when the draw was recorded */
+    } else {
+        u32 usz = rsx_fp_program_size(ucode, 4096);
+        if (usz == 0) usz = 64;
+        s_perf_pso_hashbytes += (int)usz;
+        if (getenv("FP_CONSTBUF") && getenv("FP_CONSTBUF")[0] == '0') {
+            uhash = 2166136261u;
+            const u8* up = ucode;
+            for (u32 i = 0; i < usz; i++) { uhash ^= up[i]; uhash *= 16777619u; }
+        } else {
+            uhash = rsx_fp_code_hash(ucode, 4096);
+        }
+    }
+
+    s_perf_pso_calls++;
+    /* Keyed by content, not address: Code Veronica streams its programs
+     * through a ring, so the same shader lands at a new address every frame
+     * and an address key recompiled it each time (PSO creation was 60-90%
+     * of the frame, 0.3-4 fps in gameplay). */
+    /* Hash index over the cache: the linear scan walked up to 4096 entries
+     * twice per draw (~4600 lookups a Code Veronica frame). */
+    {
+        VPFPEntry key;
+        memset(&key, 0, sizeof key);
+        key.vs_idx = vs_idx; key.vs_hash = vs_hash; key.gen = s_d3d.vp_gen;
+        key.blend = blend; key.nrt = nrt; key.rtfmt = (u32)rtfmt; key.exp32 = exp32;
+        key.ucode_hash = uhash; key.cmask = cmask; key.cull = cull; key.cube_mask = cube_mask;
+        int hit = fp_index_find(&key);
+        if (hit >= 0) {
+            const VPFPEntry* he = &s_d3d.vp_fp[hit];
+            if (he->pending) { s_fp_skip_draw = 1; InterlockedIncrement(&s_fp_async_skips); }
+            else if (he->skip) s_fp_skip_draw = 1;
+            return he->pso;
+        }
+    }
+    s_perf_pso_miss++;      /* falls through to a full decompile + D3DCompile */
+    /* PSOMISSDBG=1: on a miss, name the key field that differs from an existing
+     * entry for the same program. "the cache misses" is not actionable; "it
+     * misses on ucode_hash" is. */
+    /* HASHDBG=1: how many DISTINCT ucode hashes each program produces. Inline
+     * constants are patched into the shader bytes, so a program whose constants
+     * animate yields a new hash -- and a new pipeline -- every time. */
+    { static int hd = -1;
+      if (hd < 0) { const char* e = getenv("HASHDBG"); hd = e ? atoi(e) : 0; }
+      if (hd) { static u32 fps[32]; static u32 cnt[32]; static int nf = 0;
+        int idx = -1;
+        for (int i = 0; i < nf; i++) if (fps[i] == fp_addr) idx = i;
+        if (idx < 0 && nf < 32) { idx = nf++; fps[idx] = fp_addr; cnt[idx] = 0; }
+        if (idx >= 0) { cnt[idx]++;
+          if ((cnt[idx] % 200) == 0)
+            fprintf(stderr, "[HASHDBG] fp=0x%X has produced %u distinct compiles%c",
+                    fp_addr, cnt[idx], 10); } } }
+    /* PSOMISSDBG=1: every miss (up to 400), with each key field that differs
+     * from the nearest cached entry of the same program, old -> new. A miss
+     * with no same-program entry is a first compile and says so. */
+    { static int md = -1;
+      if (md < 0) { const char* e = getenv("PSOMISSDBG"); md = e ? atoi(e) : 0; }
+      if (md) { static int n = 0;
+        VPFPEntry* best = NULL; int best_d = 99;
+        for (int i = 0; i < s_d3d.vp_fp_n; i++) {
+            VPFPEntry* q = &s_d3d.vp_fp[i];
+            if (q->fp_addr != fp_addr) continue;
+            int d = (q->vs_idx != vs_idx) + (q->vs_hash != vs_hash) + (q->gen != s_d3d.vp_gen) +
+                    (q->blend != blend) + (q->nrt != nrt) + (q->rtfmt != (u32)rtfmt) +
+                    (q->exp32 != exp32) + (q->ucode_hash != uhash) + (q->cmask != cmask) +
+                    (q->cull != cull) + (q->cube_mask != cube_mask);
+            if (d < best_d) { best_d = d; best = q; }
+        }
+        if (n++ < 400) {
+            if (!best) fprintf(stderr, "[PSOMISS] fp=0x%08X first compile (cache %d/%d)%c",
+                               fp_addr, s_d3d.vp_fp_n, VP_FP_CACHE, 10);
+            else {
+                char why[512]; int w = 0; why[0] = 0;
+#define PM(cond, fmt, a, b) if (cond && w < 440) w += snprintf(why + w, sizeof why - w, fmt, a, b)
+                PM(best->vs_idx != vs_idx,        " vs_idx %d->%d", best->vs_idx, vs_idx);
+                PM(best->vs_hash != vs_hash,      " vs_hash %08X->%08X", best->vs_hash, vs_hash);
+                PM(best->gen != s_d3d.vp_gen,     " gen %u->%u", (unsigned)best->gen, (unsigned)s_d3d.vp_gen);
+                PM(best->blend != blend,          " blend %08X->%08X", best->blend, blend);
+                PM(best->nrt != nrt,              " nrt %d->%d", best->nrt, nrt);
+                PM(best->rtfmt != (u32)rtfmt,     " rtfmt %u->%u", best->rtfmt, (u32)rtfmt);
+                PM(best->exp32 != exp32,          " exp32 %d->%d", best->exp32, exp32);
+                PM(best->ucode_hash != uhash,     " ucode %08X->%08X", best->ucode_hash, uhash);
+                PM(best->cmask != cmask,          " cmask %X->%X", best->cmask, cmask);
+                PM(best->cull != cull,            " cull %X->%X", best->cull, cull);
+                PM(best->cube_mask != cube_mask,  " cube %X->%X", best->cube_mask, cube_mask);
+#undef PM
+                fprintf(stderr, "[PSOMISS] fp=0x%08X differs:%s (cache %d/%d)%c",
+                        fp_addr, why, s_d3d.vp_fp_n, VP_FP_CACHE, 10);
+            }
+        } } }
+    /* CUBEKEYDBG=1: which (program, cube mask) pairs are being compiled. If one
+     * program shows several masks, the mask is unstable and is the reason the
+     * pipeline cache thrashes with cube support on. */
+    { static int ck = -1;
+      if (ck < 0) { const char* e = getenv("CUBEKEYDBG"); ck = e ? atoi(e) : 0; }
+      if (ck) { static u32 seen[64][2]; static int ns = 0; int known = 0;
+        for (int i = 0; i < ns; i++)
+            if (seen[i][0] == fp_addr && seen[i][1] == cube_mask) known = 1;
+        if (!known && ns < 64) { seen[ns][0] = fp_addr; seen[ns][1] = cube_mask; ns++;
+            fprintf(stderr, "[CUBEKEY] fp=0x%X cube_mask=0x%X (distinct pairs=%d)%c",
+                    fp_addr, cube_mask, ns, 10); } } }
+    VPFPEntry key;
+    memset(&key, 0, sizeof key);
+    key.fp_addr = fp_addr; key.vs_idx = vs_idx; key.vs_hash = vs_hash; key.gen = s_d3d.vp_gen;
+    key.blend = blend; key.nrt = nrt; key.rtfmt = (u32)rtfmt; key.exp32 = exp32;
+    key.ucode_hash = uhash; key.cmask = cmask; key.cull = cull; key.cube_mask = cube_mask;
+    FpJob* j = (FpJob*)malloc(sizeof *j);
+    if (!j) return NULL;
+    j->next = NULL; j->key = key; j->off = off; j->pso = NULL;
+    /* Only the program itself: the snapshot arena may end right after it. */
+    { u32 psz = rsx_fp_program_size(ucode, 4096);
+      if (psz == 0 || psz > 4096) psz = 4096;
+      memcpy(j->ucode, ucode, psz);
+      memset(j->ucode + psz, 0, 4096 - psz); }
+    j->vsb = vsb; vsb->lpVtbl->AddRef(vsb);
+    /* Background build: mark the key pending, skip this draw, and let a
+     * worker build it. The finished pipeline is picked up by fp_async_drain
+     * at the start of a later frame. */
+    if (fp_async_on()) {
+        fp_cache_insert(&key, NULL, 1, 0);
+        fp_async_submit(j);
+        s_fp_skip_draw = 1;
+        InterlockedIncrement(&s_fp_async_skips);
+        return NULL;
+    }
+    int st = fp_build_pso(j);
+    ID3D12PipelineState* pso = j->pso;
+    j->vsb->lpVtbl->Release(j->vsb); free(j);
+    fp_cache_insert(&key, pso, 0, st == FPB_SKIP);
+    if (st == FPB_SKIP) s_fp_skip_draw = 1;
     return pso;
 }
 
@@ -5296,6 +5541,9 @@ static void render_frame_impl(void)
     { double _tw = perf_on() ? perf_now() : 0.0;
       wait_for_gpu();
       if (perf_on()) s_perf_gpu += perf_now() - _tw; }
+    plib_init();          /* first frame: open shader_cache/pipelines.bin */
+    fp_async_drain();     /* pipelines the shader workers finished */
+    plib_maybe_save();
 
     off_rt_writeback_flush();   /* GPU is idle: last frame's copies are ready */
     s_cv_query_active = 0;
@@ -6475,9 +6723,12 @@ static void render_frame_impl(void)
                       s_vtex_copy_bytes / 1048576.0, 10);
               s_vtex_skip = 0; s_vtex_cmp_bytes = 0; s_vtex_copy_bytes = 0;
               { LONG hh = InterlockedExchange(&s_shc_hits, 0), mm = InterlockedExchange(&s_shc_miss, 0);
-                if (hh || mm)
-                    fprintf(stderr, "[PERF-SHADER] disk cache: %ld loaded, %ld compiled and saved%c",
-                            (long)hh, (long)mm, 10); } }
+                LONG pl = InterlockedExchange(&s_plib_loaded, 0);
+                LONG ab = InterlockedExchange(&s_fp_async_built, 0), as = InterlockedExchange(&s_fp_async_skips, 0);
+                if (hh || mm || pl || ab || as)
+                    fprintf(stderr, "[PERF-SHADER] bytecode: %ld from disk, %ld compiled | pipelines: %ld"
+                                    " from library | background: %ld built, %ld draws skipped meanwhile%c",
+                            (long)hh, (long)mm, (long)pl, (long)ab, (long)as, 10); } }
             perf_thread_report(fr);
             { extern void spu_coh_stats_report(void*); spu_coh_stats_report(stderr); }
             s_perf_frame = 0.0; s_perf_tex = 0.0; s_perf_vtx = 0.0; s_perf_rf = 0.0;
@@ -8625,6 +8876,7 @@ void rsx_d3d12_backend_shutdown(void)
 
     render_wait_idle();
     wait_for_gpu();
+    plib_save();   /* pipelines built since the last periodic save */
 
     /* Release D3D12 resources */
     if (s_d3d.vertex_buffer) {
