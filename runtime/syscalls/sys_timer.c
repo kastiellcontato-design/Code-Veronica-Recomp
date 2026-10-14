@@ -104,9 +104,42 @@ static void write_be64(uint32_t addr, uint64_t val)
  *
  * r3 = microseconds
  * -----------------------------------------------------------------------*/
+/* Per-thread usleep totals (measured microseconds and calls), read by the
+ * PS3_TIMELINE report to show which guest threads spend the frame waiting. */
+#ifdef _WIN32
+#define USLEEP_TT 32
+typedef struct { volatile LONG tid; unsigned long long us, calls; } UsleepThr;
+static UsleepThr s_ust[USLEEP_TT];
+static __declspec(thread) int s_ust_slot = -1;   /* -2: table full */
+int sys_timer_usleep_threads(unsigned* tid, unsigned long long* us,
+                             unsigned long long* calls, int max)
+{
+    int n = 0;
+    for (int i = 0; i < USLEEP_TT && n < max; i++) {
+        if (!s_ust[i].tid) continue;
+        tid[n] = (unsigned)s_ust[i].tid; us[n] = s_ust[i].us; calls[n] = s_ust[i].calls; n++;
+    }
+    return n;
+}
+static void usleep_account(unsigned long long us)
+{
+    if (s_ust_slot == -1) {
+        LONG me = (LONG)GetCurrentThreadId();
+        s_ust_slot = -2;
+        for (int i = 0; i < USLEEP_TT; i++)
+            if (InterlockedCompareExchange(&s_ust[i].tid, me, 0) == 0) { s_ust_slot = i; break; }
+    }
+    if (s_ust_slot >= 0) { s_ust[s_ust_slot].us += us; s_ust[s_ust_slot].calls++; }
+}
+#endif
+
+
 int64_t sys_timer_usleep(ppu_context* ctx)
 {
     uint64_t usec = LV2_ARG_U64(ctx, 0);
+#ifdef _WIN32
+    LARGE_INTEGER _tl0; QueryPerformanceCounter(&_tl0);
+#endif
     { extern unsigned long long ps3_qpc_us(void);
       static int n=0; if (n++ < 60)
         fprintf(stderr, "[WAIT] t=%lluus timer_usleep(%llu us) lr=0x%08llX cia=0x%08llX\n", ps3_qpc_us(),
@@ -251,6 +284,11 @@ int64_t sys_timer_usleep(ppu_context* ctx)
         ts.tv_nsec = (long)((usec % 1000000) * 1000);
         nanosleep(&ts, NULL);
     }
+#endif
+
+#ifdef _WIN32
+    { LARGE_INTEGER _tl1; QueryPerformanceCounter(&_tl1); ensure_qpc_init();
+      usleep_account((unsigned long long)((_tl1.QuadPart - _tl0.QuadPart) * 1000000 / s_qpc_freq.QuadPart)); }
 #endif
 
     return CELL_OK;

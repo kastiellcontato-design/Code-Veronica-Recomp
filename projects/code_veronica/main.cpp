@@ -169,9 +169,18 @@ extern "C" unsigned ppu_boot_frames_presented(void)
     return (unsigned)g_frames_presented;
 }
 
+extern "C" void ps3_tl_begin(int ev);   /* PS3_TIMELINE, cellGcmSys.c */
+extern "C" void ps3_tl_end(int ev);
+extern "C" void ps3_tl_frame(void);
+extern "C" void ps3_tl_sleep_begin(void);
+extern "C" void ps3_tl_sleep_end(void);
+
 static void present_guest_frame(void)
 {
+    ps3_tl_begin(2);
     rsx_backend_present();
+    ps3_tl_end(2);
+    ps3_tl_frame();
     /* This thread increments and guest threads read, so interlocked rather
      * than a volatile ++, which on arm64 is neither atomic nor a fence. */
     InterlockedIncrement(&g_frames_presented);
@@ -214,7 +223,9 @@ static DWORD WINAPI frame_clock(LPVOID)
         }
         /* 1 ms, not 4: the guest's main thread polls a label this drain
          * writes, and every ms slept here after a present is a ms it spins. */
+        ps3_tl_sleep_begin();
         Sleep(1);
+        ps3_tl_sleep_end();
         ULONGLONG now = GetTickCount64();
 
         int fired = 0;

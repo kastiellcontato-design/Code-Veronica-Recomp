@@ -7249,13 +7249,20 @@ static void render_wait_idle(void)
     }
 }
 
+void ps3_tl_begin(int ev);   /* PS3_TIMELINE, cellGcmSys.c */
+void ps3_tl_end(int ev);
+
 static DWORD WINAPI render_thread_main(LPVOID p)
 {
     (void)p;
     for (;;) {
         WaitForSingleObject(s_rt_work, INFINITE);
+        ps3_tl_begin(4);
         render_frame_impl();
+        ps3_tl_end(4);
+        ps3_tl_begin(5);
         wait_for_gpu();          /* this batch's upload halves are reusable */
+        ps3_tl_end(5);
         SetEvent(s_rt_idle);
     }
     return 0;
@@ -7275,7 +7282,9 @@ static void render_frame(void)
             fprintf(stderr, "[D3D12] render thread %s%c", s_rt_async ? "ON" : "OFF (RSX_RENDER_THREAD=0)", 10);
         }
     }
-    if (s_rt_async) render_wait_idle();   /* previous batch done, both halves free */
+    if (s_rt_async) {                     /* previous batch done, both halves free */
+        ps3_tl_begin(3); render_wait_idle(); ps3_tl_end(3);
+    }
 
     /* Freeze the recording batch for the renderer... */
     s_rb.draws      = s_d3d.draws;

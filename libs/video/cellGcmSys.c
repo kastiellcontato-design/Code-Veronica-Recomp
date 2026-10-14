@@ -67,6 +67,163 @@ static u64 get_timestamp_ns(void)
 #endif
 
 /* ---------------------------------------------------------------------------
+ * PS3_TIMELINE=1: per-frame timeline of the frame pipeline
+ *
+ * game (builds frame N, waits on the label of N-1) -> FIFO drain on the
+ * frame_clock thread (translates it, stops at its flip) -> present (freezes
+ * the batch, may wait for the render thread) -> render thread (records,
+ * submits, waits for the GPU). With every stage waiting on another, "which
+ * thread is busiest" does not say which wait sets the frame rate; average
+ * milliseconds per frame for each stage and each wait do.
+ * -----------------------------------------------------------------------*/
+#ifdef _WIN32
+static int tl_on(void)
+{
+    static int v = -1;
+    if (v < 0) { const char* e = getenv("PS3_TIMELINE"); v = (e && *e && *e != '0') ? 1 : 0; }
+    return v;
+}
+static double tl_now(void)
+{
+    LARGE_INTEGER t; ensure_qpc_init(); QueryPerformanceCounter(&t);
+    return (double)t.QuadPart / (double)s_qpc_freq.QuadPart;
+}
+enum { TL_N = 16 };
+static double s_tl_t0[TL_N];          /* begin stamp; each slot has one writer thread */
+static double s_tl_acc[TL_N];         /* seconds this window */
+static u32    s_tl_cnt[TL_N];
+static const char* const s_tl_name[TL_N] = {
+    "drain", "fc-sleep", "present", "wait-render", "render", "gpu-wait", NULL, "fc-sleep-behind",
+};
+void ps3_tl_begin(int ev) { if (tl_on() && ev >= 0 && ev < TL_N) s_tl_t0[ev] = tl_now(); }
+static int gcm_fifo_has_work(void);   /* with the FIFO walker below */
+void ps3_tl_end(int ev);
+/* frame_clock's idle sleep, split by whether the FIFO already held work. */
+void ps3_tl_sleep_begin(void)
+{
+    if (!tl_on()) return;
+    ps3_tl_begin(gcm_fifo_has_work() ? 7 : 1);
+}
+void ps3_tl_sleep_end(void) { if (tl_on()) { ps3_tl_end(1); ps3_tl_end(7); } }
+void ps3_tl_end(int ev)
+{
+    if (!tl_on() || ev < 0 || ev >= TL_N || s_tl_t0[ev] == 0.0) return;
+    s_tl_acc[ev] += tl_now() - s_tl_t0[ev]; s_tl_cnt[ev]++; s_tl_t0[ev] = 0.0;
+}
+
+/* Game side: flip requests (and the thread making them), plus the usleep
+ * time of every guest thread (sys_timer keeps per-thread totals). */
+extern int sys_timer_usleep_threads(unsigned* tid, unsigned long long* us,
+                                    unsigned long long* calls, int max);
+static double s_tl_gflip_t[256];      /* flip request stamps, by flip number */
+static volatile u32 s_tl_gflips = 0, s_tl_dflips = 0;
+static volatile DWORD s_tl_flip_tid = 0;
+
+static void tl_game_flip(void)
+{
+    if (!tl_on()) return;
+    s_tl_flip_tid = GetCurrentThreadId();
+    s_tl_gflip_t[s_tl_gflips & 255] = tl_now();
+    s_tl_gflips++;
+}
+
+static void tl_thread_name(unsigned tid, char* out, size_t n)
+{
+    typedef HRESULT (WINAPI *GTD)(HANDLE, PWSTR*);
+    static GTD gtd = (GTD)1;
+    if (gtd == (GTD)1) gtd = (GTD)GetProcAddress(GetModuleHandleA("kernel32.dll"), "GetThreadDescription");
+    snprintf(out, n, "tid%u", tid);
+    if (!gtd) return;
+    HANDLE h = OpenThread(THREAD_QUERY_LIMITED_INFORMATION, FALSE, tid);
+    if (!h) return;
+    PWSTR w = NULL;
+    if (SUCCEEDED(gtd(h, &w)) && w && w[0]) {
+        size_t k = 0;
+        for (; w[k] && k + 1 < n; k++) out[k] = (char)(w[k] < 128 ? w[k] : '?');
+        out[k] = 0;
+    }
+    if (w) LocalFree(w);
+    CloseHandle(h);
+}
+
+/* Present side: one guest frame handed to the backend. Reports every ~5 s. */
+static double s_tl_lag = 0.0, s_tl_win0 = 0.0, s_tl_d_last = 0.0, s_tl_d_int = 0.0;
+static u32    s_tl_lag_n = 0, s_tl_d_n = 0, s_tl_qmax = 0, s_tl_g_win = 0;
+
+void ps3_tl_frame(void)
+{
+    if (!tl_on()) return;
+    double now = tl_now();
+    u32 g = s_tl_gflips, d = s_tl_dflips;
+    if (g > d && g - d < 256) {        /* frames still queued behind this one */
+        s_tl_lag += now - s_tl_gflip_t[d & 255]; s_tl_lag_n++;
+        if (g - d - 1 > s_tl_qmax) s_tl_qmax = g - d - 1;
+        s_tl_dflips = d + 1;
+    }
+    if (s_tl_d_last > 0.0) { s_tl_d_int += now - s_tl_d_last; s_tl_d_n++; }
+    s_tl_d_last = now;
+    if (s_tl_win0 == 0.0) { s_tl_win0 = now; s_tl_g_win = g; }
+    if (now - s_tl_win0 < 5.0 || !s_tl_d_n) return;
+
+    const double fn = (double)s_tl_d_n;
+    char fname[64]; tl_thread_name((unsigned)s_tl_flip_tid, fname, sizeof fname);
+    fprintf(stderr, "[TL] %.1f fps (present) | flip requests %.2f/frame by %s"
+            " | flip request -> present %.1fms, queued max %u%c",
+            fn / s_tl_d_int, (double)(g - s_tl_g_win) / fn, fname,
+            s_tl_lag_n ? 1000.0 * s_tl_lag / s_tl_lag_n : 0.0, s_tl_qmax, 10);
+    char line[1024]; int o = 0;
+    o += snprintf(line + o, sizeof line - o, "[TL]   per frame:");
+    for (int i = 0; i < TL_N; i++) if (s_tl_name[i] && s_tl_cnt[i])
+        o += snprintf(line + o, sizeof line - o, " %s %.1fms(x%.1f)", s_tl_name[i],
+                      1000.0 * s_tl_acc[i] / fn, s_tl_cnt[i] / fn);
+    fprintf(stderr, "%s%c", line, 10);
+
+    /* usleep per guest thread, this window, busiest first */
+    { enum { M = 32 };
+      unsigned tid[M]; unsigned long long us[M], calls[M];
+      static unsigned ptid[M]; static unsigned long long pus[M], pcalls[M]; static int pn = 0;
+      int n = sys_timer_usleep_threads(tid, us, calls, M);
+      double dus[M], dc[M];
+      for (int i = 0; i < n; i++) {
+          unsigned long long u0 = 0, c0 = 0;
+          for (int k = 0; k < pn; k++) if (ptid[k] == tid[i]) { u0 = pus[k]; c0 = pcalls[k]; }
+          dus[i] = (double)(us[i] - u0); dc[i] = (double)(calls[i] - c0);
+      }
+      o = 0;
+      o += snprintf(line + o, sizeof line - o, "[TL]   usleep/frame:");
+      for (int i = 0; i < n; i++) {
+          char nm[64]; tl_thread_name(tid[i], nm, sizeof nm);
+          if (strcmp(nm, "ppu:main") == 0)
+              o += snprintf(line + o, sizeof line - o, " [MAIN %.1fms %.0fx] |",
+                            dus[i] / 1000.0 / fn, dc[i] / fn);
+      }
+      for (int r = 0; r < 3; r++) {
+          int b = -1;
+          for (int i = 0; i < n; i++) if (dus[i] > 0 && (b < 0 || dus[i] > dus[b])) b = i;
+          if (b < 0) break;
+          char nm[64]; tl_thread_name(tid[b], nm, sizeof nm);
+          o += snprintf(line + o, sizeof line - o, " [%s %.1fms %.0fx]", nm,
+                        dus[b] / 1000.0 / fn, dc[b] / fn);
+          dus[b] = -1;
+      }
+      fprintf(stderr, "%s%c", line, 10);
+      for (int i = 0; i < n; i++) { ptid[i] = tid[i]; pus[i] = us[i]; pcalls[i] = calls[i]; }
+      pn = n; }
+
+    for (int i = 0; i < TL_N; i++) { s_tl_acc[i] = 0.0; s_tl_cnt[i] = 0; }
+    s_tl_lag = 0.0; s_tl_lag_n = 0; s_tl_qmax = 0;
+    s_tl_d_int = 0.0; s_tl_d_n = 0; s_tl_win0 = now; s_tl_g_win = g;
+}
+#else
+void ps3_tl_begin(int ev) { (void)ev; }
+void ps3_tl_end(int ev) { (void)ev; }
+void ps3_tl_sleep_begin(void) {}
+void ps3_tl_sleep_end(void) {}
+static void tl_game_flip(void) {}
+void ps3_tl_frame(void) {}
+#endif
+
+/* ---------------------------------------------------------------------------
  * Internal state
  * -----------------------------------------------------------------------*/
 
@@ -786,6 +943,10 @@ static u32 s_sema_offset = 0;   /* NV406E semaphore offset (label window) */
 #define GCM_RECYCLE_MARGIN 0x20000u
 static u32 gcm_ea2io(u32 ea);   /* defined with the wrap callback below */
 static u32 s_fifo_getoff  = 0;
+static int gcm_fifo_has_work(void)
+{
+    return vm_read32(GCM_CONTROL_GUEST_ADDR + 0) != s_fifo_getoff;
+}
 static u32 s_last_ring_off = 0;   /* last offset the walker actually consumed */
 static u32 s_fifo_calloff = 0;
 
@@ -1487,12 +1648,14 @@ double g_gcm_fifo_secs = 0.0;
 void cellGcm_rsx_process_fifo(void)
 {
     LARGE_INTEGER f, t0, t1;
+    ps3_tl_begin(0);
     QueryPerformanceFrequency(&f); QueryPerformanceCounter(&t0);
     AcquireSRWLockExclusive(&s_gcm_fifo_lock);
     gcm_rsx_process_fifo_unlocked();
     ReleaseSRWLockExclusive(&s_gcm_fifo_lock);
     QueryPerformanceCounter(&t1);
     g_gcm_fifo_secs += (double)(t1.QuadPart - t0.QuadPart) / (double)f.QuadPart;
+    ps3_tl_end(0);
 }
 
 static void gcm_rsx_process_fifo_unlocked(void)
@@ -2266,6 +2429,7 @@ unsigned long long g_gcm_flip_requests = 0;
 
 static s32 gcm_flip_request(u32 bufferId, int in_fifo)
 {
+    tl_game_flip();
     g_gcm_flip_requests++;
     /* GCM_FLIPCOUNT=1: every flip, with a timestamp. FLIP_DBG caps at 20 lines,
      * which answers "did it ever flip?" and not "is it still flipping, and how
@@ -2419,6 +2583,7 @@ s32 cellGcmSetPrepareFlip(void* ctx, u32 bufferId)
     if (ps3_log_verbose())
         printf("[cellGcmSys] SetPrepareFlip(bufferId=%u)\n", bufferId);
 
+    tl_game_flip();
     s_current_display_buffer_id = bufferId;
     s_flip_status = CELL_GCM_FLIP_STATUS_DONE;
     s_flip_request_count++;
