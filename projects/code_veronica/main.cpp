@@ -468,8 +468,14 @@ int main(int argc, char** argv)
     /* Install the guest-callback hook, then start the frame clock. It no-ops
      * until the title registers its vblank and flip handlers during init. */
     g_ps3_guest_caller = harness_guest_caller;
-    ps3_host_thread_name(CreateThread(NULL, 4u * 1024 * 1024, frame_clock, NULL, 0, NULL),
-                         "frame_clock (vblank+render)");
+    {
+        HANDLE fc = CreateThread(NULL, 4u * 1024 * 1024, frame_clock, NULL, 0, NULL);
+        ps3_host_thread_name(fc, "frame_clock (vblank+render)");
+        /* It drains the FIFO the guest's frame waits on; keep it ahead of the
+         * guest's own busy threads. FRAME_CLOCK_PRIO=0 leaves it normal. */
+        const char* pe = getenv("FRAME_CLOCK_PRIO");
+        if (fc && (!pe || *pe != '0')) SetThreadPriority(fc, THREAD_PRIORITY_ABOVE_NORMAL);
+    }
     ps3_host_thread_name(GetCurrentThread(), "ppu:main");
 
     printf("\n[boot] dispatching entry OPD 0x%08X (stack top 0x%08X)\n\n",
