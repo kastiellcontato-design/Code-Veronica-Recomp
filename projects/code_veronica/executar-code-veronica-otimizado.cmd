@@ -10,6 +10,8 @@ rem Limite de tarefas pesadas de SPU rodando ao mesmo tempo.
 set "SPU_MAX_RUNNING=10"
 rem Threads de som do jogo com prioridade maior (evita audio picotando).
 set "PPU_BOOST_NAMES=snddrv"
+rem Resolucao: 1.5 = 1080p (1920x1080). Para voltar ao 720p, deixe o rem na frente.
+rem set "RES_SCALE=1.5"
 rem Diagnosticos de audio (desligados).
 rem set "AUDIO_RATE=1"
 rem set "AUDIO_WRITER=2"
