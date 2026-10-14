@@ -1691,7 +1691,8 @@ static void dump_backbuffer_bmp(void)
             free(row);
         }
         fclose(f);
-        printf("[D3D12] dumped %s (%ux%u)\n", path, s_d3d.width, s_d3d.height);
+        printf("[D3D12] dumped %s (%ux%u) frame %llu\n", path, s_d3d.width, s_d3d.height,
+               (unsigned long long)s_d3d.frame_count);
     }
     D3D12_RANGE wr = {0, 0};
     s_d3d.readback_buf->lpVtbl->Unmap(s_d3d.readback_buf, 0, &wr);
@@ -1848,6 +1849,7 @@ typedef struct { ID3D12Resource* res; u32 op, off, w, h, dxgi; } CapStep;
 static CapStep s_cap_steps[CAP_MAX_STEPS];
 static int s_cap_nsteps = 0;
 static int s_cap_steps_on = 0;      /* armed for the frame being rendered */
+static u64 s_rsxcap_next = 0;       /* RSX_CAP: frame of the next capture (0 = none) */
 static int s_autocap_arm = 0;       /* CV_AUTOCAP fires after the next frame */
 static void cap_steps_free(void)
 {
@@ -3560,6 +3562,15 @@ static int fp_build_pso(FpJob* j)
     pd.PS.BytecodeLength  = pb->lpVtbl->GetBufferSize(pb);
     pd.InputLayout.pInputElementDescs = il; pd.InputLayout.NumElements = 16;
     pd.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
+    /* Near/far clipping, as RSX does by default (SET_ZMIN_MAX_CONTROL, which
+     * Code Veronica never writes). The zero-initialised desc left it OFF, so
+     * geometry nearer than the near plane was clamped and drawn instead of
+     * clipped: in the prison cutscene a wall behind the camera covered two
+     * thirds of the screen. vp_posscale/offset already map z to D3D's [0, w].
+     * DEPTH_CLIP=0 restores the old behaviour. */
+    { static int dc = -1;
+      if (dc < 0) { const char* e = getenv("DEPTH_CLIP"); dc = (e && *e == '0') ? 0 : 1; }
+      pd.RasterizerState.DepthClipEnable = dc ? TRUE : FALSE; }
     /* Guest face culling. CULL_OFF=1 forces double-sided, the old
      * unconditional behaviour -- geometry that vanishes under culling is a
      * winding/front-face problem, not a missing draw. */
@@ -5896,7 +5907,8 @@ static void render_frame_impl(void)
     s_cv_query_active = 0;
     memset(s_cv_query_valid, 0, sizeof s_cv_query_valid);
     cap_steps_free();
-    s_cap_steps_on = g_rsx_cap_request || s_autocap_arm;
+    s_cap_steps_on = g_rsx_cap_request || s_autocap_arm ||
+                     (s_rsxcap_next && s_d3d.frame_count >= s_rsxcap_next);
     if ((getenv("CV_GPU_STATS") && s_d3d.frame_count == 1800) || s_cap_steps_on) {
         if (!s_cv_query_heap) {
             D3D12_QUERY_HEAP_DESC qd = {0};
@@ -6836,6 +6848,16 @@ static void render_frame_impl(void)
                 if (s_cap_steps_on && cur_rt >= 0 && d + 40 >= s_rb.count &&
                     s_d3d.off_rt[cur_rt].w >= 640)
                     cap_step_snapshot(cur_rt, d);
+                /* RSXCAP_STEP_RANGE=<lo>,<hi>,<stride>: also photograph the
+                 * bound target every <stride> ops in [lo, hi] -- finds the op
+                 * that paints a region, by bisection over captures. */
+                { static int rlo = -2, rhi = 0, rst = 1;
+                  if (rlo == -2) { const char* e = getenv("RSXCAP_STEP_RANGE"); rlo = -1;
+                      if (e && sscanf(e, "%d,%d,%d", &rlo, &rhi, &rst) < 2) rlo = -1;
+                      if (rst < 1) rst = 1; }
+                  if (s_cap_steps_on && rlo >= 0 && cur_rt >= 0 && (int)d >= rlo && (int)d <= rhi &&
+                      ((int)d - rlo) % rst == 0)
+                      cap_step_snapshot(cur_rt, d); }
                 if (dr->is_clear) {
                     D3D12_CPU_DESCRIPTOR_HANDLE rh =
                         (cur_rt >= 0) ? off_rt_rtv(cur_rt) : rtv_handle;
@@ -7530,9 +7552,12 @@ skip_dump_consider: ;
         }
         if (s_cap_done < s_cap_count) {
             u32 target = s_cap_start + s_cap_done * s_cap_stride;
+            s_rsxcap_next = target;   /* arms the step photos for that frame */
             if (s_d3d.frame_count >= target && s_dbg_last_draws > 0) {
                 rsx_capture_frame(fi, s_dbg_last_draws, s_cap_done);
                 s_cap_done++;
+                s_rsxcap_next = (s_cap_done < s_cap_count)
+                              ? s_cap_start + s_cap_done * s_cap_stride : 0;
             }
         }
       } }
