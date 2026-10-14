@@ -278,8 +278,11 @@ static int audio_backend_init(void)
     wfx.nAvgBytesPerSec = wfx.nSamplesPerSec * wfx.nBlockAlign;
     wfx.cbSize          = 0;
 
-    /* Request event-driven mode with a ~20ms buffer */
-    REFERENCE_TIME buf_duration = 200000; /* 20ms in 100ns units */
+    /* Event-driven mode with a 100 ms buffer. The mixer is paced by the
+     * clock, not by this buffer (see audio_mix_thread_func), so it never
+     * fills and adds no latency; the room only absorbs the device taking
+     * its periods in ~10 ms lumps. */
+    REFERENCE_TIME buf_duration = 1000000; /* 100ms in 100ns units */
     s_wasapi_event = CreateEventW(NULL, FALSE, FALSE, NULL);
 
     hr = s_wasapi_client->lpVtbl->Initialize(
@@ -408,6 +411,88 @@ static inline float ld_be_f32(const float* p)
     return f;
 }
 
+/* AUDIO_WRITER=1: who fills port 0, and how an empty block came about.
+ * The SPU PUT path (spu_dma.h) stamps each write into the ring; the mixer
+ * stamps each read. A write landing just after its block was read is LATE
+ * (the producer missed the deadline); an empty block with no write since
+ * its previous read was SKIPPED. */
+volatile uint32_t g_audio_diag_lo = 0, g_audio_diag_hi = 0, g_audio_diag_blk = 0;
+volatile long long g_audio_wr_img[64];
+volatile long long g_audio_wr_qpc[32], g_audio_rd_qpc[32];
+volatile long g_audio_late = 0;
+static long s_ad_empty = 0, s_ad_skipped = 0, s_ad_blocks = 0;
+static double s_ad_age_sum = 0.0;
+
+#ifdef _WIN32
+/* AUDIO_WRITER=2: also trap the first guest write after each mix (the ring is
+ * made read-only once the mixer is done with it). Says which host thread
+ * fills the ring, which block it writes relative to the one just played, and
+ * how long after the mixer's event it got there. */
+static uint8_t* volatile s_at_base = NULL;
+static volatile SIZE_T  s_at_len = 0;
+static volatile u32     s_at_blk = 0, s_at_nblk = 8;
+static volatile u32     s_at_cur = 0;          /* block the mixer read last */
+static volatile long long s_at_mix_qpc = 0;
+static volatile LONG    s_at_armed = 0;
+#define AT_TIDS 8
+static volatile DWORD   s_at_tid[AT_TIDS];
+static volatile LONG    s_at_tid_n[AT_TIDS];
+static volatile LONG    s_at_lead[16];
+static volatile long long s_at_delay_sum = 0, s_at_delay_max = 0;
+static volatile LONG    s_at_writes = 0, s_at_mixes_without = 0;
+static LONG WINAPI audio_trap_veh(EXCEPTION_POINTERS* ep)
+{
+    if (ep->ExceptionRecord->ExceptionCode != EXCEPTION_ACCESS_VIOLATION) return EXCEPTION_CONTINUE_SEARCH;
+    if (ep->ExceptionRecord->ExceptionInformation[0] != 1) return EXCEPTION_CONTINUE_SEARCH;
+    uint8_t* a = (uint8_t*)ep->ExceptionRecord->ExceptionInformation[1];
+    uint8_t* b = s_at_base;
+    if (!b || a < b || a >= b + s_at_len) return EXCEPTION_CONTINUE_SEARCH;
+    DWORD old; VirtualProtect(b, s_at_len, PAGE_READWRITE, &old);
+    if (InterlockedExchange(&s_at_armed, 0)) {
+        LARGE_INTEGER qn; QueryPerformanceCounter(&qn);
+        DWORD tid = GetCurrentThreadId();
+        for (int i = 0; i < AT_TIDS; i++) {
+            if (s_at_tid[i] == tid) { InterlockedIncrement(&s_at_tid_n[i]); break; }
+            if (!s_at_tid[i] && InterlockedCompareExchange((volatile LONG*)&s_at_tid[i], (LONG)tid, 0) == 0)
+                { InterlockedIncrement(&s_at_tid_n[i]); break; }
+        }
+        u32 blk = (u32)((a - b) / s_at_blk);
+        u32 lead = (blk + s_at_nblk - s_at_cur) % s_at_nblk;
+        InterlockedIncrement(&s_at_lead[lead & 15]);
+        long long d = qn.QuadPart - s_at_mix_qpc;
+        s_at_delay_sum += d; if (d > s_at_delay_max) s_at_delay_max = d;
+        InterlockedIncrement(&s_at_writes);
+    }
+    return EXCEPTION_CONTINUE_EXECUTION;
+}
+static void audio_trap_report(void)
+{
+    LARGE_INTEGER qf; QueryPerformanceFrequency(&qf);
+    fprintf(stderr, "[audio-trap] first-writes %ld, mixes with no write before the next %ld, delay after event avg %.2f ms max %.2f ms | lead:",
+            s_at_writes, s_at_mixes_without,
+            s_at_writes ? (double)s_at_delay_sum * 1000.0 / qf.QuadPart / s_at_writes : 0.0,
+            (double)s_at_delay_max * 1000.0 / qf.QuadPart);
+    for (int i = 0; i < 16; i++) if (s_at_lead[i]) fprintf(stderr, " +%d=%ld", i, s_at_lead[i]);
+    fprintf(stderr, " | writers:");
+    typedef HRESULT (WINAPI *gd_fn)(HANDLE, PWSTR*);
+    static gd_fn gd = NULL;
+    if (!gd) gd = (gd_fn)(void*)GetProcAddress(GetModuleHandleA("kernel32.dll"), "GetThreadDescription");
+    for (int i = 0; i < AT_TIDS; i++) {
+        if (!s_at_tid[i]) continue;
+        char nm[64] = "?";
+        HANDLE th = OpenThread(THREAD_QUERY_LIMITED_INFORMATION, FALSE, s_at_tid[i]);
+        if (th && gd) { PWSTR w = NULL;
+            if (SUCCEEDED(gd(th, &w)) && w) { int k = 0; for (; w[k] && k < 63; k++) nm[k] = (char)w[k]; nm[k] = 0; LocalFree(w); } }
+        if (th) CloseHandle(th);
+        fprintf(stderr, " [%s tid %lu: %ld]", nm, (unsigned long)s_at_tid[i], s_at_tid_n[i]);
+        s_at_tid_n[i] = 0;
+    }
+    fprintf(stderr, "\n");
+    for (int i = 0; i < 16; i++) s_at_lead[i] = 0;
+    s_at_writes = 0; s_at_mixes_without = 0; s_at_delay_sum = 0; s_at_delay_max = 0;
+}
+#endif
+
 /* Mix one block from all active ports into s_mix_buffer (stereo float) */
 static void audio_mix_one_block(void)
 {
@@ -447,6 +532,38 @@ static void audio_mix_one_block(void)
         u32 block_idx = (u32)(port->read_index % nblock);
         u32 block_offset = block_idx * CELL_AUDIO_BLOCK_SAMPLES * nch;
         float* src = port->buffer + block_offset;
+
+#ifdef _WIN32
+        if (p == 0 && s_at_base) {
+            DWORD old; VirtualProtect(s_at_base, s_at_len, PAGE_READWRITE, &old);
+            if (s_at_armed) s_at_mixes_without++;   /* nothing written since last mix */
+        }
+        if (p == 0 && g_audio_diag_hi) {
+            LARGE_INTEGER qn, qf; QueryPerformanceCounter(&qn); QueryPerformanceFrequency(&qf);
+            int nz = 0;
+            for (u32 s2 = 0; s2 < CELL_AUDIO_BLOCK_SAMPLES * nch; s2 += 4)
+                if (src[s2] != 0.0f) { nz = 1; break; }
+            s_ad_blocks++;
+            if (!nz) {
+                s_ad_empty++;
+                long long w = g_audio_wr_qpc[block_idx & 31], r = g_audio_rd_qpc[block_idx & 31];
+                if (w <= r) s_ad_skipped++;
+                if (w) s_ad_age_sum += (double)(qn.QuadPart - w) * 1000.0 / (double)qf.QuadPart;
+            }
+            g_audio_rd_qpc[block_idx & 31] = qn.QuadPart;
+            if (s_ad_blocks % 940 == 0) {
+                fprintf(stderr, "[audio-writer] %ld blocks: %ld empty (%ld never rewritten since last read, avg last-write age %.1f ms), %ld late writes | SPU writes by image:",
+                        s_ad_blocks, s_ad_empty, s_ad_skipped,
+                        s_ad_empty ? s_ad_age_sum / s_ad_empty : 0.0, g_audio_late);
+                for (int im = 0; im < 64; im++)
+                    if (g_audio_wr_img[im]) fprintf(stderr, " img%d=%lld", im, g_audio_wr_img[im]);
+                fprintf(stderr, "\n");
+                if (s_at_base) audio_trap_report();
+                s_ad_blocks = s_ad_empty = s_ad_skipped = 0; s_ad_age_sum = 0.0; g_audio_late = 0;
+                for (int im = 0; im < 64; im++) g_audio_wr_img[im] = 0;
+            }
+        }
+#endif
 
         /* AUDIO_PEAK diag: which blocks of this port's WHOLE ring hold data,
          * vs which block the read cursor is on -- distinguishes "writer never
@@ -504,6 +621,14 @@ static void audio_mix_one_block(void)
         port->read_index++;
         if (port->read_idx_addr)
             vm_write64((u32)port->read_idx_addr, port->read_index % nblock);
+#ifdef _WIN32
+        if (p == 0 && s_at_base) {
+            LARGE_INTEGER qn; QueryPerformanceCounter(&qn);
+            s_at_cur = block_idx; s_at_nblk = nblock; s_at_mix_qpc = qn.QuadPart;
+            s_at_armed = 1;
+            DWORD old; VirtualProtect(s_at_base, s_at_len, PAGE_READONLY, &old);
+        }
+#endif
     }
 
     mutex_unlock(&s_audio_mutex);
@@ -549,8 +674,17 @@ static unsigned __stdcall audio_mix_thread_func(void* arg)
     LARGE_INTEGER qf, q0; QueryPerformanceFrequency(&qf); QueryPerformanceCounter(&q0);
     unsigned long long blocks = 0;
     while (s_mix_thread_running) {
-        const int room = audio_backend_room();
-        if (room >= 0 && room < CELL_AUDIO_BLOCK_SAMPLES) { audio_backend_wait(); continue; }
+        /* AUDIO_ROOM_GATE=1: also wait for device room (old behaviour).
+         * Waiting on the device put the mixer behind the clock, so it then
+         * mixed two blocks back to back -- two ring advances and two events
+         * at once. A guest mixer that handles one event per wake skipped a
+         * block each time: Code Veronica's 3D cutscenes played 15-30 empty
+         * 5 ms blocks a second (sluggish, choppy sound). */
+        { static int gate = -1; if (gate < 0) gate = getenv("AUDIO_ROOM_GATE") ? 1 : 0;
+          if (gate) {
+              const int room = audio_backend_room();
+              if (room >= 0 && room < CELL_AUDIO_BLOCK_SAMPLES) { audio_backend_wait(); continue; }
+          } }
         /* WASAPI can free several PS3 blocks at once (device period ~10ms).
          * Consume only one every 256/48000 seconds, giving the notified guest
          * producer time to fill the next ring slot before it is read. */
@@ -815,6 +949,19 @@ s32 cellAudioPortOpen(const CellAudioPortParam* param, u32* portNum)
 
     port->port_addr     = guest_buf;
     port->read_idx_addr = guest_ridx;
+    if (found == 0 && getenv("AUDIO_WRITER")) {
+        g_audio_diag_blk = CELL_AUDIO_BLOCK_SAMPLES * (u32)nch * 4u;
+        g_audio_diag_lo  = guest_buf;
+        g_audio_diag_hi  = guest_buf + port->buf_size;
+#ifdef _WIN32
+        if (atoi(getenv("AUDIO_WRITER")) >= 2) {
+            AddVectoredExceptionHandler(1, audio_trap_veh);
+            s_at_blk = g_audio_diag_blk;
+            s_at_len = (port->buf_size + 4095u) & ~4095u;
+            s_at_base = (uint8_t*)port->buffer;
+        }
+#endif
+    }
 
     vm_write32(portNum_ea, (u32)found);   /* guest out-param */
 

@@ -368,6 +368,46 @@ static mfc_engine* mfc_for(spu_context* ctx)
  * Only the owner calls this, and only after its SPU has stopped, so the engine
  * is idle. The next claimant re-initializes it. A context that never issued a
  * DMA holds no slot and this is a scan that finds nothing. */
+/* ===========================================================================
+ * Job context pool
+ *
+ * A job's spu_context (its 256 KB local store included) used to be a stack
+ * local of the function running it, and every SPU task runs on a fresh host
+ * thread: each task's first touch of that ~270 KB frame faulted in ~66 new
+ * stack pages, one guard-page fault at a time, all through the process-wide
+ * memory lock. At Code Veronica's ~1200 tasks a second that was a quarter of
+ * all SPU thread time (__chkstk) and most of each task's start latency.
+ * Contexts now come from this pool, already committed; callers still
+ * spu_context_init() them. SPU_CTX_POOL=0 heap-allocates each one instead.
+ * ===========================================================================*/
+#define SPU_CTX_POOL_MAX 64
+static spu_context* s_ctx_pool[SPU_CTX_POOL_MAX];
+static int s_ctx_pool_n = 0;
+static SRWLOCK s_ctx_pool_lock = SRWLOCK_INIT;
+
+spu_context* spu_ctx_pool_get(void)
+{
+    static int on = -1;
+    if (on < 0) { const char* e = getenv("SPU_CTX_POOL"); on = (e && *e == '0') ? 0 : 1; }
+    spu_context* c = NULL;
+    if (on) {
+        AcquireSRWLockExclusive(&s_ctx_pool_lock);
+        if (s_ctx_pool_n > 0) c = s_ctx_pool[--s_ctx_pool_n];
+        ReleaseSRWLockExclusive(&s_ctx_pool_lock);
+    }
+    if (!c) c = (spu_context*)_aligned_malloc(sizeof(spu_context), 128);
+    return c;
+}
+
+void spu_ctx_pool_put(spu_context* c)
+{
+    if (!c) return;
+    AcquireSRWLockExclusive(&s_ctx_pool_lock);
+    if (s_ctx_pool_n < SPU_CTX_POOL_MAX) { s_ctx_pool[s_ctx_pool_n++] = c; c = NULL; }
+    ReleaseSRWLockExclusive(&s_ctx_pool_lock);
+    if (c) _aligned_free(c);
+}
+
 void spu_mfc_release(spu_context* ctx)
 {
     if (!ctx) return;

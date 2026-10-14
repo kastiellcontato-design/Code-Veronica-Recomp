@@ -6,8 +6,15 @@ set "PS3_VFS_ROOT=D:\ps3recomp\JOGO\NPEB00553"
 set "PS3_DEV_FLASH=D:\Jogos\rpcs3-v0.0.33-17018-0a57c459_win64\dev_flash"
 set "PS3_RAP_DIR=D:\Jogos\rpcs3-v0.0.33-17018-0a57c459_win64\dev_hdd0\home\00000001\exdata"
 set "SPU_INTERP_UNLIFTED=1"
-rem Limite de tarefas de SPU rodando ao mesmo tempo (teste).
-set "SPU_MAX_RUNNING=6"
+rem Limite de tarefas pesadas de SPU rodando ao mesmo tempo.
+set "SPU_MAX_RUNNING=10"
+rem Threads de som do jogo com prioridade maior (evita audio picotando).
+set "PPU_BOOST_NAMES=snddrv"
+rem Diagnosticos de audio (desligados).
+rem set "AUDIO_RATE=1"
+rem set "AUDIO_WRITER=2"
+rem set "AUDIO_PEAK=1"
+rem set "AUDIO_WAV=%~dp0audio-capture.f32"
 set "CV_AV_CONTINUOUS_PTS=1"
 set "PS3_VERBOSE=0"
 set "SCREEN_AS_TEX=0"
@@ -41,6 +48,8 @@ for /f "delims==" %%V in ('set TEX_ 2^>nul') do set "%%V="
 for /f "delims==" %%V in ('set SPURS_EF_ 2^>nul') do set "%%V="
 for /f "delims==" %%V in ('set SPURS_TASK_ 2^>nul') do set "%%V="
 for %%V in (SCREENTEX CV_GPU_STATS CV_COMPOSITE_PROBE CV_VIDEO_CAPTURE RSX_CAP RSX_CAP_DIR VP_DUMP VP_BYPASS VP_W_ONE CULL_OFF DEPTH_OFF GCM_SUBCH_GATE) do set "%%V="
+rem Estatistica de espera de event flag (desligada; fica depois da limpeza acima).
+rem set "SPURS_EF_STATS=1"
 if not exist "%GAME_EXE%" (
  echo ERRO: executavel nao encontrado:
  echo %GAME_EXE%

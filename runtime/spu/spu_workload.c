@@ -633,6 +633,20 @@ static void spu_async_run(spu_async_job* j)
 {
 #ifdef _WIN32
     spu_running_set_image(j->image_id);
+    /* SPU_TASK_PRIO_IMG=<a,b,...>: run these images' task threads above
+     * normal priority. Code Veronica mixes its audio in image 10 (~6 tasks
+     * per 5.3 ms block); started late at normal priority among the busy
+     * threads, 15-30 blocks a second came out empty -- sluggish, choppy
+     * sound in the 3D cutscenes. */
+    { const char* e = getenv("SPU_TASK_PRIO_IMG");
+      for (const char* q = e; q && *q; ) {
+          if (atoi(q) == j->image_id) {
+              SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
+              break;
+          }
+          while (*q && *q != ',') q++;
+          if (*q == ',') q++;
+      } }
 #endif
     if (!spu_stat_on()) { spu_async_run_impl(j); return; }
     const int img = j->image_id;
@@ -1357,6 +1371,21 @@ void spu_taskset_signal_task(uint32_t taskset_ea, uint32_t taskId)
 int spu_taskset_wait_signal(uint32_t taskset_ea, uint32_t taskId)
 {
     if (!taskset_ea || taskId >= 128) return 0;
+#ifdef _WIN32
+    /* A task that parks in WAIT_SIGNAL is a persistent service loop -- woken
+     * per round of work with a deadline, like Code Veronica's audio mixer
+     * (taskset 0x00CD7980 task 0: ~9 of every 10.7 ms). At normal priority,
+     * among ~1200 batch tasks a second in the 3D cutscenes, its rounds
+     * stretched to 11-14 ms and the sound fell behind the picture.
+     * SPU_SERVICE_PRIO=0 leaves these at normal priority. */
+    { static _Thread_local int boosted;
+      static int on = -1;
+      if (on < 0) { const char* e = getenv("SPU_SERVICE_PRIO"); on = (e && *e == '0') ? 0 : 1; }
+      if (on && !boosted) {
+          boosted = 1;
+          SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
+      } }
+#endif
     /* ran= is the wall time this task spent OUT of the wait (decode/mix work
      * per round) -- decisive for "is the Bink decode CPU-bound". TLS: each
      * task runs on its own host thread. */

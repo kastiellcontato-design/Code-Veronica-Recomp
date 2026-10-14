@@ -21,6 +21,8 @@
 #include <stdlib.h>
 
 typedef void (*spu_lifted_entry_fn)(spu_context*);
+spu_context* spu_ctx_pool_get(void);   /* spu_channels.c */
+void spu_ctx_pool_put(spu_context* c);
 /* Guest RAM base, for decoding a raw SPU thread's argument block. */
 extern uint8_t* vm_base;
 
@@ -159,7 +161,10 @@ static inline int32_t spu_run_lifted_job_abi(spu_lifted_entry_fn entry,
                                              const spu_run_opts* opts)
 {
     if (!entry) return -1;
-    spu_context ctx;
+    /* Pooled, not a stack local: see spu_ctx_pool_get. */
+    spu_context* const _ctxp = spu_ctx_pool_get();
+    if (!_ctxp) return -1;
+#define ctx (*_ctxp)
     spu_context_init(&ctx, 0);
     { static int s_cl = -1;
       if (s_cl < 0) s_cl = getenv("SPU_CTX_LOG") ? 1 : 0;
@@ -337,7 +342,9 @@ static inline int32_t spu_run_lifted_job_abi(spu_lifted_entry_fn entry,
      * GH3's Havok task returning is what first hit it. */
     spu_coh_unregister(&ctx);
     if (local_store) memcpy(local_store, ctx.ls, SPU_LS_SIZE);  /* LS back out */
+    spu_ctx_pool_put(_ctxp);
     return 0;
+#undef ctx
 }
 
 static inline int32_t spu_run_lifted_job_img(spu_lifted_entry_fn entry,

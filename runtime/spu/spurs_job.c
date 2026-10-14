@@ -333,7 +333,12 @@ int spu_run_spurs_job(spu_lifted_entry_fn entry, int image_id,
     }
 
     /* ---- enter the job -------------------------------------------------- */
-    spu_context ctx;
+    extern spu_context* spu_ctx_pool_get(void);
+    extern void spu_ctx_pool_put(spu_context*);
+    /* Pooled, not a stack local: see spu_ctx_pool_get. */
+    spu_context* const _ctxp = spu_ctx_pool_get();
+    if (!_ctxp) { free(ls); return -1; }
+#define ctx (*_ctxp)
     spu_context_init(&ctx, 0);
     ctx.image_id = image_id;
     memcpy(ctx.ls, ls, SPU_LS_SIZE);
@@ -397,7 +402,9 @@ int spu_run_spurs_job(spu_lifted_entry_fn entry, int image_id,
         fflush(stderr);
     }
 
-    spu_coh_unregister(&ctx);   /* stack local: out of the reserver set */
+    spu_coh_unregister(&ctx);   /* out of the reserver set */
+    spu_ctx_pool_put(_ctxp);
     free(ls);
     return 0;
+#undef ctx
 }

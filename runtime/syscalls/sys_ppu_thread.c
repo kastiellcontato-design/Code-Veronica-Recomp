@@ -463,7 +463,24 @@ int64_t sys_ppu_thread_create(ppu_context* ctx)
      * each miss is an audible gap. A mild boost, not TIME_CRITICAL: these
      * threads sleep between polls.
      * ponytail: two host levels only; map the full range if a title needs it. */
-    if (priority < 256)
+    /* PPU_BOOST_NAMES=<a,b,...>: also boost threads whose name contains one of
+     * these. A title's audio threads are not always in the top 256: Code
+     * Veronica's snddrv_* threads sit at 949-955 and, at normal priority
+     * among dozens of busy SPU task threads, left 7-19% of the blocks they
+     * fill silent (crackling, sluggish sound). */
+    int _boost = priority < 256;
+    { const char* bn = getenv("PPU_BOOST_NAMES");
+      for (const char* q = bn; q && *q && !_boost; ) {
+          const char* c = strchr(q, ',');
+          size_t len = c ? (size_t)(c - q) : strlen(q);
+          char want[64];
+          if (len && len < sizeof want) {
+              memcpy(want, q, len); want[len] = 0;
+              if (strstr(t->name, want)) _boost = 1;
+          }
+          q = c ? c + 1 : q + len;
+      } }
+    if (_boost)
         SetThreadPriority(t->host_thread, THREAD_PRIORITY_ABOVE_NORMAL);
 #else
     /* Same reservation, for the same reason. This is the HOST stack the

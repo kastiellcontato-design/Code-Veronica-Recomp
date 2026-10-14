@@ -656,7 +656,7 @@ static void samp_report(void)
                 s_t2_id[k], (unsigned long long)s_t2_guest[k],
                 (unsigned long long)s_t2_ntdll[k], (unsigned long long)s_t2_other[k]);
     }
-    for (int rank = 0; rank < 150; rank++) {
+    for (int rank = 0; rank < 800; rank++) {
         uint64_t best = 0; int bi = -1;
         for (int k = 0; k < SAMP_RVAS; k++)
             if (s_rva_ct[k] > best) { best = s_rva_ct[k]; bi = k; }
@@ -860,7 +860,7 @@ static DWORD WINAPI samp_thread(LPVOID p)
                 if (!ok) continue;
                 s_samp_total++;
                 uint32_t g = samp_lookup((uintptr_t)c.Rip);
-                if (g) { s_samp_guest++; samp_hit(g); samp_tid2(1, 1, 0); }
+                if (g) { s_samp_guest++; samp_hit(g); samp_tid2(1, 1, 0); samp_rva_hit((uintptr_t)c.Rip); }
                 else {
                     int outside = ((uintptr_t)c.Rip - exe) >= 0x40000000u;
                     if (!outside) samp_rva_hit((uintptr_t)c.Rip);

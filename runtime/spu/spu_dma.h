@@ -673,6 +673,21 @@ static inline int mfc_do_transfer(spu_context* spu, uint32_t lsa, uint64_t ea,
          * find the pushbuffer; NULL for every title that does not. */
         { extern void (*g_spu_put_hook)(uint32_t ea, uint32_t size);
           if (g_spu_put_hook) g_spu_put_hook((uint32_t)ea, size); }
+        /* AUDIO_WRITER diag (cellAudio.c): SPU writes into audio port 0. */
+#ifdef _WIN32
+        { extern volatile uint32_t g_audio_diag_lo, g_audio_diag_hi, g_audio_diag_blk;
+          if (g_audio_diag_hi && (uint32_t)ea >= g_audio_diag_lo && (uint32_t)ea < g_audio_diag_hi) {
+              extern volatile long long g_audio_wr_img[64], g_audio_wr_qpc[32], g_audio_rd_qpc[32];
+              extern volatile long g_audio_late;
+              LARGE_INTEGER qn, qf; QueryPerformanceCounter(&qn); QueryPerformanceFrequency(&qf);
+              uint32_t b = (((uint32_t)ea - g_audio_diag_lo) / g_audio_diag_blk) & 31u;
+              g_audio_wr_img[spu->image_id & 63]++;
+              if (g_audio_rd_qpc[b] && qn.QuadPart - g_audio_rd_qpc[b] < qf.QuadPart / 50 &&
+                  g_audio_wr_qpc[b] <= g_audio_rd_qpc[b])
+                  _InterlockedIncrement(&g_audio_late);
+              g_audio_wr_qpc[b] = qn.QuadPart;
+          } }
+#endif
         /* Bink sync-area watch (armed by the PPU barrier probe): log SPU PUTs
          * that touch the per-SPU lane counters. */
         { extern uint32_t g_barrier_sync_watch;
