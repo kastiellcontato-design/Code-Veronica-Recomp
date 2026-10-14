@@ -108,7 +108,9 @@ static void sys_process_is_stack(ppu_context* ctx)
 #define LWM_SELF(ctx) ((uint32_t)(ctx)->thread_id ? (uint32_t)(ctx)->thread_id : 0x7FFFFFFEu)
 
 #ifdef _WIN32
-static HANDLE lwm_sem(uint32_t addr);   /* fwd (defined below) */
+struct LwmSlot;
+static struct LwmSlot* lwm_sem(uint32_t addr);   /* fwd (defined below) */
+static void lwm_release(struct LwmSlot* s);
 #endif
 static void sys_lwmutex_create(ppu_context* ctx)
 {
@@ -128,7 +130,7 @@ static void sys_lwmutex_create(ppu_context* ctx)
     /* A recreate at a reused address must not inherit a locked slot (e.g. the
      * previous holder exited while holding). Force the semaphore signaled;
      * over-release of an already-free sem fails harmlessly at max count 1. */
-    { HANDLE s = lwm_sem(lwm); if (s) ReleaseSemaphore(s, 1, NULL); }
+    { struct LwmSlot* s = lwm_sem(lwm); if (s) lwm_release(s); }
 #endif
     ctx->gpr[3] = 0;
 }
@@ -147,7 +149,14 @@ static void sys_lwmutex_create(ppu_context* ctx)
  * race-free). Keyed by guest address in an open-addressed table. */
 #ifdef _WIN32
 #define LWM_HASH 65536u
-static struct LwmSlot { volatile long addr; HANDLE sem;
+/* The lock word itself, not a kernel semaphore: a semaphore costs a system
+ * call on EVERY lock and unlock, contended or not, and guest code takes
+ * lwmutexes thousands of times a frame (allocators, job queues) -- sampling
+ * Code Veronica's main thread put ~28% of it inside those calls. Now an
+ * uncontended lock/unlock is one interlocked operation each; only a real wait
+ * goes to the kernel (WaitOnAddress). Like the semaphore it replaces, any
+ * thread may release it. */
+static struct LwmSlot { volatile long addr; volatile long locked; volatile long waiters;
     volatile long holder; volatile long long acq_us; volatile long long acq_fences;
     volatile unsigned long long acq_cpu_us; } g_lwm[LWM_HASH];
 extern "C" { extern volatile long long g_gcm_ref_pub_count;    /* cellGcmSys.c */
@@ -179,23 +188,25 @@ static struct LwmSlot* lwm_find(uint32_t addr){
         if(cur==0) return nullptr; }
     return nullptr;
 }
-static HANDLE lwm_sem(uint32_t addr)
+#pragma comment(lib, "synchronization.lib")   /* WaitOnAddress */
+static struct LwmSlot* lwm_sem(uint32_t addr)
 {
     if (!addr) return nullptr;
     uint32_t h = (addr * 2654435761u) & (LWM_HASH - 1);
     for (uint32_t i = 0; i < LWM_HASH; i++) {
         uint32_t idx = (h + i) & (LWM_HASH - 1);
         long cur = g_lwm[idx].addr;
-        if ((uint32_t)cur == addr) return g_lwm[idx].sem;
+        if ((uint32_t)cur == addr) return &g_lwm[idx];
         if (cur == 0) {
             while (_InterlockedExchange(&g_lwm_tab_lock, 1)) YieldProcessor();
-            HANDLE r = nullptr;
+            struct LwmSlot* r = nullptr;
             if (g_lwm[idx].addr == 0) {
-                g_lwm[idx].sem = CreateSemaphoreA(NULL, 1, 1, NULL); /* free */
+                g_lwm[idx].locked = 0;          /* free */
+                g_lwm[idx].waiters = 0;
                 g_lwm[idx].addr = (long)addr;   /* publish AFTER init (x86 TSO: readers see init) */
-                r = g_lwm[idx].sem;
+                r = &g_lwm[idx];
             } else if ((uint32_t)g_lwm[idx].addr == addr) {
-                r = g_lwm[idx].sem;
+                r = &g_lwm[idx];
             }
             _InterlockedExchange(&g_lwm_tab_lock, 0);
             if (r) return r;
@@ -203,6 +214,37 @@ static HANDLE lwm_sem(uint32_t addr)
         }
     }
     return nullptr;   /* table full (raise LWM_HASH) */
+}
+static inline int lwm_try(struct LwmSlot* s)
+{
+    return s->locked == 0 && _InterlockedCompareExchange(&s->locked, 1, 0) == 0;
+}
+/* Wait up to ms (INFINITE allowed). 1 = acquired, 0 = timed out. */
+static int lwm_acquire(struct LwmSlot* s, DWORD ms)
+{
+    for (int i = 0; i < 64; i++) {           /* short holds: spin first */
+        if (lwm_try(s)) return 1;
+        YieldProcessor();
+    }
+    ULONGLONG t0 = GetTickCount64();
+    for (;;) {
+        _InterlockedIncrement(&s->waiters);
+        long one = 1;
+        DWORD left = INFINITE;
+        if (ms != INFINITE) {
+            ULONGLONG el = GetTickCount64() - t0;
+            left = el >= ms ? 0 : (DWORD)(ms - el);
+        }
+        if (s->locked == 1 && left) WaitOnAddress(&s->locked, &one, sizeof one, left);
+        _InterlockedDecrement(&s->waiters);
+        if (lwm_try(s)) return 1;
+        if (ms != INFINITE && GetTickCount64() - t0 >= ms) return 0;
+    }
+}
+static void lwm_release(struct LwmSlot* s)
+{
+    _InterlockedExchange(&s->locked, 0);     /* over-release of a free lock: harmless */
+    if (s->waiters) WakeByAddressSingle((PVOID)&s->locked);
 }
 #else
 static void* lwm_sem(uint32_t) { return nullptr; }
@@ -222,7 +264,7 @@ static void sys_lwmutex_lock(ppu_context* ctx)
      * been ignoring r4 and always waiting INFINITE, which defeats that pattern. */
     uint64_t timeout_us = ctx->gpr[4];
 #ifdef _WIN32
-    HANDLE s = lwm_sem(lwm);
+    struct LwmSlot* s = lwm_sem(lwm);
     if (s) {
         /* Recursive re-lock by the current holder: bump the count, no wait.
          * Only the holder ever stamps owner=self, so this check is race-free. */
@@ -231,7 +273,7 @@ static void sys_lwmutex_lock(ppu_context* ctx)
             ctx->gpr[3] = 0;
             return;
         }
-        if (WaitForSingleObject(s, 0) != WAIT_OBJECT_0) {
+        if (!lwm_try(s)) {
             /* Contended: log who we're stuck behind (owner stamped at acquire),
              * then block. Bounded diagnostics for park hunts; uncapped while the
              * probe window is open (g_nd_inpump). */
@@ -246,8 +288,7 @@ static void sys_lwmutex_lock(ppu_context* ctx)
             long long _blk_start = lwm_trace() ? lwm_now_us() : 0;
             DWORD ms = INFINITE;
             if (timeout_us) { uint64_t m = (timeout_us + 999) / 1000; ms = m > 0xFFFFFFFEull ? 0xFFFFFFFEu : (DWORD)m; }
-            DWORD wr = WaitForSingleObject(s, ms);
-            if (wr == WAIT_TIMEOUT) {           /* honor the timeout: ETIMEDOUT, no acquire */
+            if (!lwm_acquire(s, ms)) {           /* honor the timeout: ETIMEDOUT, no acquire */
                 if (lwm_trace()) fprintf(stderr, "[LWM-CONVOY] tid=%llu TIMED-OUT on lwm=0x%08X after %lldus (ETIMEDOUT, retry)\n",
                     (unsigned long long)ctx->thread_id, lwm, lwm_now_us() - _blk_start);
                 ctx->gpr[3] = (uint64_t)(int64_t)(int32_t)0x8001000Bu;
@@ -269,14 +310,14 @@ static void sys_lwmutex_trylock(ppu_context* ctx)
     uint32_t lwm = (uint32_t)ctx->gpr[3];
     uint32_t self = LWM_SELF(ctx);
 #ifdef _WIN32
-    HANDLE s = lwm_sem(lwm);
+    struct LwmSlot* s = lwm_sem(lwm);
     if (s) {
         if (vm_read32(lwm + LWM_OWNER) == self && vm_read32(lwm + LWM_RECUR) > 0) {
             vm_write32(lwm + LWM_RECUR, vm_read32(lwm + LWM_RECUR) + 1);
             ctx->gpr[3] = 0;
             return;
         }
-        if (WaitForSingleObject(s, 0) != WAIT_OBJECT_0) { ctx->gpr[3] = (uint64_t)(int64_t)(int32_t)0x8001000Bu; return; } // EBUSY
+        if (!lwm_try(s)) { ctx->gpr[3] = (uint64_t)(int64_t)(int32_t)0x8001000Bu; return; } // EBUSY
     }
     if (lwm_trace()) { struct LwmSlot* sl = lwm_find(lwm); if (sl) { sl->holder = (long)self; sl->acq_us = lwm_now_us(); sl->acq_fences = g_gcm_ref_pub_count; sl->acq_cpu_us = ppu_thread_cpu_us(self); } }
 #endif
@@ -323,11 +364,11 @@ static void sys_lwmutex_unlock(ppu_context* ctx)
                 fprintf(stderr, "%s\n", b); fflush(stderr);
             }
             sl->holder = 0; } }
-    HANDLE s = lwm_sem(lwm);
-    /* Semaphore release works from ANY thread (unlike a CS) -- guest code
-     * hands lwmutex ownership across threads. Over-release (unlock of a free
-     * mutex) fails harmlessly at the max count of 1. */
-    if (s) ReleaseSemaphore(s, 1, NULL);
+    struct LwmSlot* s = lwm_sem(lwm);
+    /* Release works from ANY thread (unlike a CS) -- guest code hands lwmutex
+     * ownership across threads. Over-release (unlock of a free mutex) is
+     * harmless. */
+    if (s) lwm_release(s);
 #endif
     ctx->gpr[3] = 0;
 }
@@ -362,15 +403,15 @@ static void sys_lwcond_wait(ppu_context* ctx)
     uint32_t lwcond  = (uint32_t)ctx->gpr[3];
     uint32_t lwmutex = (uint32_t)vm_read64(lwcond + 0x00);
 #ifdef _WIN32
-    HANDLE s = lwm_sem(lwmutex);
+    struct LwmSlot* s = lwm_sem(lwmutex);
     if (s) {
         uint32_t own = vm_read32(lwmutex + LWM_OWNER);
         uint32_t rc  = vm_read32(lwmutex + LWM_RECUR);
         vm_write32(lwmutex + LWM_RECUR, 0);
         vm_write32(lwmutex + LWM_OWNER, 0);
-        ReleaseSemaphore(s, 1, NULL);
+        lwm_release(s);
         Sleep(1);
-        WaitForSingleObject(s, INFINITE);
+        lwm_acquire(s, INFINITE);
         vm_write32(lwmutex + LWM_OWNER, own);
         vm_write32(lwmutex + LWM_RECUR, rc ? rc : 1);
     }
