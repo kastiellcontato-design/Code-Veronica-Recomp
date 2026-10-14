@@ -297,7 +297,7 @@ int spu_run_with_halt(void (*entry)(spu_context*), spu_context* ctx)
  *     stored both took the same slot and then shared one engine's queue and tag
  *     state -- one SPU's tag wait satisfied by the other SPU's transfer.
  * ===========================================================================*/
-#define SPU_MAX_CONTEXTS 8
+#define SPU_MAX_CONTEXTS 64   /* lighter scene: ~40 SPU tasks at once; 8 left the rest sharing one engine */
 
 typedef struct {
     spu_context* volatile ctx;
@@ -2368,9 +2368,11 @@ void spu_indirect_branch(spu_context* ctx)
               /* SPU_INTERP_DUMP=<prefix>: write the whole local store once, at the
                * 300th entry (runtime-loaded modules are resident by then), so
                * the code can be located in the ELF and lifted. */
-              { static const char* s_dp = (const char*)1; static volatile LONG s_dn;
+              { static const char* s_dp = (const char*)1; static volatile LONG s_dn[64];
                 if (s_dp == (const char*)1) s_dp = getenv("SPU_INTERP_DUMP");
-                if (s_dp && InterlockedIncrement(&s_dn) == 300) {
+                /* once per image: the first images to reach here (boot-time ones)
+                 * must not use up the only dump */
+                if (s_dp && InterlockedIncrement(&s_dn[(unsigned)ctx->image_id & 63]) == 300) {
                     char path[512]; snprintf(path, sizeof path, "%s_img%d.ls", s_dp, ctx->image_id);
                     FILE* f = fopen(path, "wb");
                     if (f) { fwrite(ctx->ls, 1, SPU_LS_SIZE, f); fclose(f);

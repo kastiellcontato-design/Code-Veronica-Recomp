@@ -40,17 +40,22 @@ static volatile long g_lockline = 0;
  * -- FMOD's mixer task among them, 25-40 ms at a time. */
 /* Contention counters for the [PERF] coherence line (spu_coh_stats_report). */
 static volatile long s_ll_contended, s_ll_yields;
+/* Time spent waiting in the contended path, in QPC ticks (PS3_SPU_STAT). */
+volatile long long g_ll_wait_ticks = 0;
 void spu_lockline_lock(void)
 {
     unsigned spins = 0;
     if (!_InterlockedExchange(&g_lockline, 1)) return;
     _InterlockedIncrement(&s_ll_contended);
+    LARGE_INTEGER t0; QueryPerformanceCounter(&t0);
     do {
         do {
             _mm_pause();
             if (++spins >= 4096) { spins = 0; _InterlockedIncrement(&s_ll_yields); SwitchToThread(); }
         } while (g_lockline);
     } while (_InterlockedExchange(&g_lockline, 1));
+    LARGE_INTEGER t1; QueryPerformanceCounter(&t1);
+    _InterlockedExchangeAdd64(&g_ll_wait_ticks, t1.QuadPart - t0.QuadPart);
 }
 void spu_lockline_unlock(void) { _InterlockedExchange(&g_lockline, 0); }
 #else

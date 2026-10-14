@@ -280,6 +280,11 @@ static unsigned long long spu_stat_now_us(void)
 #endif
 }
 #define SPU_STAT_IMGS 64
+#ifdef _WIN32
+volatile LONG64 g_spu_waitsig_ticks = 0, g_spu_waitsig_n = 0;   /* WAIT_SIGNAL time */
+extern volatile long long g_ll_wait_ticks;                        /* spu_coherency.c */
+extern void spu_coh_stats_report(void* fp);
+#endif
 static volatile long long s_spu_stat_n[SPU_STAT_IMGS], s_spu_stat_start[SPU_STAT_IMGS], s_spu_stat_run[SPU_STAT_IMGS];
 static volatile long long s_spu_stat_t0 = 0;
 #ifdef _WIN32
@@ -312,6 +317,15 @@ static void spu_stat_record(int image_id, unsigned long long start_lat, unsigned
                 (double)s_spu_stat_run[i] / 1000.0 / secs);
         s_spu_stat_n[i] = 0; s_spu_stat_start[i] = 0; s_spu_stat_run[i] = 0;
     }
+#ifdef _WIN32
+    { static LARGE_INTEGER qf; if (!qf.QuadPart) QueryPerformanceFrequency(&qf);
+      LONG64 ll = InterlockedExchange64((volatile LONG64*)&g_ll_wait_ticks, 0);
+      LONG64 ws = InterlockedExchange64(&g_spu_waitsig_ticks, 0);
+      LONG64 wn = InterlockedExchange64(&g_spu_waitsig_n, 0);
+      fprintf(stderr, "[SPU-STAT] waits: atomic lock-line %.1f ms/s | WAIT_SIGNAL %.1f ms/s (%.0f/s)\n",
+              ll * 1000.0 / qf.QuadPart / secs, ws * 1000.0 / qf.QuadPart / secs, wn / secs);
+      spu_coh_stats_report(stderr); }
+#endif
 }
 
 /* ---- Persistent per-taskset local store (LBP_PERSIST_LS) ------------------
@@ -1298,6 +1312,7 @@ int spu_taskset_wait_signal(uint32_t taskset_ea, uint32_t taskId)
      * run (and possibly signal us); re-acquired before returning to resume. */
     spu_serial_release();
 #ifdef _WIN32
+    LARGE_INTEGER _ws0; QueryPerformanceCounter(&_ws0);
     AcquireSRWLockExclusive(&s_sig_lock);
     while (!spurs_bitset_test(taskset_ea + CSTS_SIGNALLED, taskId)) {
         if (!SleepConditionVariableSRW(&s_sig_cv, &s_sig_lock, 1000, 0)) {
@@ -1310,6 +1325,9 @@ int spu_taskset_wait_signal(uint32_t taskset_ea, uint32_t taskId)
     }
     if (!drained) spurs_bitset_clear(taskset_ea + CSTS_SIGNALLED, taskId);
     ReleaseSRWLockExclusive(&s_sig_lock);
+    { LARGE_INTEGER _ws1; QueryPerformanceCounter(&_ws1);
+      InterlockedExchangeAdd64(&g_spu_waitsig_ticks, _ws1.QuadPart - _ws0.QuadPart);
+      InterlockedIncrement64(&g_spu_waitsig_n); }
 #else
     pthread_mutex_lock(&s_sig_lock);
     while (!spurs_bitset_test(taskset_ea + CSTS_SIGNALLED, taskId)) {

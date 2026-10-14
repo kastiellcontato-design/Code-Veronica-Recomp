@@ -130,3 +130,4 @@ projects/*/spu-run-*.txt
 third_party/ffmpeg/bin/
 .mcp.json
 projects/*/shader_cache/
+projects/*/spu_dump/
