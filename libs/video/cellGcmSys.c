@@ -149,9 +149,24 @@ static void tl_thread_name(unsigned tid, char* out, size_t n)
     CloseHandle(h);
 }
 
+/* Contended lwmutex locks taken by the main thread: lock and holder thread. */
+static struct { u32 lwm; unsigned tid; u32 n; } s_tl_lwm[256];
+void ps3_tl_lwm_note(u32 lwm, unsigned holder_tid)
+{
+    if (!tl_on() || GetCurrentThreadId() != s_tl_flip_tid) return;
+    int f = -1;
+    for (int i = 0; i < 256; i++)
+        if (s_tl_lwm[i].n && s_tl_lwm[i].lwm == lwm && s_tl_lwm[i].tid == holder_tid) { f = i; break; }
+    if (f < 0) for (int i = 0; i < 256; i++) if (!s_tl_lwm[i].n) { f = i; s_tl_lwm[i].lwm = lwm; s_tl_lwm[i].tid = holder_tid; break; }
+    if (f >= 0) s_tl_lwm[f].n++;
+}
+static double s_tl_prev[TL_N];
+
 /* Present side: one guest frame handed to the backend. Reports every ~5 s. */
 static double s_tl_lag = 0.0, s_tl_win0 = 0.0, s_tl_d_last = 0.0, s_tl_d_int = 0.0;
 static u32    s_tl_lag_n = 0, s_tl_d_n = 0, s_tl_qmax = 0, s_tl_g_win = 0;
+static double s_tl_d_min = 1e9, s_tl_d_max = 0.0;
+static u32    s_tl_hist[8];
 
 void ps3_tl_frame(void)
 {
@@ -163,8 +178,29 @@ void ps3_tl_frame(void)
         if (g - d - 1 > s_tl_qmax) s_tl_qmax = g - d - 1;
         s_tl_dflips = d + 1;
     }
-    if (s_tl_d_last > 0.0) { s_tl_d_int += now - s_tl_d_last; s_tl_d_n++; }
+    if (s_tl_d_last > 0.0) {
+        double d = now - s_tl_d_last;
+        s_tl_d_int += d; s_tl_d_n++;
+        if (d < s_tl_d_min) s_tl_d_min = d;
+        if (d > s_tl_d_max) s_tl_d_max = d;
+        int b = (int)(d * 1000.0 / 8.0); if (b > 7) b = 7;   /* 8 ms buckets */
+        s_tl_hist[b]++;
+        /* A hitch: what this one frame spent, stage by stage. */
+        if (d > 0.060) {
+            static unsigned hn = 0;
+            if (hn++ < 400) {
+                char hl[512]; int ho = snprintf(hl, sizeof hl, "[TL-HITCH] %.1fms:", d * 1000.0);
+                for (int i = 0; i < TL_N; i++) {
+                    double x = s_tl_acc[i] - s_tl_prev[i];
+                    if (s_tl_name[i] && x >= 0.002)
+                        ho += snprintf(hl + ho, sizeof hl - ho, " %s %.1f", s_tl_name[i], x * 1000.0);
+                }
+                fprintf(stderr, "%s%c", hl, 10);
+            }
+        }
+    }
     s_tl_d_last = now;
+    memcpy(s_tl_prev, s_tl_acc, sizeof s_tl_prev);
     if (s_tl_win0 == 0.0) { s_tl_win0 = now; s_tl_g_win = g; }
     if (now - s_tl_win0 < 5.0 || !s_tl_d_n) return;
 
@@ -180,6 +216,10 @@ void ps3_tl_frame(void)
         o += snprintf(line + o, sizeof line - o, " %s %.1fms(x%.1f)", s_tl_name[i],
                       1000.0 * s_tl_acc[i] / fn, s_tl_cnt[i] / fn);
     fprintf(stderr, "%s%c", line, 10);
+    fprintf(stderr, "[TL]   frame interval min %.1fms max %.1fms | <8:%u <16:%u <24:%u <32:%u <40:%u <48:%u <56:%u 56+:%u%c",
+            1000.0 * s_tl_d_min, 1000.0 * s_tl_d_max, s_tl_hist[0], s_tl_hist[1], s_tl_hist[2],
+            s_tl_hist[3], s_tl_hist[4], s_tl_hist[5], s_tl_hist[6], s_tl_hist[7], 10);
+    s_tl_d_min = 1e9; s_tl_d_max = 0.0; memset(s_tl_hist, 0, sizeof s_tl_hist);
 
     /* usleep per guest thread, this window, busiest first */
     { enum { M = 32 };
@@ -213,7 +253,23 @@ void ps3_tl_frame(void)
       for (int i = 0; i < n; i++) { ptid[i] = tid[i]; pus[i] = us[i]; pcalls[i] = calls[i]; }
       pn = n; }
 
+    /* contended locks of the main thread, busiest first */
+    { int o2 = 0; char ll[768];
+      o2 += snprintf(ll + o2, sizeof ll - o2, "[TL]   MAIN contended locks:");
+      for (int r = 0; r < 4; r++) {
+          int b = -1;
+          for (int i = 0; i < 256; i++) if (s_tl_lwm[i].n && (b < 0 || s_tl_lwm[i].n > s_tl_lwm[b].n)) b = i;
+          if (b < 0) break;
+          char nm[64]; tl_thread_name(s_tl_lwm[b].tid, nm, sizeof nm);
+          o2 += snprintf(ll + o2, sizeof ll - o2, " [lwm 0x%08X held by %s: %.1f/frame]",
+                         s_tl_lwm[b].lwm, nm, s_tl_lwm[b].n / fn);
+          s_tl_lwm[b].n = 0;
+      }
+      memset(s_tl_lwm, 0, sizeof s_tl_lwm);
+      fprintf(stderr, "%s%c", ll, 10); }
+
     for (int i = 0; i < TL_N; i++) { s_tl_acc[i] = 0.0; s_tl_cnt[i] = 0; }
+    memset(s_tl_prev, 0, sizeof s_tl_prev);
     s_tl_lag = 0.0; s_tl_lag_n = 0; s_tl_qmax = 0;
     s_tl_d_int = 0.0; s_tl_d_n = 0; s_tl_win0 = now; s_tl_g_win = g;
 }
@@ -223,6 +279,7 @@ void ps3_tl_end(int ev) { (void)ev; }
 void ps3_tl_sleep_begin(void) {}
 void ps3_tl_sleep_end(void) {}
 void ps3_tl_main_begin(int ev) { (void)ev; }
+void ps3_tl_lwm_note(u32 lwm, unsigned holder_tid) { (void)lwm; (void)holder_tid; }
 void ps3_tl_main_end(int ev) { (void)ev; }
 static void tl_game_flip(void) {}
 void ps3_tl_frame(void) {}

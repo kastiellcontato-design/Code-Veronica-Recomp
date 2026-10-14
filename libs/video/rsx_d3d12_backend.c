@@ -4960,6 +4960,45 @@ static void srv_write(u32 heap_slot, ID3D12Resource* res, DXGI_FORMAT fmt, UINT 
     srv_write_ex(heap_slot, res, fmt, mapping, 0);
 }
 
+/* A draw's texture window, collected first and written only when it differs
+ * from the previous draw's: consecutive draws mostly bind the same textures
+ * (the lighter's six shadow faces redraw the room with identical ones), and
+ * writing all eight views per draw was ~9 ms a frame, spiking past 40 ms.
+ * A draw that may sample its own target keeps a window of its own -- the
+ * feedback copy rewrites it at bind time. SRV_NOREUSE=1 writes every draw. */
+typedef struct { ID3D12Resource* res; u32 fmt, map, cube, pad; } SrvReq;
+static u32 s_srv_win[MAX_DRAWS];
+static SrvReq s_srv_last[FP_TEX_UNITS];
+static int s_srv_last_win = -1;
+static u64 s_srv_reused = 0, s_srv_written = 0;
+static void srv_req_ex(SrvReq* r, ID3D12Resource* res, DXGI_FORMAT fmt, UINT mapping, int cube)
+{
+    r->res = res; r->fmt = (u32)fmt; r->map = mapping; r->cube = (u32)cube; r->pad = 0;
+}
+static void srv_req(SrvReq* r, ID3D12Resource* res, DXGI_FORMAT fmt, UINT mapping)
+{
+    srv_req_ex(r, res, fmt, mapping, 0);
+}
+static void srv_commit(u32 d, const SrvReq* rq, int own_window)
+{
+    static int off = -1;
+    if (off < 0) off = getenv("SRV_NOREUSE") ? 1 : 0;
+    if (!off && !own_window && s_srv_last_win >= 0 &&
+        memcmp(rq, s_srv_last, sizeof s_srv_last) == 0) {
+        s_srv_win[d] = (u32)s_srv_last_win;
+        s_srv_reused++;
+        return;
+    }
+    for (int u = 0; u < FP_TEX_UNITS; u++)
+        srv_write_ex(DRAW_SRV_BASE + d * FP_TEX_UNITS + (u32)u, rq[u].res,
+                     (DXGI_FORMAT)rq[u].fmt, rq[u].map, (int)rq[u].cube);
+    s_srv_win[d] = d;
+    s_srv_written++;
+    if (own_window) { s_srv_last_win = -1; return; }
+    memcpy(s_srv_last, rq, sizeof s_srv_last);
+    s_srv_last_win = (int)d;
+}
+
 static void off_rt_transition(int slot, D3D12_RESOURCE_STATES to)
 {
     OffRT* r = &s_d3d.off_rt[slot];
@@ -5622,6 +5661,10 @@ static void render_frame_impl(void)
 {
     double _rf0 = perf_on() ? perf_now() : 0.0;
     u32 fi = s_d3d.frame_index;
+    /* PERF: a render frame over 50 ms reports its own stage breakdown. */
+    const double _h_tex = s_perf_tex, _h_srv = s_perf_srv, _h_pso = s_perf_pso,
+                 _h_pre = s_perf_pre, _h_gpu = s_perf_gpu;
+    const int _h_ntex = s_perf_ntex; double _h_misc = 0.0;
 
     /* Drain the GPU before touching shared upload resources (vp_vb vertices,
      * vp_cb constants, per-frame texture staging): the previous frame's draws
@@ -5632,9 +5675,11 @@ static void render_frame_impl(void)
     { double _tw = perf_on() ? perf_now() : 0.0;
       wait_for_gpu();
       if (perf_on()) s_perf_gpu += perf_now() - _tw; }
+    { double _m0 = perf_on() ? perf_now() : 0.0;
     plib_init();          /* first frame: open shader_cache/pipelines.bin */
     fp_async_drain();     /* pipelines the shader workers finished */
     plib_maybe_save();
+      if (perf_on()) _h_misc = perf_now() - _m0; }
 
     off_rt_writeback_flush();   /* GPU is idle: last frame's copies are ready */
     s_cv_query_active = 0;
@@ -5939,8 +5984,10 @@ static void render_frame_impl(void)
      * (tex_slot 1000+idx) -- no guest-memory upload. */
     double _pre0 = perf_on() ? perf_now() : 0.0;
     for (int _i = 0; _i < VP_TEX_SLOTS; _i++) s_d3d.vp_tex[_i].used = 0;
+    s_srv_last_win = -1;
     for (u32 _d = 0; _d < s_rb.count && _d < MAX_DRAWS; _d++) {
         D3D12DrawRecord* dr = &s_rb.draws[_d];
+        s_srv_win[_d] = _d;
         if (!dr->is_vp || dr->is_clear || dr->is_copy) continue;
         /* Debug: RTT_VIEWRT=<hex raw offset> makes display draws sample that
          * offscreen RT at t0 (the composite blit then shows it fullscreen). */
@@ -6023,8 +6070,9 @@ static void render_frame_impl(void)
          * resolves to an offscreen RT (sampled directly), an uploaded guest
          * texture, or a null SRV. */
         double _sv0 = perf_on() ? perf_now() : 0.0;
+        SrvReq _rq[FP_TEX_UNITS]; int _fb_risk = 0;
+        memset(_rq, 0, sizeof _rq);
         for (int _u = 0; _u < FP_TEX_UNITS; _u++) {
-            u32 wslot = DRAW_SRV_BASE + _d * FP_TEX_UNITS + (u32)_u;
             dr->tex_rt[_u] = -1;
             /* Display-sized sampler source -> the rendered frame. */
             if (dr->tex[_u].set && s_screen_copy &&
@@ -6036,7 +6084,7 @@ static void render_frame_impl(void)
                         fprintf(stderr, "[SCREENTEX] bound frame copy at unit %d for"
                                         " fp=0x%X (%ux%u)%c", _u, dr->fp_addr,
                                 dr->tex[_u].w, dr->tex[_u].h, 10); }
-                    srv_write(wslot, s_screen_copy, DXGI_FORMAT_R8G8B8A8_UNORM,
+                    srv_req(&_rq[_u], s_screen_copy, DXGI_FORMAT_R8G8B8A8_UNORM,
                               D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING);
                     continue;
                 }
@@ -6057,7 +6105,7 @@ static void render_frame_impl(void)
                         { static int _n = 0; if (getenv("SUBVP_DBG") && _n++ < 8)
                             fprintf(stderr, "[SUBVP] unit %d fp=0x%X <- captured %ux%u%c",
                                     _u, dr->fp_addr, dr->tex[_u].w, dr->tex[_u].h, 10); }
-                        srv_write(wslot, s_subvp[hit].res, DXGI_FORMAT_R8G8B8A8_UNORM,
+                        srv_req(&_rq[_u], s_subvp[hit].res, DXGI_FORMAT_R8G8B8A8_UNORM,
                                   D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING);
                         continue;
                     }
@@ -6080,6 +6128,7 @@ static void render_frame_impl(void)
                 }
                 if (rt >= 0) {
                     dr->tex_rt[_u] = rt;
+                    if (s_d3d.off_rt[rt].off == dr->rt_off) _fb_risk = 1;   /* may need a feedback copy */
                     /* RT_NOGAMMA=1 (diagnostic): sample render targets without
                      * their gamma bits. Off by default: RPCS3 applies them to
                      * surfaces too, and Code Veronica's bloom downsample needs
@@ -6094,7 +6143,7 @@ static void render_frame_impl(void)
                     }
                     /* The converted zeta holds A8R8G8B8 bytes in memory order,
                      * so it takes the draw's remap like an uploaded texture. */
-                    srv_write(wslot, s_d3d.off_rt[rt].res, (DXGI_FORMAT)s_d3d.off_rt[rt].dxgi,
+                    srv_req(&_rq[_u], s_d3d.off_rt[rt].res, (DXGI_FORMAT)s_d3d.off_rt[rt].dxgi,
                               (rt == s_zview_slot)
                                   ? rsx_remap_to_d3d(dr->tex[_u].ctrl1, 0x85)
                                   : D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING);
@@ -6123,7 +6172,7 @@ static void render_frame_impl(void)
                             (_bf == 0x87) ? DXGI_FORMAT_BC2_UNORM :
                             (_bf == 0x88) ? DXGI_FORMAT_BC3_UNORM :
                                             DXGI_FORMAT_R8_UNORM;
-                        srv_write_ex(wslot, s_d3d.vp_tex[ts].res, sf,
+                        srv_req_ex(&_rq[_u], s_d3d.vp_tex[ts].res, sf,
                                   (_bf == 0x81) ? 0x1000
                                                 : rsx_remap_to_d3d(dr->tex[_u].ctrl1, _bf),
                                   _cube);
@@ -6140,9 +6189,10 @@ static void render_frame_impl(void)
                 fprintf(stderr, "[TEXBIND] null SRV unit=%d raw=0x%X off=0x%X %ux%u fmt=0x%02X%c",
                         _u, dr->tex[_u].raw, dr->tex[_u].off, dr->tex[_u].w,
                         dr->tex[_u].h, dr->tex[_u].fmt, 10); } }
-            srv_write(wslot, NULL, DXGI_FORMAT_R8G8B8A8_UNORM,
+            srv_req(&_rq[_u], NULL, DXGI_FORMAT_R8G8B8A8_UNORM,
                       D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING);
         }
+        srv_commit((u32)_d, _rq, _fb_risk);
         if (perf_on()) s_perf_srv += perf_now() - _sv0;
         double _ps0 = perf_on() ? perf_now() : 0.0;
         if (dr->fp_addr) vp_get_fp_pso(dr->vs_idx, dr->fp_addr, dr->blend_key,
@@ -6621,7 +6671,7 @@ static void render_frame_impl(void)
                     }
                 }
                 D3D12_GPU_DESCRIPTOR_HANDLE gh = gh_base;
-                gh.ptr += (u64)(DRAW_SRV_BASE + d * FP_TEX_UNITS) * s_d3d.srv_inc;
+                gh.ptr += (u64)(DRAW_SRV_BASE + s_srv_win[d] * FP_TEX_UNITS) * s_d3d.srv_inc;
                 s_d3d.cmd_list->lpVtbl->SetGraphicsRootDescriptorTable(s_d3d.cmd_list, 1, gh);
                 if (dr->vtex_mask) {   /* t16-t19 for the transform program's TXL */
                     D3D12_GPU_DESCRIPTOR_HANDLE vh = gh_base;
@@ -6712,7 +6762,21 @@ static void render_frame_impl(void)
         }
     }
 
-    if (perf_on()) s_perf_rf += perf_now() - _rf0;
+    if (perf_on()) {
+        double el = perf_now() - _rf0;
+        s_perf_rf += el;
+        if (el > 0.050) {
+            static int hn = 0;
+            if (hn++ < 200)
+                fprintf(stderr, "[RENDER-HITCH] %.1fms draws=%u | gpu-wait %.1f pso-drain/save %.1f"
+                        " prepass %.1f (tex %.1f in %d uploads, srv %.1f, pso %.1f) | rest %.1f%c",
+                        el * 1000.0, s_rb.count, (s_perf_gpu - _h_gpu) * 1000.0, _h_misc * 1000.0,
+                        (s_perf_pre - _h_pre) * 1000.0, (s_perf_tex - _h_tex) * 1000.0,
+                        s_perf_ntex - _h_ntex, (s_perf_srv - _h_srv) * 1000.0,
+                        (s_perf_pso - _h_pso) * 1000.0,
+                        (el - (s_perf_gpu - _h_gpu) - _h_misc - (s_perf_pre - _h_pre)) * 1000.0, 10);
+        }
+    }
     /* MEMPEEK=<hex addr>:<n>: n big-endian floats at a guest address each frame,
      * with a min/max so a buffer of constants is distinguishable from real data. */
     { const char* mp = getenv("MEMPEEK");
@@ -6817,9 +6881,12 @@ static void render_frame_impl(void)
                       s_vtex_copy_bytes / 1048576.0, 10);
               s_vtex_skip = 0; s_vtex_cmp_bytes = 0; s_vtex_copy_bytes = 0;
               fprintf(stderr, "[PERF-VCB] vertex constants: %u banks written, %u reused"
-                              " | vertices: %llu converted, %llu reused%c",
-                      s_vcb_copied, s_vcb_reused, s_vmemo_miss, s_vmemo_hits, 10);
+                              " | vertices: %llu converted, %llu reused"
+                              " | texture windows: %llu written, %llu reused%c",
+                      s_vcb_copied, s_vcb_reused, s_vmemo_miss, s_vmemo_hits,
+                      s_srv_written, s_srv_reused, 10);
               s_vcb_copied = 0; s_vcb_reused = 0; s_vmemo_miss = 0; s_vmemo_hits = 0;
+              s_srv_written = 0; s_srv_reused = 0;
               { LONG hh = InterlockedExchange(&s_shc_hits, 0), mm = InterlockedExchange(&s_shc_miss, 0);
                 LONG pl = InterlockedExchange(&s_plib_loaded, 0);
                 LONG ab = InterlockedExchange(&s_fp_async_built, 0), as = InterlockedExchange(&s_fp_async_skips, 0);

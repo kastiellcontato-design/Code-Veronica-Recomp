@@ -113,6 +113,7 @@ static void sys_process_is_stack(ppu_context* ctx)
 static int lwm_count_dbg(void) { static int v = -1; if (v < 0) v = getenv("LWM_COUNT") ? 1 : 0; return v; }
 extern "C" void ps3_tl_main_begin(int);   /* PS3_TIMELINE, cellGcmSys.c */
 extern "C" void ps3_tl_main_end(int);
+extern "C" void ps3_tl_lwm_note(uint32_t lwm, unsigned holder_tid);
 struct LwmSlot;
 static struct LwmSlot* lwm_sem(uint32_t addr);   /* fwd (defined below) */
 static void lwm_release(struct LwmSlot* s);
@@ -161,7 +162,7 @@ static void sys_lwmutex_create(ppu_context* ctx)
  * uncontended lock/unlock is one interlocked operation each; only a real wait
  * goes to the kernel (WaitOnAddress). Like the semaphore it replaces, any
  * thread may release it. */
-static struct LwmSlot { volatile long addr; volatile long locked; volatile long waiters;
+static struct LwmSlot { volatile long addr; volatile long locked; volatile long waiters; volatile long host_holder;
     volatile long holder; volatile long long acq_us; volatile long long acq_fences;
     volatile unsigned long long acq_cpu_us; } g_lwm[LWM_HASH];
 extern "C" { extern volatile long long g_gcm_ref_pub_count;    /* cellGcmSys.c */
@@ -222,14 +223,31 @@ static struct LwmSlot* lwm_sem(uint32_t addr)
 }
 static inline int lwm_try(struct LwmSlot* s)
 {
-    return s->locked == 0 && _InterlockedCompareExchange(&s->locked, 1, 0) == 0;
+    if (s->locked == 0 && _InterlockedCompareExchange(&s->locked, 1, 0) == 0) {
+        s->host_holder = (long)GetCurrentThreadId();   /* PS3_TIMELINE: who holds it */
+        return 1;
+    }
+    return 0;
 }
 /* Wait up to ms (INFINITE allowed). 1 = acquired, 0 = timed out. */
 static int lwm_acquire(struct LwmSlot* s, DWORD ms)
 {
-    for (int i = 0; i < 64; i++) {           /* short holds: spin first */
+    /* Guest critical sections are short (allocators, queues): a holder
+     * releases within microseconds, while a thread that went to sleep pays
+     * the scheduler's wake latency on top. Code Veronica's main thread lost
+     * ~9 ms a frame on ~40 contended locks -- but spinning (LWM_SPIN=4000)
+     * did not shorten it: the holders really do hold that long. Off by
+     * default; LWM_SPIN=<n> adds a pause-spin plus a few yields. */
+    static int spin = -1, yields = 0;
+    if (spin < 0) { const char* e = getenv("LWM_SPIN"); spin = e ? atoi(e) : 0;
+                    yields = spin ? 16 : 0; }
+    for (int i = 0; i < 64 + spin; i++) {    /* short holds: spin first */
         if (lwm_try(s)) return 1;
         YieldProcessor();
+    }
+    for (int i = 0; i < yields; i++) {       /* let a preempted holder run */
+        SwitchToThread();
+        if (lwm_try(s)) return 1;
     }
     ULONGLONG t0 = GetTickCount64();
     for (;;) {
@@ -293,6 +311,7 @@ static void sys_lwmutex_lock(ppu_context* ctx)
             long long _blk_start = lwm_trace() ? lwm_now_us() : 0;
             DWORD ms = INFINITE;
             if (timeout_us) { uint64_t m = (timeout_us + 999) / 1000; ms = m > 0xFFFFFFFEull ? 0xFFFFFFFEu : (DWORD)m; }
+            ps3_tl_lwm_note(lwm, (unsigned)s->host_holder);
             ps3_tl_main_begin(16);
             int got = lwm_acquire(s, ms);
             ps3_tl_main_end(16);
