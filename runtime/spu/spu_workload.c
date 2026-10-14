@@ -254,7 +254,65 @@ typedef struct {
     uint32_t            taskset_ea;   /* captured race-free at dispatch (globals get clobbered) */
     uint32_t            taskid;
     uint32_t            cv_inflate_ea;
+    unsigned long long  t_dispatch_us;   /* PS3_SPU_STAT */
 } spu_async_job;
+
+/* PS3_SPU_STAT=1: per SPU image, every 5 s -- tasks run, how long each waited
+ * from dispatch until its thread started, and how long it ran. Says whether a
+ * slow SPU stage is thread start-up or the SPU code itself. */
+static int spu_stat_on(void)
+{
+    static int v = -1;
+    if (v < 0) { const char* e = getenv("PS3_SPU_STAT"); v = (e && *e && *e != '0') ? 1 : 0; }
+    return v;
+}
+static unsigned long long spu_stat_now_us(void)
+{
+#ifdef _WIN32
+    static LARGE_INTEGER f; LARGE_INTEGER c;
+    if (!f.QuadPart) QueryPerformanceFrequency(&f);
+    QueryPerformanceCounter(&c);
+    return (unsigned long long)(c.QuadPart / f.QuadPart) * 1000000ull
+         + (unsigned long long)(c.QuadPart % f.QuadPart) * 1000000ull / (unsigned long long)f.QuadPart;
+#else
+    struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (unsigned long long)ts.tv_sec * 1000000ull + (unsigned long long)ts.tv_nsec / 1000ull;
+#endif
+}
+#define SPU_STAT_IMGS 64
+static volatile long long s_spu_stat_n[SPU_STAT_IMGS], s_spu_stat_start[SPU_STAT_IMGS], s_spu_stat_run[SPU_STAT_IMGS];
+static volatile long long s_spu_stat_t0 = 0;
+#ifdef _WIN32
+#define SPU_STAT_ADD(p, v) InterlockedExchangeAdd64((volatile LONG64*)(p), (LONG64)(v))
+#else
+#define SPU_STAT_ADD(p, v) __atomic_fetch_add((p), (v), __ATOMIC_RELAXED)
+#endif
+static void spu_stat_record(int image_id, unsigned long long start_lat, unsigned long long run)
+{
+    int k = (image_id >= 0 && image_id < SPU_STAT_IMGS) ? image_id : SPU_STAT_IMGS - 1;
+    SPU_STAT_ADD(&s_spu_stat_n[k], 1);
+    SPU_STAT_ADD(&s_spu_stat_start[k], (long long)start_lat);
+    SPU_STAT_ADD(&s_spu_stat_run[k], (long long)run);
+    unsigned long long now = spu_stat_now_us();
+    long long t0 = s_spu_stat_t0;
+    if (!t0) { s_spu_stat_t0 = (long long)now; return; }
+    if (now - (unsigned long long)t0 < 5000000ull) return;
+#ifdef _WIN32
+    if (InterlockedCompareExchange64((volatile LONG64*)&s_spu_stat_t0, (LONG64)now, (LONG64)t0) != t0) return;
+#else
+    if (!__atomic_compare_exchange_n(&s_spu_stat_t0, &t0, (long long)now, 0, __ATOMIC_ACQ_REL, __ATOMIC_RELAXED)) return;
+#endif
+    double secs = (double)(now - (unsigned long long)t0) / 1e6;
+    for (int i = 0; i < SPU_STAT_IMGS; i++) {
+        long long n = s_spu_stat_n[i];
+        if (!n) continue;
+        fprintf(stderr, "[SPU-STAT] image %d: %.1f tasks/s | start latency avg %.0f us | run avg %.0f us"
+                        " (%.1f ms of SPU work per s)\n",
+                i, n / secs, (double)s_spu_stat_start[i] / n, (double)s_spu_stat_run[i] / n,
+                (double)s_spu_stat_run[i] / 1000.0 / secs);
+        s_spu_stat_n[i] = 0; s_spu_stat_start[i] = 0; s_spu_stat_run[i] = 0;
+    }
+}
 
 /* ---- Persistent per-taskset local store (LBP_PERSIST_LS) ------------------
  * Real SPURS time-multiplexes a taskset's tasks onto SPUs, saving/restoring a
@@ -463,7 +521,17 @@ static void cv_inflate_trace(const char* phase, uint32_t ea, uint32_t task)
     fprintf(stderr,"\n");
 }
 
+static void spu_async_run_impl(spu_async_job* j);
 static void spu_async_run(spu_async_job* j)
+{
+    if (!spu_stat_on()) { spu_async_run_impl(j); return; }
+    const int img = j->image_id;
+    const unsigned long long t_start = spu_stat_now_us();
+    const unsigned long long lat = j->t_dispatch_us ? t_start - j->t_dispatch_us : 0;
+    spu_async_run_impl(j);                 /* frees j */
+    spu_stat_record(img, lat, spu_stat_now_us() - t_start);
+}
+static void spu_async_run_impl(spu_async_job* j)
 {
     /* Persistent per-taskset LS: acquire (+serialize) the taskset's LS, or fall
      * back to a fresh per-dispatch LS when disabled / no taskset. */
@@ -1310,6 +1378,7 @@ int spu_workload_dispatch_task_async(const uint8_t* image, uint32_t image_size,
     if (!j) return 0;
     j->image = image; j->image_size = image_size; j->args_ea = args_ea;
     j->fn = fn; j->image_id = image_id;
+    j->t_dispatch_us = spu_stat_on() ? spu_stat_now_us() : 0;
     /* Capture the taskset+taskid NOW (PPU thread, right after cellSpursCreateTask
      * set the globals for THIS task). Reading them later in the async thread races
      * the next CreateTask overwriting the single-slot globals -- with two audio

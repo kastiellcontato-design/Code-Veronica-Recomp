@@ -149,6 +149,40 @@ static void tl_thread_name(unsigned tid, char* out, size_t n)
     CloseHandle(h);
 }
 
+/* PS3_FLIPTRACE=<seconds>: once, after that many seconds, log the next 400
+ * frame-pacing events with microsecond stamps -- V vblank tick, G guest flip
+ * request, D drain reached the flip, P frame handed to the backend, R render
+ * thread presented. A frametime that jitters at a steady 30 fps is a timing
+ * problem between these, and the sequence shows which link slips. */
+static struct { double t; char c; } s_ft[400];
+static volatile LONG s_ft_n = -1;
+static double s_ft_at = -1.0;
+void ps3_ft(char c)
+{
+    if (s_ft_at < 0.0) {
+        const char* e = getenv("PS3_FLIPTRACE");
+        s_ft_at = (e && atof(e) > 0) ? atof(e) : 1e30;
+    }
+    if (s_ft_at > 1e29) return;
+    static double t0 = 0.0;
+    double now = tl_now();
+    if (t0 == 0.0) t0 = now;
+    if (s_ft_n < 0) { if (now - t0 < s_ft_at) return; InterlockedCompareExchange(&s_ft_n, 0, -1); }
+    LONG i = InterlockedIncrement(&s_ft_n) - 1;
+    if (i < 400) { s_ft[i].t = now; s_ft[i].c = c; }
+    if (i == 399) {
+        char line[200]; int o = 0; double prevP = 0.0, prevR = 0.0;
+        fprintf(stderr, "[FLIPTRACE] t(ms) event  (P/R show the gap to the previous P/R)%c", 10);
+        for (int k = 0; k < 400; k++) {
+            double ms = (s_ft[k].t - s_ft[0].t) * 1000.0;
+            o = snprintf(line, sizeof line, "[FLIPTRACE] %9.2f %c", ms, s_ft[k].c);
+            if (s_ft[k].c == 'P') { if (prevP > 0) o += snprintf(line + o, sizeof line - o, "   +%.1f", (s_ft[k].t - prevP) * 1000.0); prevP = s_ft[k].t; }
+            if (s_ft[k].c == 'R') { if (prevR > 0) o += snprintf(line + o, sizeof line - o, "   +%.1f", (s_ft[k].t - prevR) * 1000.0); prevR = s_ft[k].t; }
+            fprintf(stderr, "%s%c", line, 10);
+        }
+    }
+}
+
 /* Contended lwmutex locks taken by the main thread: lock and holder thread. */
 static struct { u32 lwm; unsigned tid; u32 n; } s_tl_lwm[256];
 void ps3_tl_lwm_note(u32 lwm, unsigned holder_tid)
@@ -170,6 +204,7 @@ static u32    s_tl_hist[8];
 
 void ps3_tl_frame(void)
 {
+    ps3_ft('P');
     if (!tl_on()) return;
     double now = tl_now();
     u32 g = s_tl_gflips, d = s_tl_dflips;
@@ -280,6 +315,7 @@ void ps3_tl_sleep_begin(void) {}
 void ps3_tl_sleep_end(void) {}
 void ps3_tl_main_begin(int ev) { (void)ev; }
 void ps3_tl_lwm_note(u32 lwm, unsigned holder_tid) { (void)lwm; (void)holder_tid; }
+void ps3_ft(char c) { (void)c; }
 void ps3_tl_main_end(int ev) { (void)ev; }
 static void tl_game_flip(void) {}
 void ps3_tl_frame(void) {}
@@ -942,7 +978,7 @@ void ppu_gcm_pump(void)
 
 /* Back-compat: the old direct entry points now just mark a tick pending (so any
  * caller other than the ticker still works) -- delivery stays on the main thread. */
-void cellGcmTickVBlank(void) { s_vblank_count++; GCM_PENDING_SET(1); }
+void cellGcmTickVBlank(void) { s_vblank_count++; GCM_PENDING_SET(1); ps3_ft('V'); }
 /* Only deliver a flip completion when a flip is actually outstanding.
  *
  * Ticking unconditionally at 60 Hz fires the guest's flip handler even when
@@ -1908,6 +1944,7 @@ static void gcm_rsx_process_fifo_unlocked(void)
                 /* Queued by _cellGcmSetFlipCommand, which already did the
                  * guest-visible half of the request. */
                 s_current_display_buffer_id = w & 7u;
+                ps3_ft('D');
                 s_flip_pending = 1;
                 s_flip_request_count++;
             } else {
@@ -2508,6 +2545,7 @@ unsigned long long g_gcm_flip_requests = 0;
 static s32 gcm_flip_request(u32 bufferId, int in_fifo)
 {
     tl_game_flip();
+    ps3_ft('G');
     g_gcm_flip_requests++;
     /* GCM_FLIPCOUNT=1: every flip, with a timestamp. FLIP_DBG caps at 20 lines,
      * which answers "did it ever flip?" and not "is it still flipping, and how

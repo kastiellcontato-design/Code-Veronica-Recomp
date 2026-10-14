@@ -42,6 +42,7 @@
 #include <initguid.h>
 
 #include "rsx_getenv_cache.h"   /* getenv() per call site, cached: per-draw paths */
+static int s_vsync = 0, s_tearing = 0;   /* present mode, see the swap chain setup */
 #include "../../runtime/platform/host_thread_name.h"
 
 /* Link libraries */
@@ -811,6 +812,28 @@ static int init_d3d12(u32 width, u32 height)
     sc_desc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
     sc_desc.BufferCount = FRAME_COUNT;
     sc_desc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
+    /* VSYNC=1 waits for the display's refresh on every present. Off by
+     * default, like RPCS3: the title is already paced by our own 60 Hz
+     * vblank clock, and a second clock -- the monitor's, never exactly in
+     * step with ours -- quantised frames to its refresh, so every so often
+     * one 33 ms frame showed as ~17 ms followed by ~50 ms: a frametime line
+     * that jumped everywhere, even in menus holding 30 fps. Without vsync the
+     * frame goes out as soon as it is rendered (tearing allowed if the
+     * system supports it). */
+    { const char* e = getenv("VSYNC");
+      s_vsync = (e && *e && *e != '0') ? 1 : 0; }
+    if (!s_vsync) {
+        IDXGIFactory5* f5 = NULL; BOOL tear = FALSE;
+        if (SUCCEEDED(factory->lpVtbl->QueryInterface(factory, &IID_IDXGIFactory5, (void**)&f5))) {
+            if (FAILED(f5->lpVtbl->CheckFeatureSupport(f5, DXGI_FEATURE_PRESENT_ALLOW_TEARING,
+                                                       &tear, sizeof tear))) tear = FALSE;
+            f5->lpVtbl->Release(f5);
+        }
+        s_tearing = tear ? 1 : 0;
+        if (s_tearing) sc_desc.Flags |= DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING;
+    }
+    printf("[D3D12] present: vsync %s%s%c", s_vsync ? "ON (VSYNC=1)" : "OFF",
+           (!s_vsync && s_tearing) ? ", tearing allowed" : "", 10);
 
     IDXGISwapChain1* swap_chain1 = NULL;
     hr = factory->lpVtbl->CreateSwapChainForHwnd(
@@ -7020,7 +7043,13 @@ static void render_frame_impl(void)
                     fprintf(stderr, "[PERF-SHADER] bytecode: %ld from disk, %ld compiled | pipelines: %ld"
                                     " from library | background: %ld built, %ld draws skipped meanwhile%c",
                             (long)hh, (long)mm, (long)pl, (long)ab, (long)as, 10); } }
-            perf_thread_report(fr);
+            /* PERF_THREADS=1 only: it snapshots every thread on the system
+             * (Toolhelp) and queries each one's times -- ~50 ms, on the render
+             * thread, every 20 frames. That stall held up the FIFO drain and
+             * the vblank clock behind it, and was the regular spike in every
+             * frametime graph taken with PERF=1. */
+            { static int pt = -1; if (pt < 0) pt = getenv("PERF_THREADS") ? 1 : 0;
+              if (pt) perf_thread_report(fr); }
             { extern void spu_coh_stats_report(void*); spu_coh_stats_report(stderr); }
             s_perf_frame = 0.0; s_perf_tex = 0.0; s_perf_vtx = 0.0; s_perf_rf = 0.0;
             s_perf_gpu = 0.0; s_perf_pre = 0.0; s_perf_srv = 0.0; s_perf_pso = 0.0;
@@ -7394,7 +7423,11 @@ skip_dump_consider: ;
 
     /* Present */
     if (s_rb.present)
-        { HRESULT _ph = s_d3d.swap_chain->lpVtbl->Present(s_d3d.swap_chain, 1, 0); /* vsync */
+        { extern void ps3_ft(char); ps3_ft('R');
+          HRESULT _ph = s_vsync
+              ? s_d3d.swap_chain->lpVtbl->Present(s_d3d.swap_chain, 1, 0)
+              : s_d3d.swap_chain->lpVtbl->Present(s_d3d.swap_chain, 0,
+                                                 s_tearing ? DXGI_PRESENT_ALLOW_TEARING : 0);
           if (_ph == DXGI_ERROR_DEVICE_REMOVED || _ph == DXGI_ERROR_DEVICE_RESET) dred_report("Present"); }   /* skipped for an offscreen-only batch */
 
     move_to_next_frame();
