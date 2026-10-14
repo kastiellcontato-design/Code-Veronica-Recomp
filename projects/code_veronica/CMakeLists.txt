@@ -283,6 +283,14 @@ else()
         COMPILE_OPTIONS "-w;-ffp-contract=off")
 endif()
 
+# Lifted loads and stores take the inline fast path in the generated
+# preamble (see "Inline guest memory access" there) instead of a call per
+# access. -DPPU_VM_INLINE=OFF builds the old call-per-access code.
+option(PPU_VM_INLINE "Inline guest memory access in lifted code" ON)
+if(PPU_VM_INLINE)
+    set_property(SOURCE ${RECOMP_SOURCES} APPEND PROPERTY COMPILE_DEFINITIONS PPU_VM_INLINE=1)
+endif()
+
 # ---------------------------------------------------------------------------
 # Install
 # ---------------------------------------------------------------------------

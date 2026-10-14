@@ -170,6 +170,114 @@ SOURCE_PREAMBLE = """\
 #include <string.h>
 #include <math.h>
 
+/* Inline guest memory access (PPU_VM_INLINE, set by the port's build).
+ *
+ * Every lifted load and store used to be a call into the vm_read and vm_write
+ * functions of the runtime. The call costs more than the access, and lifted
+ * code makes millions of them a frame -- Code Veronica's main thread, the
+ * frame-rate limit in its lighter scene, spends most of its time in lifted
+ * code. These do the common case in place and fall back to the runtime
+ * function for everything that needs it:
+ *   - a configured memory diagnostic (g_vm_diag != 0; -1 = not decided yet),
+ *     or the lifted barrier probe's write watch;
+ *   - a POSIX build with a real VM bound (ppu_vm_size != 0);
+ *   - reads of the null page (reported), raw-SPU problem state, and the GCM
+ *     reference register (a poll there publishes fences);
+ *   - stores into the first page or during a contained null sweep (dropped),
+ *     to a line an SPU holds a reservation on, or to raw-SPU registers.
+ * The runtime path is unchanged; these only skip it when it would do nothing
+ * but the plain access. */
+#if defined(PPU_VM_INLINE) && PPU_VM_INLINE && defined(__cplusplus)
+extern "C" {
+extern uint8_t* vm_base;
+extern uint32_t ppu_vm_size;
+extern int g_vm_diag;
+extern uint32_t g_barrier_sync_watch;
+extern uint32_t g_null_sweep_hi;
+extern int s_coh_armed;
+extern unsigned char s_coh_bitmap[];
+extern uint32_t ppu_hle_inject_base;
+}
+static inline int ppu_vm_plain(void)
+{
+    return __builtin_expect((g_vm_diag | (int)g_barrier_sync_watch | (int)ppu_vm_size) == 0, 1);
+}
+static inline int ppu_vm_raw_spu(uint32_t a)
+{
+    uint32_t off = a - 0xE0000000u;
+    return off < 0x08000000u && (off & 0xFFFFFu) >= 0x40000u;
+}
+static inline int ppu_vm_store_plain(uint32_t a)
+{
+    if (__builtin_expect(a < 0x1000u || g_null_sweep_hi != 0, 0)) return 0;
+    if (__builtin_expect(s_coh_armed != 0, 0)) {
+        uint32_t line = a >> 7;
+        if ((s_coh_bitmap[line >> 3] >> (line & 7)) & 1u) return 0;
+    }
+    return 1;
+}
+static inline uint8_t ppu_ld8(uint64_t a64)
+{
+    uint32_t a = (uint32_t)a64;
+    if (ppu_vm_plain() && a >= 0x10000u) return vm_base[a];
+    return (vm_read8)(a64);
+}
+static inline uint16_t ppu_ld16(uint64_t a64)
+{
+    uint32_t a = (uint32_t)a64;
+    if (ppu_vm_plain()) { uint16_t v; memcpy(&v, vm_base + a, 2); return __builtin_bswap16(v); }
+    return (vm_read16)(a64);
+}
+static inline uint32_t ppu_ld32(uint64_t a64)
+{
+    uint32_t a = (uint32_t)a64;
+    if (ppu_vm_plain() && a >= 0x10000u && a < 0xE0000000u && a != ppu_hle_inject_base + 0x2008u) {
+        uint32_t v; memcpy(&v, vm_base + a, 4); return __builtin_bswap32(v);
+    }
+    return (vm_read32)(a64);
+}
+static inline uint64_t ppu_ld64(uint64_t a64)
+{
+    uint32_t a = (uint32_t)a64;
+    if (ppu_vm_plain() && a >= 0x10000u) { uint64_t v; memcpy(&v, vm_base + a, 8); return __builtin_bswap64(v); }
+    return (vm_read64)(a64);
+}
+static inline void ppu_st8(uint64_t a64, uint8_t v)
+{
+    uint32_t a = (uint32_t)a64;
+    if (ppu_vm_plain() && ppu_vm_store_plain(a)) { vm_base[a] = v; return; }
+    (vm_write8)(a64, v);
+}
+static inline void ppu_st16(uint64_t a64, uint16_t v)
+{
+    uint32_t a = (uint32_t)a64;
+    if (ppu_vm_plain() && ppu_vm_store_plain(a)) { uint16_t b = __builtin_bswap16(v); memcpy(vm_base + a, &b, 2); return; }
+    (vm_write16)(a64, v);
+}
+static inline void ppu_st32(uint64_t a64, uint32_t v)
+{
+    uint32_t a = (uint32_t)a64;
+    if (ppu_vm_plain() && ppu_vm_store_plain(a) && !ppu_vm_raw_spu(a)) {
+        uint32_t b = __builtin_bswap32(v); memcpy(vm_base + a, &b, 4); return;
+    }
+    (vm_write32)(a64, v);
+}
+static inline void ppu_st64(uint64_t a64, uint64_t v)
+{
+    uint32_t a = (uint32_t)a64;
+    if (ppu_vm_plain() && ppu_vm_store_plain(a)) { uint64_t b = __builtin_bswap64(v); memcpy(vm_base + a, &b, 8); return; }
+    (vm_write64)(a64, v);
+}
+#define vm_read8(a)     ppu_ld8(a)
+#define vm_read16(a)    ppu_ld16(a)
+#define vm_read32(a)    ppu_ld32(a)
+#define vm_read64(a)    ppu_ld64(a)
+#define vm_write8(a, v)  ppu_st8((a), (v))
+#define vm_write16(a, v) ppu_st16((a), (v))
+#define vm_write32(a, v) ppu_st32((a), (v))
+#define vm_write64(a, v) ppu_st64((a), (v))
+#endif
+
 /* Float->int conversion per Book I 4.6.7: SATURATE out-of-range (positive
  * overflow => max, negative => min, NaN => min) and honor the rounding mode
  * (rn=1: FPSCR default round-to-nearest-even via nearbyint; rn=0: the z
