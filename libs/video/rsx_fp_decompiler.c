@@ -153,6 +153,34 @@ u32 rsx_fp_program_size(const u8* ucode, u32 max_bytes)
     return 0;
 }
 
+/* Texture units the program samples, as a mask; 0xFFFF when the program has
+ * no END within max_bytes (unknown -- treat every unit as used). Units the
+ * program never reads still carry whatever the game last bound there, often
+ * the very target being drawn. */
+u32 rsx_fp_tex_used_mask(const u8* ucode, u32 max_bytes)
+{
+    if (!ucode) return 0xFFFFu;
+    u32 off = 0, mask = 0;
+    while (off + 16 <= max_bytes) {
+        u32 w0 = rsx_fp_read_word(ucode + off + 0);
+        u32 w1 = rsx_fp_read_word(ucode + off + 4);
+        u32 w2 = rsx_fp_read_word(ucode + off + 8);
+        u32 w3 = rsx_fp_read_word(ucode + off + 12);
+        off += 16;
+        u32 op = (w0 & FP_OPCODE_MASK) >> FP_OPCODE_SHIFT;
+        if (op == OP_TEX || op == OP_TXP || op == OP_TXD || op == OP_TXL ||
+            op == OP_TXB || op == 0x33 || op == 0x34 || op == 0x37)
+            mask |= 1u << ((w0 & FP_TEX_UNIT_MASK) >> FP_TEX_UNIT_SHIFT);
+        if (((w1 & FP_REG_TYPE_MASK) >> FP_REG_TYPE_SHIFT) == FP_REG_TYPE_CONST ||
+            ((w2 & FP_REG_TYPE_MASK) >> FP_REG_TYPE_SHIFT) == FP_REG_TYPE_CONST ||
+            ((w3 & FP_REG_TYPE_MASK) >> FP_REG_TYPE_SHIFT) == FP_REG_TYPE_CONST) {
+            if (off + 16 <= max_bytes) off += 16;
+        }
+        if (w0 & FP_END) return mask;
+    }
+    return 0xFFFFu;
+}
+
 static int fp_instruction_has_constant(u32 w1, u32 w2, u32 w3)
 {
     return

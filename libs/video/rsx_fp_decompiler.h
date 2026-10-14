@@ -161,6 +161,9 @@ const char* rsx_fp_opcode_name(u32 opcode);
  * the decompiler on where a program ends. */
 u32 rsx_fp_program_size(const u8* ucode, u32 max_bytes);
 
+/* Mask of texture units the program samples (0xFFFF if its end is not found). */
+u32 rsx_fp_tex_used_mask(const u8* ucode, u32 max_bytes);
+
 #ifdef __cplusplus
 }
 #endif

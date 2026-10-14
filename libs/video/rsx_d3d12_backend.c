@@ -2713,10 +2713,20 @@ static u8 gl_blend_op_d3d(u32 e)
  * plain 1/0 before any register arrives, so treat those defaults as BACK/CW. */
 static u32 rsx_cull_key(const rsx_state* st)
 {
-    if (!st || !st->cull_face_enable) return 0;
-    u32 k = 1u;
+    if (!st) return 0;
+    /* The winding is kept with culling off too: it still decides which side
+     * the fragment program's FACING input calls the front. Code Veronica
+     * draws its characters double-sided and its lighter shader flips the
+     * normal of back faces; with the winding dropped, every face turned to
+     * the flame tested as a back face and came out dark while backs lit up.
+     * FACE_LEGACY=1 drops it again. */
+    static int legacy = -1;
+    if (legacy < 0) legacy = getenv("FACE_LEGACY") ? 1 : 0;
+    u32 k = (!legacy && st->front_face == 0x0901u) ? 4u : 0u;            /* CCW */
+    if (!st->cull_face_enable) return k;
+    k |= 1u;
     if (st->cull_face == 0x0404u || st->cull_face == 0x0408u) k |= 2u;  /* FRONT */
-    if (st->front_face == 0x0901u) k |= 4u;                             /* CCW */
+    if (st->front_face == 0x0901u) k |= 4u;
     return k;
 }
 
@@ -3152,6 +3162,16 @@ static int fp_build_pso(FpJob* j)
         /* TEXTURE_ADDRESS gamma bits: the unit's channels are sRGB and the
          * hardware linearises them on fetch (RPCS3 _process_texel). */
         "float4 rsx_texgamma(uint u, float4 c) {\n"
+        /* .z bit 7: a Y16_X16 fetch of an A8R8G8B8 render target. On RSX both
+         * name the same bytes, so each 32-bit texel A R G B reads as the two
+         * 16-bit values A:R and G:B. Code Veronica's lighter keeps a variance
+         * shadow map that way (distance in A:R, distance squared in G:B);
+         * sampled as plain colour every lit pixel tested as shadowed and the
+         * flame never lit faces. */
+        "    if (u < 8u && (((uint)rsx_texaddr[min(u, 7u)].z) & 128u)) {\n"
+        "        float4 b = round(saturate(c) * 255.0);\n"
+        "        return float4((b.a * 256.0 + b.r) / 65535.0, (b.g * 256.0 + b.b) / 65535.0, 0.0, 1.0);\n"
+        "    }\n"
         "    uint m = u < 8u ? (((uint)rsx_texaddr[min(u, 7u)].z) >> 4) & 7u : 0u;\n"
         "    if (m == 0u) return c;\n"
         "    float3 s = saturate(c.rgb);\n"
@@ -6221,8 +6241,30 @@ static void render_frame_impl(void)
         double _sv0 = perf_on() ? perf_now() : 0.0;
         SrvReq _rq[FP_TEX_UNITS]; int _fb_risk = 0;
         memset(_rq, 0, sizeof _rq);
+        /* Units the program never samples get no view. They still hold the
+         * game's last binding -- Code Veronica's lighter shadow passes leave
+         * their own target on unit 3 -- and binding it made every one of those
+         * thousands of draws copy the 768x512 target aside as feedback.
+         * FP_TEXUSED=0 binds every set unit as before. */
+        u32 _used = 0xFFFFu;
+        { static int en = -1;
+          if (en < 0) { const char* e = getenv("FP_TEXUSED"); en = e ? atoi(e) : 1; }
+          if (en && dr->fp_addr) {
+              const u8* uc = fp_snap_ptr(dr);
+              if (!uc) {
+                  extern uint8_t* vm_base;
+                  u32 fo = cellGcmResolveLocated((dr->fp_addr & 3u) == 1, dr->fp_addr & ~3u);
+                  if (fo != 0xFFFFFFFFu) uc = vm_base + fo;
+              }
+              if (uc) _used = rsx_fp_tex_used_mask(uc, 4096);
+          } }
         for (int _u = 0; _u < FP_TEX_UNITS; _u++) {
             dr->tex_rt[_u] = -1;
+            if (!((_used >> _u) & 1u)) {
+                srv_req(&_rq[_u], NULL, DXGI_FORMAT_R8G8B8A8_UNORM,
+                        D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING);
+                continue;
+            }
             /* Display-sized sampler source -> the rendered frame. */
             if (dr->tex[_u].set && s_screen_copy &&
                 dr->tex[_u].w == s_d3d.width && dr->tex[_u].h == s_d3d.height) {
@@ -6277,6 +6319,15 @@ static void render_frame_impl(void)
                 }
                 if (rt >= 0) {
                     dr->tex_rt[_u] = rt;
+                    /* .z bit 7: a Y16_X16 read of a colour target -- the shader
+                     * pairs its bytes (see rsx_texgamma). An uploaded Y16_X16
+                     * texture is already R16G16 and must not be. */
+                    if ((dr->tex[_u].fmt & 0x9Fu) == 0x95u && rt != s_zview_slot &&
+                        s_d3d.vp_fpcb_mapped) {
+                        float* tsg = (float*)((char*)s_d3d.vp_fpcb_mapped
+                            + ((u64)s_rb.parity * MAX_DRAWS + dr->cb_slot) * VP_FPCB_STRIDE);
+                        tsg[_u*4+2] = (float)((dr->tex[_u].addr & 0xFu) | 128u);
+                    }
                     if (s_d3d.off_rt[rt].off == dr->rt_off) _fb_risk = 1;   /* may need a feedback copy */
                     /* RT_NOGAMMA=1 (diagnostic): sample render targets without
                      * their gamma bits. Off by default: RPCS3 applies them to
@@ -6299,8 +6350,11 @@ static void render_frame_impl(void)
                     continue;
                 }
                 u32 _bf = dr->tex[_u].fmt & 0x9F;
+                /* 0x95 Y16_X16: Code Veronica's lighter looks up which shadow
+                 * face and where in it through two small Y16_X16 cube maps;
+                 * left unbound, every pixel read one spot of the shadow map. */
                 if (dr->tex[_u].off &&
-                    (_bf == 0x81 || _bf == 0x85 || _bf == 0x8B ||
+                    (_bf == 0x81 || _bf == 0x85 || _bf == 0x8B || _bf == 0x95 ||
                      (_bf >= 0x86 && _bf <= 0x88))) {
                     double _tt = perf_on() ? perf_now() : 0.0;
                     int _cube = dr->tex[_u].cube && (dr_cube_mask(dr) & (1u << _u));
@@ -6317,6 +6371,7 @@ static void render_frame_impl(void)
                         DXGI_FORMAT sf =
                             (_bf == 0x85) ? DXGI_FORMAT_R8G8B8A8_UNORM :
                             (_bf == 0x8B) ? DXGI_FORMAT_R8G8_UNORM :
+                            (_bf == 0x95) ? DXGI_FORMAT_R16G16_UNORM :
                             (_bf == 0x86) ? DXGI_FORMAT_BC1_UNORM :
                             (_bf == 0x87) ? DXGI_FORMAT_BC2_UNORM :
                             (_bf == 0x88) ? DXGI_FORMAT_BC3_UNORM :
@@ -9138,7 +9193,8 @@ static void d3d12_bind_texture(void* ud, u32 unit, const rsx_texture_state* tex)
         (base_fmt == 0x81 /* B8 */ || base_fmt == 0x85 /* A8R8G8B8 */ ||
          base_fmt == 0x8B /* G8B8: LBP's font atlas */ ||
          (base_fmt >= 0x86 && base_fmt <= 0x88) /* DXT1/23/45 */ ||
-         base_fmt == 0x9A /* W16Z16Y16X16 half-float: RTT intermediates */)) {
+         base_fmt == 0x9A /* W16Z16Y16X16 half-float: RTT intermediates */ ||
+         base_fmt == 0x95 /* Y16_X16: an A8R8G8B8 target re-read as 16-bit pairs */)) {
         /* TEX_RESOLVE_AUTO=1: resolve through the page tables (local-page map
          * then IO table) instead of trusting the format's location bits. A
          * texture the guest built in main memory but tagged local resolves to
