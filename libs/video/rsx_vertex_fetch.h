@@ -68,6 +68,31 @@ float rsx_rd_half_be(const u8* p);  /* 2-byte IEEE half -> float  */
  */
 void rsx_fetch_attrib(const rsx_state* st, int idx, u32 vi, float out[4]);
 
+/* Per-draw fetch plan: everything rsx_fetch_attrib works out per call --
+ * enable/stride, element type, divisor mode, the constant register, and the
+ * resolved guest address -- worked out once per draw. Main-memory arrays are
+ * IO-mapped in 1 MB pages, so the resolved page is cached and re-resolved
+ * only when a vertex crosses into another page; results are identical to
+ * rsx_fetch_attrib. Build with rsx_fetch_plan_build after the draw's
+ * attribute state is final; it is invalid once that state changes. */
+typedef struct {
+    int   active;            /* array enabled with a non-zero stride        */
+    u32   type, n, stride, freq, modulo;
+    int   main_mem;          /* bit 31 of the array offset: MAIN (IO) memory */
+    u32   off0;              /* array offset without the location bit        */
+    u32   page;              /* cached 1 MB page of off (main) or ~0u        */
+    const u8* page_base;     /* host address of that page's first byte       */
+    float cst[4];            /* constant vertex attribute register           */
+} rsx_attr_plan;
+
+typedef struct {
+    rsx_attr_plan a[16];
+} rsx_fetch_plan;
+
+void rsx_fetch_plan_build(const rsx_state* st, rsx_fetch_plan* plan);
+/* All 16 attributes of vertex `vi` into out[16][4], as rsx_fetch_attrib. */
+void rsx_fetch_vertex_planned(rsx_fetch_plan* plan, u32 vi, float out[16][4]);
+
 #ifdef __cplusplus
 }
 #endif

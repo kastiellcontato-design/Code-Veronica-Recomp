@@ -123,3 +123,91 @@ void rsx_fetch_attrib(const rsx_state* st, int idx, u32 vi, float out[4])
         break;
     }
 }
+
+/* ---------------------------------------------------------------------------
+ * Planned fetch (see rsx_fetch_plan in the header)
+ * -------------------------------------------------------------------------*/
+extern u32 cellGcmResolveLocated(int local, u32 offset);
+
+void rsx_fetch_plan_build(const rsx_state* st, rsx_fetch_plan* plan)
+{
+    static int nofreq = -1;
+    if (nofreq < 0) nofreq = getenv("VP_NOFREQ") ? 1 : 0;
+    for (int i = 0; i < 16; i++) {
+        rsx_attr_plan* p = &plan->a[i];
+        const rsx_vertex_attrib* a = &st->vertex_attribs[i];
+        memcpy(p->cst, st->vertex_data4f[i], sizeof p->cst);
+        p->active = a->enabled && a->stride != 0 && vm_base != NULL;
+        p->type = a->type;
+        p->n = a->size ? a->size : 4; if (p->n > 4) p->n = 4;
+        p->stride = a->stride;
+        p->freq = (a->frequency > 1 && !nofreq) ? a->frequency : 0;
+        p->modulo = (st->frequency_divider_op & (1u << i)) != 0;
+        p->main_mem = (a->offset & 0x80000000u) != 0;
+        p->off0 = a->offset & 0x7FFFFFFFu;
+        p->page = ~0u; p->page_base = NULL;
+    }
+}
+
+static inline u32 rd_be32(const u8* p)
+{
+    u32 w; memcpy(&w, p, 4);
+#if defined(_MSC_VER) || defined(__clang__) || defined(__GNUC__)
+    return __builtin_bswap32(w);
+#else
+    return ((w >> 24) & 0xFFu) | ((w >> 8) & 0xFF00u) | ((w << 8) & 0xFF0000u) | (w << 24);
+#endif
+}
+
+void rsx_fetch_vertex_planned(rsx_fetch_plan* plan, u32 vi, float out[16][4])
+{
+    for (int i = 0; i < 16; i++) {
+        rsx_attr_plan* a = &plan->a[i];
+        float* o = out[i];
+        o[0] = a->cst[0]; o[1] = a->cst[1]; o[2] = a->cst[2]; o[3] = a->cst[3];
+        if (!a->active) continue;
+        u32 ei = vi;
+        if (a->freq) ei = a->modulo ? (vi % a->freq) : (vi / a->freq);
+        u32 off = a->off0 + ei * a->stride;
+        const u8* p;
+        if (a->main_mem) {
+            u32 pg = off >> 20;
+            if (pg != a->page) {   /* IO pages need not be contiguous */
+                a->page = pg;
+                a->page_base = vm_base + cellGcmResolveLocated(0, pg << 20);
+            }
+            p = a->page_base + (off & 0xFFFFFu);
+        } else {
+            p = vm_base + cellGcmResolveLocated(1, off);   /* local: linear */
+        }
+        const u32 n = a->n;
+        switch (a->type) {
+        case 2: /* float32 BE */
+            for (u32 k = 0; k < n; k++) { u32 w = rd_be32(p + k * 4); memcpy(&o[k], &w, 4); }
+            break;
+        case 3: for (u32 k = 0; k < n; k++) o[k] = rsx_rd_half_be(p + k * 2); break;
+        case 4: for (u32 k = 0; k < n; k++) o[k] = p[k] / 255.0f; break;
+        case 1:
+            for (u32 k = 0; k < n; k++) {
+                s16 v = (s16)((p[k*2] << 8) | p[k*2+1]);
+                o[k] = (float)v / 32767.0f;
+            }
+            break;
+        case 5: for (u32 k = 0; k < n; k++) o[k] = (float)(s16)((p[k*2] << 8) | p[k*2+1]); break;
+        case 7: for (u32 k = 0; k < n; k++) o[k] = (float)p[k]; break;
+        case 6: {
+            u32 v = rd_be32(p);
+            s32 x = (s32)(v << 21) >> 21, y = (s32)(v << 10) >> 21, z = (s32)v >> 22;
+            o[0] = (float)x / 1023.0f; o[1] = (float)y / 1023.0f;
+            o[2] = (float)z / 511.0f;  o[3] = 1.0f;
+            break; }
+        default:   /* unknown: same as rsx_fetch_attrib (which reports it) */
+            { static u32 seen = 0;
+              if (!(seen & (1u << (a->type & 31)))) { seen |= 1u << (a->type & 31);
+                  fprintf(stderr, "[VTXTYPE] UNHANDLED type=%u attr=%d size=%u stride=%u%c",
+                          a->type, i, n, a->stride, 10); } }
+            for (u32 k = 0; k < n; k++) o[k] = rsx_rd_bef(p + k * 4);
+            break;
+        }
+    }
+}

@@ -7661,7 +7661,20 @@ void rsx_vtx_pos_dbg(const rsx_state* state, const float* v, u32 n);
 static VPSlot s_vmemo[VMEMO_N][16];
 static u32 s_vmemo_key[VMEMO_N], s_vmemo_tag[VMEMO_N];
 static u32 s_vmemo_gen = 1;
-#define VP_FETCH_BEGIN() (++s_vmemo_gen)
+/* The draw's fetch plan (rsx_fetch_plan_build), rebuilt with the memo at the
+ * start of every upload_*_vp call. VTX_NOPLAN=1 fetches attribute by
+ * attribute as before. */
+static rsx_fetch_plan s_vplan;
+static const rsx_state* s_vplan_state = NULL;
+static void vp_fetch_begin(const rsx_state* state)
+{
+    ++s_vmemo_gen;
+    static int noplan = -1;
+    if (noplan < 0) noplan = getenv("VTX_NOPLAN") ? 1 : 0;
+    s_vplan_state = NULL;
+    if (state && !noplan) { rsx_fetch_plan_build(state, &s_vplan); s_vplan_state = state; }
+}
+#define VP_FETCH_BEGIN() vp_fetch_begin(state)
 
 static void read_vp_vertex(const rsx_state* state, u32 vi, VPSlot* out16)
 {
@@ -7678,8 +7691,11 @@ static void read_vp_vertex(const rsx_state* state, u32 vi, VPSlot* out16)
     /* Convert into cached memory, then one sequential copy: out16 is the
      * write-combined upload heap, and fetch writes each slot twice (the
      * constant default, then the array value). */
-    for (int i = 0; i < 16; i++)
-        rsx_fetch_attrib(state, i, vi, c[i].v);
+    if (s_vplan_state == state)
+        rsx_fetch_vertex_planned(&s_vplan, vi, (float (*)[4])c);
+    else
+        for (int i = 0; i < 16; i++)
+            rsx_fetch_attrib(state, i, vi, c[i].v);
     { const rsx_vertex_attrib* a = &state->vertex_attribs[0];
       u32 n = a->size ? a->size : 4; if (n > 4) n = 4;
       rsx_vtx_pos_dbg(state, c[0].v, n); }
