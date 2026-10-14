@@ -356,6 +356,7 @@ typedef struct rsx_state {
      * the dirty range to the host CBV. */
     u32 vertex_constants_lo;
     u32 vertex_constants_hi;
+    u32 vc_gen;                 /* bumped whenever a vertex constant changes value */
     int vertex_constants_dirty;
 
     /* Captured RSX vertex program microcode (NV40 ISA), filled by

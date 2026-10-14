@@ -138,6 +138,8 @@ typedef struct {
      * DRAW_LIMIT) would otherwise make every surviving draw read some other
      * object's MVP -- silently transforming it somewhere else entirely. */
     u32 cb_slot;
+    u32 vcb_slot;       /* vertex-constant (b0) slot: cb_slot, or an earlier draw's
+                         * when no constant changed in between (vp_record_cb) */
     u32 rt_mrt[3];      /* colour targets B,C,D (MRT1/2/3), 0 = none. Deferred
                          * shading G-buffers write 3-4 targets in one pass. */
     u32 rt_w, rt_h;     /* surface clip dims at record time (offscreen RT size) */
@@ -547,6 +549,10 @@ static u32 s_duck_off = 0;   /* as RESOLVED (what the uploader sees)   */
  * spend an afternoon optimising the wrong loop. */
 static double s_perf_tex = 0.0, s_perf_frame = 0.0, s_perf_vtx = 0.0, s_perf_rf = 0.0;
 static double s_perf_gpu = 0.0, s_perf_pre = 0.0, s_perf_srv = 0.0, s_perf_pso = 0.0;
+/* vp_record_cb: vertex-constant banks written vs reused, and the recording
+ * batch they belong to (bumped when render_frame hands a batch over). */
+static unsigned s_vcb_copied = 0, s_vcb_reused = 0, s_vcb_batch = 0;
+static unsigned long long s_vmemo_hits = 0, s_vmemo_miss = 0;   /* read_vp_vertex */
 static int s_perf_pso_calls = 0, s_perf_pso_miss = 0, s_perf_pso_hashbytes = 0;
 static u64    s_perf_nverts = 0;
 static u64    s_perf_texbytes = 0;
@@ -1862,7 +1868,7 @@ static void rsx_capture_frame(u32 fi, u32 ndraws, u32 capidx)
                 const D3D12DrawRecord* r = &s_rb.draws[d];
                 if (r->is_clear || !r->rt_off) continue;
                 const float* c = (const float*)((const char*)s_d3d.vp_cb_mapped
-                    + ((u64)par * MAX_DRAWS + d) * VP_CB_STRIDE);
+                    + ((u64)par * MAX_DRAWS + r->vcb_slot) * VP_CB_STRIDE);
                 int last_nz = -1; float maxabs = 0.0f;
                 for (int i = 0; i < RSX_MAX_VERTEX_CONSTANTS * 4; i++) {
                     float a = c[i] < 0 ? -c[i] : c[i];
@@ -1922,7 +1928,7 @@ static void rsx_capture_frame(u32 fi, u32 ndraws, u32 capidx)
                  * so the transform can be checked by hand. */
                 if (s_d3d.vp_cb_mapped) {
                     const float* c = (const float*)((const char*)s_d3d.vp_cb_mapped
-                        + ((u64)par * MAX_DRAWS + r->cb_slot) * VP_CB_STRIDE);
+                        + ((u64)par * MAX_DRAWS + r->vcb_slot) * VP_CB_STRIDE);
                     for (int sl = 0; sl < RSX_MAX_VERTEX_CONSTANTS; sl++) {
                         const float* q = c + sl * 4;
                         if (q[0] || q[1] || q[2] || q[3])
@@ -2000,7 +2006,7 @@ static void rsx_capture_frame(u32 fi, u32 ndraws, u32 capidx)
             if(s_d3d.vp_cb_mapped && s_d3d.vp_vb_mapped && r->is_vp) {
                 u32 par=(u32)(s_rb.parity^1);
                 snprintf(path,sizeof path,"%s/op%03u_cb.bin",dir,d);FILE* f=fopen(path,"wb");
-                if(f){fwrite((char*)s_d3d.vp_cb_mapped+((u64)par*MAX_DRAWS+r->cb_slot)*VP_CB_STRIDE,1,VP_CB_STRIDE,f);fclose(f);}
+                if(f){fwrite((char*)s_d3d.vp_cb_mapped+((u64)par*MAX_DRAWS+r->vcb_slot)*VP_CB_STRIDE,1,VP_CB_STRIDE,f);fclose(f);}
                 snprintf(path,sizeof path,"%s/op%03u_vb.bin",dir,d);f=fopen(path,"wb");
                 if(f){fwrite((char*)s_d3d.vp_vb_mapped+(u64)par*MAX_VERTICES*256+r->vb_byte_offset,256,r->vertex_count,f);fclose(f);}
             }
@@ -4440,7 +4446,8 @@ static void vp_record_cb(u32 slot, int vs_idx, const D3D12DrawRecord* dr)
                      * data: decoding them broke the FMV YUV->RGB maths. */
                     u32 bf = dr->tex[_u].fmt & 0x9Fu;
                     if (bf >= 0x82 && bf <= 0x88)
-                        ts[_u*4+2] += (float)(((dr->tex[_u].addr >> 20) & 0xFu) << 4);
+                        ts[_u*4+2] = (float)((dr->tex[_u].addr & 0xFu) |
+                                             (((dr->tex[_u].addr >> 20) & 0xFu) << 4));
                 }
         if (dr && !getenv("NO_ALPHATEST")) {
             { static int _at = 0;
@@ -4494,9 +4501,77 @@ static void vp_record_cb(u32 slot, int vs_idx, const D3D12DrawRecord* dr)
                       fprintf(stderr, "[FPK] distinct fp #%d = 0x%08X%c", ns, dr->fp_addr, 10); } } }
         }
     }
+    /* b0: the vertex-constant bank plus the viewport-derived vp_posscale /
+     * vp_posoffset words. Built from the CPU-side state and written once --
+     * the upload heap is write-combined, so reading it back (the projection
+     * check used to read c[0] there) costs far more than the copy. When no
+     * constant changed since the previous draw of this batch and the derived
+     * words match, the draw points at that draw's bank instead of copying
+     * 7.5 KB again (Code Veronica's lighter shadow passes: ~6600 draws). */
+    D3D12DrawRecord* mdr = (D3D12DrawRecord*)dr;
+    if (mdr) mdr->vcb_slot = slot;
+    float vpx[8];
+    const float* vs_ = st->viewport_scale;
+    const float* vo_ = st->viewport_offset;
+    vpx[0] = vpx[1] = vpx[3] = 1.0f;
+    vpx[4] = vpx[5] = vpx[7] = 0.0f;
+    if (vs_[2] != 0.0f) { vpx[2] = vs_[2]; vpx[6] = vo_[2]; }
+    else                { vpx[2] = 1.0f;   vpx[6] = 0.0f;   }
+    /* DBG_ZOOM=<k> with DBG_CENTER="cx,cy": debug camera in clip space
+     * (pos.xy = _p.xy * k + _p.w * (-c * k)). DBG_LOCK follows a locked point. */
+    { static int z = -1; static float k = 1.0f, cx = 0.0f, cy = 0.0f;
+      if (z < 0) { const char* e = getenv("DBG_ZOOM");
+                   k = e ? (float)atof(e) : 1.0f;
+                   z = (e && k > 0.0f) ? 1 : 0;
+                   const char* ce = getenv("DBG_CENTER");
+                   if (ce) { double a = 0, b = 0; sscanf(ce, "%lf,%lf", &a, &b);
+                             cx = (float)a; cy = (float)b; } }
+      if (z) { float ux = cx, uy = cy;
+               static int lock = -1;
+               if (lock < 0) { const char* le = getenv("DBG_LOCK"); lock = le ? atoi(le) : 0; }
+               if (lock && s_lock_valid) { ux = s_lock_x; uy = s_lock_y; }
+               vpx[0] = k; vpx[1] = k; vpx[4] = -ux * k; vpx[5] = -uy * k; } }
+
+    /* Garbage-projection fallback (vkcube): c0 outside (0, 8) with a VP that
+     * reads c0-c3 gets a fixed perspective instead. */
+    int uses_c03 = (vs_idx >= 0 && vs_idx < s_d3d.vp_vs_n)
+                       ? s_d3d.vp_vs[vs_idx].uses_c03 : s_d3d.vp_uses_c03;
+    float c00 = st->vertex_constants[0][0];
+    int garbage = !(c00 > 0.0f && c00 < 8.0f);
+    static int s_nofix = -1, s_forcefix = -1;
+    if (s_nofix < 0)    s_nofix = getenv("VP_NOFIXPROJ") ? 1 : 0;
+    if (s_forcefix < 0) s_forcefix = getenv("VP_FIXPROJ") ? 1 : 0;
+    if (s_nofix) garbage = 0;
+    const int fix = (garbage && uses_c03) || s_forcefix;
+    if (fix) { vpx[2] = 1.0f; vpx[6] = 0.0f; }
+
+    /* VP_MVP / RSX_DBG_CB print from the slot: always write it when they are on. */
+    static int dbg = -1;
+    if (dbg < 0) dbg = (getenv("VP_MVP") || getenv("RSX_DBG_CB") || getenv("VCB_NODEDUP")) ? 1 : 0;
+    static u32 l_gen, l_slot, l_par, l_batch; static int l_ok = 0; static float l_vpx[8];
+    if (!fix && !dbg && l_ok && l_batch == s_vcb_batch && l_par == (u32)s_d3d.vp_parity && l_slot < slot &&
+        st->vc_gen == l_gen && !memcmp(vpx, l_vpx, sizeof vpx)) {
+        if (mdr) mdr->vcb_slot = l_slot;
+        s_vcb_reused++;
+        return;
+    }
     char* dst = (char*)s_d3d.vp_cb_mapped
         + ((u64)s_d3d.vp_parity * MAX_DRAWS + slot) * VP_CB_STRIDE;
     memcpy(dst, st->vertex_constants, RSX_MAX_VERTEX_CONSTANTS * 16);
+    memcpy(dst + RSX_MAX_VERTEX_CONSTANTS * 16, vpx, sizeof vpx);
+    if (fix) {
+        { static int _fb = 0; if (_fb++ < 6)
+            printf("[VPFB] fallback proj on draw slot %u (c00=%g vs_idx=%d)\n",
+                   slot, c00, vs_idx); }
+        float c[16] = {0};
+        c[0]=1.358f; c[5]=2.414f; c[11]=1.0f;
+        c[10]=1.0f/99.0f; c[14]=-1.0f/99.0f;
+        memcpy(dst, c, sizeof c);
+    }
+    l_ok = !fix; l_gen = st->vc_gen; l_slot = slot; l_par = (u32)s_d3d.vp_parity; l_batch = s_vcb_batch;
+    memcpy(l_vpx, vpx, sizeof vpx);
+    s_vcb_copied++;
+    if (!dbg) return;
     /* VP_MVP=<N>: the constant bank as the shader will see it, for the first N
      * draws. A snapshot taken from a stale rsx_state looks exactly like a broken
      * vertex program from the outside -- both give zero fragments. */
@@ -4511,75 +4586,17 @@ static void vp_record_cb(u32 slot, int vs_idx, const D3D12DrawRecord* dr)
                 slot, last_nz,
                 c[260*4+0], c[260*4+1], c[260*4+2], c[260*4+3],
                 c[467*4+0], c[467*4+1], c[467*4+2], c[467*4+3]); } }
-    /* RSX_DBG_CB=<hex tex0 offset>: the constants as they land in the per-draw
-     * constant buffer for that texture's draws -- i.e. exactly what the shader
-     * samples, not what the CPU-side rsx_state holds. Those two agreeing is an
-     * assumption worth checking directly when a draw transforms to nothing. */
-    const float* vpx_dbg = (const float*)(dst + RSX_MAX_VERTEX_CONSTANTS * 16);
     { static const char* dc = (const char*)1; static u32 wantc = 0; static int n = 0;
       if (dc == (const char*)1) { dc = getenv("RSX_DBG_CB");
                                   wantc = dc ? (u32)strtoul(dc, NULL, 16) : 0; }
       if (wantc && dr && dr->tex[0].raw == wantc && n < 4) { n++;
           const float* c = (const float*)dst;
           fprintf(stderr, "[DUCKCB] slot=%u vs_idx=%d posscale=(%g %g %g) posoffset=(%g %g %g)%c",
-                  slot, vs_idx, vpx_dbg[0], vpx_dbg[1], vpx_dbg[2],
-                  vpx_dbg[4], vpx_dbg[5], vpx_dbg[6], 10);
+                  slot, vs_idx, vpx[0], vpx[1], vpx[2], vpx[4], vpx[5], vpx[6], 10);
           for (int r = 256; r <= 259; r++)
               fprintf(stderr, "[DUCKCB]   c%d=(%g %g %g %g)%c", r,
                       c[r*4+0], c[r*4+1], c[r*4+2], c[r*4+3], 10);
       } }
-
-    /* Viewport epilogue (see the render_frame notes this logic came from):
-     * x/y identity, z lane remaps GL clip z when the guest programs one. */
-    float* vpx = (float*)(dst + RSX_MAX_VERTEX_CONSTANTS * 16);
-    const float* vs_ = st->viewport_scale;
-    const float* vo_ = st->viewport_offset;
-    vpx[0] = vpx[1] = vpx[3] = 1.0f;
-    vpx[4] = vpx[5] = vpx[7] = 0.0f;
-    if (vs_[2] != 0.0f) { vpx[2] = vs_[2]; vpx[6] = vo_[2]; }
-    else                { vpx[2] = 1.0f;   vpx[6] = 0.0f;   }
-    /* DBG_ZOOM=<k> with DBG_CENTER="cx,cy": a debug camera applied in CLIP space,
-     * not a framebuffer crop -- the geometry is re-rasterized at full resolution.
-     * The shader epilogue already computes
-     *     pos.xyz = _p.xyz * vp_posscale + _p.w * vp_posoffset
-     * so recentring NDC point c and magnifying by k is exactly
-     *     pos.xy = _p.xy * k + _p.w * (-c * k).
-     * Rubber Ducky frames its ducks near the bottom edge of the viewport and its
-     * camera only moves from the analog sticks, so without this there is no way
-     * to look at the subject of the demo. It changes the view, nothing else:
-     * same draws, same transform, same textures. */
-    { static int z = -1; static float k = 1.0f, cx = 0.0f, cy = 0.0f;
-      if (z < 0) { const char* e = getenv("DBG_ZOOM");
-                   k = e ? (float)atof(e) : 1.0f;
-                   z = (e && k > 0.0f) ? 1 : 0;
-                   const char* ce = getenv("DBG_CENTER");
-                   if (ce) { double a = 0, b = 0; sscanf(ce, "%lf,%lf", &a, &b);
-                             cx = (float)a; cy = (float)b; } }
-      if (z) { float ux = cx, uy = cy;
-               static int lock = -1;
-               if (lock < 0) { const char* le = getenv("DBG_LOCK"); lock = le ? atoi(le) : 0; }
-               if (lock && s_lock_valid) { ux = s_lock_x; uy = s_lock_y; }
-               vpx[0] = k; vpx[1] = k; vpx[4] = -ux * k; vpx[5] = -uy * k; } }
-
-    /* Garbage-projection fallback (vkcube; see the original comment). */
-    int uses_c03 = (vs_idx >= 0 && vs_idx < s_d3d.vp_vs_n)
-                       ? s_d3d.vp_vs[vs_idx].uses_c03 : s_d3d.vp_uses_c03;
-    float* c = (float*)dst;
-    float c00 = c[0];
-    int garbage = !(c00 > 0.0f && c00 < 8.0f);
-    static int s_nofix = -1, s_forcefix = -1;
-    if (s_nofix < 0)    s_nofix = getenv("VP_NOFIXPROJ") ? 1 : 0;
-    if (s_forcefix < 0) s_forcefix = getenv("VP_FIXPROJ") ? 1 : 0;
-    if (s_nofix) garbage = 0;
-    if ((garbage && uses_c03) || s_forcefix) {
-        { static int _fb = 0; if (_fb++ < 6)
-            printf("[VPFB] fallback proj on draw slot %u (c00=%g vs_idx=%d)\n",
-                   slot, c00, vs_idx); }
-        for (int _i = 0; _i < 16; _i++) c[_i] = 0.0f;
-        c[0]=1.358f; c[5]=2.414f; c[11]=1.0f;
-        c[10]=1.0f/99.0f; c[14]=-1.0f/99.0f;
-        vpx[2] = 1.0f; vpx[6] = 0.0f;
-    }
 }
 
 extern int cellGcmOffsetIsDisplay(u32 offset);
@@ -6602,7 +6619,7 @@ static void render_frame_impl(void)
                 /* Per-draw constants: this draw's vp_cb + FP texscale slots. */
                 s_d3d.cmd_list->lpVtbl->SetGraphicsRootConstantBufferView(s_d3d.cmd_list, 0,
                     s_d3d.vp_cb->lpVtbl->GetGPUVirtualAddress(s_d3d.vp_cb)
-                    + ((u64)s_rb.parity * MAX_DRAWS + dr->cb_slot) * VP_CB_STRIDE);
+                    + ((u64)s_rb.parity * MAX_DRAWS + dr->vcb_slot) * VP_CB_STRIDE);
                 if (s_d3d.vp_fpcb)
                     s_d3d.cmd_list->lpVtbl->SetGraphicsRootConstantBufferView(s_d3d.cmd_list, 2,
                         s_d3d.vp_fpcb->lpVtbl->GetGPUVirtualAddress(s_d3d.vp_fpcb)
@@ -6787,6 +6804,10 @@ static void render_frame_impl(void)
                       (unsigned long long)s_vtex_skip, s_vtex_cmp_bytes / 1048576.0,
                       s_vtex_copy_bytes / 1048576.0, 10);
               s_vtex_skip = 0; s_vtex_cmp_bytes = 0; s_vtex_copy_bytes = 0;
+              fprintf(stderr, "[PERF-VCB] vertex constants: %u banks written, %u reused"
+                              " | vertices: %llu converted, %llu reused%c",
+                      s_vcb_copied, s_vcb_reused, s_vmemo_miss, s_vmemo_hits, 10);
+              s_vcb_copied = 0; s_vcb_reused = 0; s_vmemo_miss = 0; s_vmemo_hits = 0;
               { LONG hh = InterlockedExchange(&s_shc_hits, 0), mm = InterlockedExchange(&s_shc_miss, 0);
                 LONG pl = InterlockedExchange(&s_plib_loaded, 0);
                 LONG ab = InterlockedExchange(&s_fp_async_built, 0), as = InterlockedExchange(&s_fp_async_skips, 0);
@@ -7270,6 +7291,7 @@ static void render_frame(void)
     s_d3d.vb_offset = 0;
     s_d3d.vp_vb_offset = 0;
     s_d3d.vp_parity ^= 1;
+    s_vcb_batch++;   /* constant banks of the old batch are not reusable */
     { u8* t = s_fp_arena; s_fp_arena = s_fp_arena_spare; s_fp_arena_spare = t; }
     s_fp_arena_used = 0; s_fp_nsnap = 0;
     { u8* t = s_vtex_arena; u32 c = s_vtex_arena_cap;
@@ -7480,6 +7502,7 @@ static void d3d12_clear(void* ud, u32 flags, u32 color, float depth, u8 stencil)
     s_d3d.draw_count   = 0;
     s_d3d.vb_offset    = 0;
     s_d3d.vp_vb_offset = 0;
+    s_vcb_batch++;
 }
 
 static void d3d12_set_render_target(void* ud, const rsx_state* state)
@@ -7628,16 +7651,40 @@ void rsx_vtx_pos_dbg(const rsx_state* state, const float* v, u32 n);
 /* Fill all 16 attribute slots for one vertex. The per-attribute work lives in
  * rsx_vertex_fetch.c so the Metal and null backends read guest vertices the
  * same way this one does, rather than each porting the logic again. */
+/* Converted-vertex memo for one upload_*_vp call: strips and indexed meshes
+ * expanded to triangle lists fetch each vertex 3-6 times, and the fetch (16
+ * attributes, byte-swapped and format-converted) was the largest cost of
+ * recording a draw. Direct-mapped by vertex index; s_vmemo_gen is bumped at
+ * the start of every upload call so attribute state never leaks between
+ * draws. Record thread only. VTX_NOMEMO=1 disables it. */
+#define VMEMO_N 1024u
+static VPSlot s_vmemo[VMEMO_N][16];
+static u32 s_vmemo_key[VMEMO_N], s_vmemo_tag[VMEMO_N];
+static u32 s_vmemo_gen = 1;
+#define VP_FETCH_BEGIN() (++s_vmemo_gen)
+
 static void read_vp_vertex(const rsx_state* state, u32 vi, VPSlot* out16)
 {
-    for (int i = 0; i < 16; i++) {
-        rsx_fetch_attrib(state, i, vi, out16[i].v);
-        if (i == 0) {
-            const rsx_vertex_attrib* a = &state->vertex_attribs[0];
-            u32 n = a->size ? a->size : 4; if (n > 4) n = 4;
-            rsx_vtx_pos_dbg(state, out16[0].v, n);
-        }
+    static int nomemo = -1;
+    if (nomemo < 0) nomemo = getenv("VTX_NOMEMO") ? 1 : 0;
+    const u32 h = (vi * 2654435761u) >> 22;   /* 10 bits */
+    VPSlot* c = s_vmemo[h];
+    if (!nomemo && s_vmemo_tag[h] == s_vmemo_gen && s_vmemo_key[h] == vi) {
+        s_vmemo_hits++;
+        memcpy(out16, c, 16 * sizeof(VPSlot));
+        return;
     }
+    s_vmemo_miss++;
+    /* Convert into cached memory, then one sequential copy: out16 is the
+     * write-combined upload heap, and fetch writes each slot twice (the
+     * constant default, then the array value). */
+    for (int i = 0; i < 16; i++)
+        rsx_fetch_attrib(state, i, vi, c[i].v);
+    { const rsx_vertex_attrib* a = &state->vertex_attribs[0];
+      u32 n = a->size ? a->size : 4; if (n > 4) n = 4;
+      rsx_vtx_pos_dbg(state, c[0].v, n); }
+    s_vmemo_tag[h] = s_vmemo_gen; s_vmemo_key[h] = vi;
+    memcpy(out16, c, 16 * sizeof(VPSlot));
 }
 
 /* VTX_POS=<N>: print the first fetched position of the first N draws. A guest
@@ -7764,6 +7811,7 @@ static void vp_attrs_dbg(const rsx_state* state)
 
 static u32 upload_quads_vp(const rsx_state* state, u32 first, u32 count)
 {
+    VP_FETCH_BEGIN();
     extern uint8_t* vm_base;
     if (!state || !vm_base || !s_d3d.vp_vb_mapped) return 0;
     if (!state->vertex_attribs[0].enabled) return 0;
@@ -7797,6 +7845,7 @@ static u32 upload_quads_vp(const rsx_state* state, u32 first, u32 count)
  * TRIANGLES, prim 5 -- no expansion needed). */
 static u32 upload_tris_vp(const rsx_state* state, u32 first, u32 count)
 {
+    VP_FETCH_BEGIN();
     extern uint8_t* vm_base;
     s_req_verts += count; s_req_draws++;
     if (!state || !vm_base || !s_d3d.vp_vb_mapped) return 0;
@@ -7864,6 +7913,7 @@ static u32 upload_tris_vp(const rsx_state* state, u32 first, u32 count)
  * collapsed to a line) and textured=0 (the Y/U/V planes never sampled). */
 static u32 upload_strip_vp(const rsx_state* state, u32 first, u32 count, int fan)
 {
+    VP_FETCH_BEGIN();
     extern uint8_t* vm_base;
     if (!state || !vm_base || !s_d3d.vp_vb_mapped) return 0;
     if (!state->vertex_attribs[0].enabled) return 0;
@@ -7908,6 +7958,7 @@ static u32 read_guest_index(const rsx_state* st, u32 k)
 /* Indexed variants of the VP-path uploads. */
 static u32 upload_quads_vp_indexed(const rsx_state* state, u32 first, u32 count)
 {
+    VP_FETCH_BEGIN();
     extern uint8_t* vm_base;
     if (!state || !vm_base || !s_d3d.vp_vb_mapped) return 0;
     if (!state->vertex_attribs[0].enabled) return 0;
@@ -7948,6 +7999,7 @@ static u32 upload_quads_vp_indexed(const rsx_state* state, u32 first, u32 count)
 
 static u32 upload_tris_vp_indexed(const rsx_state* state, u32 first, u32 count)
 {
+    VP_FETCH_BEGIN();
     extern uint8_t* vm_base;
     s_req_verts += count; s_req_draws++;
     if (!state || !vm_base || !s_d3d.vp_vb_mapped) return 0;
@@ -8165,6 +8217,7 @@ static u32 upload_tris_vp_indexed(const rsx_state* state, u32 first, u32 count)
  * octopus tentacles -- are indexed strips. */
 static u32 upload_strip_vp_indexed(const rsx_state* state, u32 first, u32 count, int fan)
 {
+    VP_FETCH_BEGIN();
     extern uint8_t* vm_base;
     if (!state || !vm_base || !s_d3d.vp_vb_mapped) return 0;
     if (!state->vertex_attribs[0].enabled) return 0;
@@ -8227,6 +8280,7 @@ static u32 upload_strip_vp_indexed(const rsx_state* state, u32 first, u32 count,
 /* Non-indexed LINE_STRIP through the VP path, expanded to a line list. */
 static u32 upload_linestrip_vp(const rsx_state* state, u32 first, u32 count)
 {
+    VP_FETCH_BEGIN();
     extern uint8_t* vm_base;
     if (!state || !vm_base || !s_d3d.vp_vb_mapped || count < 2) return 0;
     if (!state->vertex_attribs[0].enabled) return 0;

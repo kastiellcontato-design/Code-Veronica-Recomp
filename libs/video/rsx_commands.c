@@ -700,7 +700,13 @@ int rsx_process_method(rsx_state* state, u32 method, u32 data)
               static int _max=-1; if(_max<0){const char*m=getenv("TCONST_MAX");_max=m?atoi(m):64;}
               int _hit = _en && (getenv("TCONST_ALL") ? (_n<_max) : (slot>=12 && slot<=30 && _n<400));
               if(_hit){ _n++; fprintf(stderr,"[TCONST] load=%u slot=%u lane=%u = %.4f\n", state->transform_constant_load, slot, lane, f); } }
-            state->vertex_constants[slot][lane] = f;
+            /* vc_gen moves only on a real change: titles re-upload unchanged
+             * matrices, and the backend reuses a draw's constant snapshot
+             * while the generation holds still. */
+            if (memcmp(&state->vertex_constants[slot][lane], &f, 4)) {
+                state->vertex_constants[slot][lane] = f;
+                state->vc_gen++;
+            }
             { static int _sq=0, _e=-1; if (_e < 0) _e = getenv("SEQ_DBG") ? 1 : 0; if (_e && slot==256 && lane==0 && _sq++ < 500)
                 fprintf(stderr, "[SEQ] upload c256.x=%.4f (load=%u)\n", f, state->transform_constant_load); }
             if (!state->vertex_constants_dirty) {
