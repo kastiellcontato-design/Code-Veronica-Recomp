@@ -2400,7 +2400,15 @@ static const u8* fp_snap_ptr(const D3D12DrawRecord* dr)
  * frame, and copying it per draw ran the game at 0.3 fps. */
 static u8*  s_vtex_arena = NULL;
 static u32  s_vtex_arena_used = 0, s_vtex_arena_cap = 0;
-typedef struct { u32 ea, len, data_off, hash; } VTexSnap;
+typedef struct { u32 ea, len, data_off, hash, epoch; } VTexSnap;
+/* FIFO drain pass the snapshot was last validated in (cellGcmSys.c). Every
+ * draw of one pass was queued before that pass read `put`, and a title may
+ * not rewrite data the RSX has yet to read -- so once a snapshot is checked
+ * in a pass, it holds for the rest of the pass. Checking per draw cost a
+ * GetWriteWatch over the whole range (Code Veronica's matrix texture: 1 MB,
+ * 256 pages) on every draw that bound it; with the lighter's cube shadow
+ * that was most of the FIFO drain. VTEX_EPOCH=0 restores the per-draw check. */
+extern volatile u32 g_gcm_drain_epoch;
 static VTexSnap s_vtex_snap[16];
 static u32 s_vtex_nsnap = 0;
 
@@ -2449,9 +2457,11 @@ static void vtex_record(D3D12DrawRecord* dr, const rsx_state* st)
          * nobody wrote since that copy cannot differ, so skip the compare. */
         int reuse = -1;
         for (int i = (int)s_vtex_nsnap - 1; i >= 0 && reuse == -1; i--) {
-            const VTexSnap* q = &s_vtex_snap[i];
+            VTexSnap* q = &s_vtex_snap[i];
             if (q->ea != ea || q->len != len) continue;
-            if (!vm_range_written(ea, span)) { reuse = i; s_vtex_skip++; break; }
+            { static int ep = -1; if (ep < 0) { const char* e = getenv("VTEX_EPOCH"); ep = (e && *e == '0') ? 0 : 1; }
+              if (ep && q->epoch == g_gcm_drain_epoch) { reuse = i; s_vtex_skip++; break; } }
+            if (!vm_range_written(ea, span)) { reuse = i; s_vtex_skip++; q->epoch = g_gcm_drain_epoch; break; }
             vm_range_watch_reset(ea, span);   /* before reading: later writes stay visible */
             const u8* a = s_vtex_arena + q->data_off;
             int same = 1;
@@ -2460,6 +2470,7 @@ static void vtex_record(D3D12DrawRecord* dr, const rsx_state* st)
             else for (u32 y = 0; y < h && same; y++)
                 same = !memcmp(a + (size_t)y * row, src + (size_t)y * pitch, row);
             reuse = same ? i : -2;   /* only the latest copy counts */
+            if (same) q->epoch = g_gcm_drain_epoch;
         }
         if (reuse >= 0) {
             dr->vtx[u].fmt = fmt; dr->vtx[u].w = w; dr->vtx[u].h = h;
@@ -2486,6 +2497,7 @@ static void vtex_record(D3D12DrawRecord* dr, const rsx_state* st)
         if (s_vtex_nsnap == 16) { memmove(s_vtex_snap, s_vtex_snap + 1, 15 * sizeof(VTexSnap)); s_vtex_nsnap = 15; }
         s_vtex_snap[s_vtex_nsnap].ea = ea; s_vtex_snap[s_vtex_nsnap].len = len;
         s_vtex_snap[s_vtex_nsnap].data_off = s_vtex_arena_used; s_vtex_snap[s_vtex_nsnap].hash = hash;
+        s_vtex_snap[s_vtex_nsnap].epoch = g_gcm_drain_epoch;
         s_vtex_nsnap++;
         dr->vtx[u].fmt = fmt; dr->vtx[u].w = w; dr->vtx[u].h = h;
         dr->vtx[u].hash = hash;
@@ -8322,7 +8334,12 @@ static u32 upload_linestrip_vp(const rsx_state* state, u32 first, u32 count)
     return out_n;
 }
 
+static void d3d12_draw_arrays_impl(void* ud, u32 primitive, u32 first, u32 count);
 static void d3d12_draw_arrays(void* ud, u32 primitive, u32 first, u32 count)
+{
+    ps3_tl_begin(9); d3d12_draw_arrays_impl(ud, primitive, first, count); ps3_tl_end(9);
+}
+static void d3d12_draw_arrays_impl(void* ud, u32 primitive, u32 first, u32 count)
 {
     /* RSX_LIVE_FEED_DBG=1: pair with the [feed] method counts so "the FIFO
      * carries no draw batches" can be checked against "the backend is told
@@ -8357,7 +8374,9 @@ static void d3d12_draw_arrays(void* ud, u32 primitive, u32 first, u32 count)
          * off-screen. Untextured VP draws now render via the colour PSO. */
         if (s_d3d.vp_vb_mapped && s_d3d.vp_root_sig) {
             u32 rec = s_d3d.vp_vb_offset;
+            ps3_tl_begin(8);
             u32 emitted = upload_quads_vp(s_d3d.current_rsx_state, first, count);
+            ps3_tl_end(8);
             if (emitted && s_d3d.draw_count < MAX_DRAWS) {
                 D3D12DrawRecord* dr = &s_d3d.draws[s_d3d.draw_count];
                 dr->vb_byte_offset = rec;
@@ -8483,8 +8502,10 @@ static void d3d12_draw_arrays(void* ud, u32 primitive, u32 first, u32 count)
                 pv->vb_byte_offset + pv->vertex_count * VP_VERT_STRIDE == s_d3d.vp_vb_offset) {
                 s_d3d.vp_vb_offset = pv->vb_byte_offset;   /* drop the partial expansion */
                 u32 total = first + count - s_d3d.merge_strip_first;
+                ps3_tl_begin(8);
                 pv->vertex_count = upload_strip_vp(s_d3d.current_rsx_state, s_d3d.merge_strip_first,
                                                    total, primitive == RSX_PRIMITIVE_TRIANGLE_FAN);
+                ps3_tl_end(8);
                 s_d3d.merge_first_end = first + count;
                 { static int n = 0; if (n++ < 4)
                     fprintf(stderr, "[STRIPJOIN] prim=%u joined %u vertices from %u%c",
@@ -8493,11 +8514,13 @@ static void d3d12_draw_arrays(void* ud, u32 primitive, u32 first, u32 count)
             }
         }
         u32 rec = s_d3d.vp_vb_offset;
+        ps3_tl_begin(8);
         u32 emitted = (primitive == RSX_PRIMITIVE_LINES) ? upload_tris_vp(s_d3d.current_rsx_state, first, count & ~1u)
             : (primitive == RSX_PRIMITIVE_LINE_STRIP) ? upload_linestrip_vp(s_d3d.current_rsx_state, first, count)
             : (primitive == RSX_PRIMITIVE_TRIANGLES)
             ? upload_tris_vp(s_d3d.current_rsx_state, first, count)
             : upload_strip_vp(s_d3d.current_rsx_state, first, count, primitive == RSX_PRIMITIVE_TRIANGLE_FAN);
+        ps3_tl_end(8);
         /* RSX splits one primitive stream across several DRAW_ARRAYS entries
          * inside a single BEGIN/END (each carries at most 256 vertices), and the
          * hardware concatenates them before assembling primitives. Recording a
@@ -8626,7 +8649,12 @@ static void d3d12_draw_arrays(void* ud, u32 primitive, u32 first, u32 count)
     }
 }
 
+static void d3d12_draw_indexed_impl(void* ud, u32 primitive, u32 first, u32 count);
 static void d3d12_draw_indexed(void* ud, u32 primitive, u32 first, u32 count)
+{
+    ps3_tl_begin(9); d3d12_draw_indexed_impl(ud, primitive, first, count); ps3_tl_end(9);
+}
+static void d3d12_draw_indexed_impl(void* ud, u32 primitive, u32 first, u32 count)
 {
     /* RSX_LIVE_FEED_DBG=1: pair with the [feed] method counts so "the FIFO
      * carries no draw batches" can be checked against "the backend is told
@@ -8675,8 +8703,10 @@ static void d3d12_draw_indexed(void* ud, u32 primitive, u32 first, u32 count)
             pv->vb_byte_offset + pv->vertex_count * VP_VERT_STRIDE == s_d3d.vp_vb_offset) {
             s_d3d.vp_vb_offset = pv->vb_byte_offset;   /* drop the partial expansion */
             u32 total = first + count - s_d3d.merge_strip_first;
+            ps3_tl_begin(8);
             u32 n = upload_strip_vp_indexed(s_d3d.current_rsx_state, s_d3d.merge_strip_first, total,
                                             primitive == RSX_PRIMITIVE_TRIANGLE_FAN);
+            ps3_tl_end(8);
             if (n) pv->vertex_count = n;
             else   s_d3d.vp_vb_offset = pv->vb_byte_offset + pv->vertex_count * VP_VERT_STRIDE;
             s_d3d.merge_first_end = first + count;
@@ -8688,16 +8718,19 @@ static void d3d12_draw_indexed(void* ud, u32 primitive, u32 first, u32 count)
     }
     u32 emitted = 0;
     u32 rec = s_d3d.vp_vb_offset;
+    ps3_tl_begin(8);
     if (primitive == RSX_PRIMITIVE_QUADS)             emitted = upload_quads_vp_indexed(s_d3d.current_rsx_state, first, count);
     else if (primitive == RSX_PRIMITIVE_TRIANGLES)    emitted = upload_tris_vp_indexed(s_d3d.current_rsx_state, first, count);
     else if (primitive == RSX_PRIMITIVE_TRIANGLE_STRIP) emitted = upload_strip_vp_indexed(s_d3d.current_rsx_state, first, count, 0);
     else if (primitive == RSX_PRIMITIVE_TRIANGLE_FAN)   emitted = upload_strip_vp_indexed(s_d3d.current_rsx_state, first, count, 1);
     else {
+        ps3_tl_end(8);
         static int _skip = 0;
         if (_skip++ < 3)
             printf("[D3D12] draw_indexed: skipping prim=%u (not wired)\n", primitive);
         return;
     }
+    ps3_tl_end(8);
     /* Same BEGIN/END batch concatenation as the non-indexed path: this title's
      * fluid arrives as ~3000 DRAW_INDEX_ARRAY batches of 256, and 256 is not a
      * multiple of 3, so every batch after the first assembled out of phase. */

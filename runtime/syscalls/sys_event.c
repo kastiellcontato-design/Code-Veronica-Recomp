@@ -1117,7 +1117,16 @@ static int flag_check(uint64_t pattern, uint64_t bitpat, uint32_t mode)
  * r6 = pointer to receive result pattern (u64*)
  * r7 = timeout_usec (0 = infinite)
  * -----------------------------------------------------------------------*/
+static int64_t sys_event_flag_wait_impl(ppu_context* ctx);
 int64_t sys_event_flag_wait(ppu_context* ctx)
+{
+    extern void ps3_tl_main_begin(int), ps3_tl_main_end(int);
+    ps3_tl_main_begin(15);
+    int64_t r = sys_event_flag_wait_impl(ctx);
+    ps3_tl_main_end(15);
+    return r;
+}
+static int64_t sys_event_flag_wait_impl(ppu_context* ctx)
 {
     uint32_t flag_id    = LV2_ARG_U32(ctx, 0);
     uint64_t bitpat     = LV2_ARG_U64(ctx, 1);
@@ -1127,7 +1136,9 @@ int64_t sys_event_flag_wait(ppu_context* ctx)
     uint64_t timeout_us = LV2_ARG_U64(ctx, 4);
     { static int _w=0; if (_w++ < 40) fprintf(stderr, "[WAIT] event_flag_wait(flag=%u bits=0x%llX timeout=%llu)\n", flag_id, (unsigned long long)bitpat, (unsigned long long)timeout_us); }
     /* PS3_EVT_STACK=1: identify game callsites blocked on the physics startup flag. */
-    if (flag_id == 1 && getenv("PS3_EVT_STACK")) {
+    static int evt_stack = -1;
+    if (evt_stack < 0) evt_stack = getenv("PS3_EVT_STACK") ? 1 : 0;
+    if (flag_id == 1 && evt_stack) {
         static int _stack_count = 0;
         if (_stack_count++ < 4) {
             char _tag[64];

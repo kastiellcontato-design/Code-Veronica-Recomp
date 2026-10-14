@@ -172,6 +172,7 @@ extern "C" unsigned ppu_boot_frames_presented(void)
 extern "C" void ps3_tl_begin(int ev);   /* PS3_TIMELINE, cellGcmSys.c */
 extern "C" void ps3_tl_end(int ev);
 extern "C" void ps3_tl_frame(void);
+extern "C" int cellGcm_drain_more_ready(void);
 extern "C" void ps3_tl_sleep_begin(void);
 extern "C" void ps3_tl_sleep_end(void);
 
@@ -223,15 +224,21 @@ static DWORD WINAPI frame_clock(LPVOID)
         }
         /* 1 ms, not 4: the guest's main thread polls a label this drain
          * writes, and every ms slept here after a present is a ms it spins. */
-        ps3_tl_sleep_begin();
-        Sleep(1);
-        ps3_tl_sleep_end();
+        /* No sleep when the drain stopped at a flip with the next frame
+         * already queued: present it and keep translating. */
+        if (!cellGcm_drain_more_ready()) {
+            ps3_tl_sleep_begin();
+            Sleep(1);
+            ps3_tl_sleep_end();
+        }
         ULONGLONG now = GetTickCount64();
 
         int fired = 0;
         while ((long long)(now - next_tick) >= 0 && fired < 240) {
+            ps3_tl_begin(11);
             cellGcmTickVBlank();
             cellGcmTickFlip();
+            ps3_tl_end(11);
             /* Present a pending flip BEFORE draining any further. The flip
              * fires at a get==put frame boundary on the guest thread, so the
              * batch held right now is exactly the completed frame; presenting
@@ -261,7 +268,10 @@ static DWORD WINAPI frame_clock(LPVOID)
             }
             cellGcm_rsx_process_fifo();
 
-            if (rsx_backend_pump() != 0) {
+            ps3_tl_begin(10);
+            int pumped = rsx_backend_pump();
+            ps3_tl_end(10);
+            if (pumped != 0) {
                 rsx_ok = 0;              /* window closed */
                 continue;
             }

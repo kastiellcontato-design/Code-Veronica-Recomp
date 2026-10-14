@@ -3549,12 +3549,15 @@ s32 cellSpursJoinTask2(CellSpursTaskset* taskset, u32 id, u32 out)
      * sleep is 1-2 ms on Windows, and Code Veronica's main thread joins SPU
      * tasks several times a frame -- the polls alone were ~28% of it. The
      * timeout only guards a completion published some other way. */
+    extern void ps3_tl_main_begin(int), ps3_tl_main_end(int);
+    ps3_tl_main_begin(14);
     for (;;) {
         LONG gen = s_task2_gen;
         rc = cellSpursTryJoinTask2(taskset,id,out);
         if (rc != CELL_SPURS_TASK_ERROR_AGAIN) break;
         WaitOnAddress(&s_task2_gen, &gen, sizeof gen, 2);
     }
+    ps3_tl_main_end(14);
     return rc;
 #endif
     while ((rc=cellSpursTryJoinTask2(taskset,id,out))==CELL_SPURS_TASK_ERROR_AGAIN) {

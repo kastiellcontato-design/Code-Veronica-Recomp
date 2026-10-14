@@ -111,6 +111,8 @@ static void sys_process_is_stack(ppu_context* ctx)
 /* LWM_COUNT=1, read once: create/destroy run thousands of times a frame and
  * the CRT getenv takes a lock on every call. */
 static int lwm_count_dbg(void) { static int v = -1; if (v < 0) v = getenv("LWM_COUNT") ? 1 : 0; return v; }
+extern "C" void ps3_tl_main_begin(int);   /* PS3_TIMELINE, cellGcmSys.c */
+extern "C" void ps3_tl_main_end(int);
 struct LwmSlot;
 static struct LwmSlot* lwm_sem(uint32_t addr);   /* fwd (defined below) */
 static void lwm_release(struct LwmSlot* s);
@@ -291,7 +293,10 @@ static void sys_lwmutex_lock(ppu_context* ctx)
             long long _blk_start = lwm_trace() ? lwm_now_us() : 0;
             DWORD ms = INFINITE;
             if (timeout_us) { uint64_t m = (timeout_us + 999) / 1000; ms = m > 0xFFFFFFFEull ? 0xFFFFFFFEu : (DWORD)m; }
-            if (!lwm_acquire(s, ms)) {           /* honor the timeout: ETIMEDOUT, no acquire */
+            ps3_tl_main_begin(16);
+            int got = lwm_acquire(s, ms);
+            ps3_tl_main_end(16);
+            if (!got) {           /* honor the timeout: ETIMEDOUT, no acquire */
                 if (lwm_trace()) fprintf(stderr, "[LWM-CONVOY] tid=%llu TIMED-OUT on lwm=0x%08X after %lldus (ETIMEDOUT, retry)\n",
                     (unsigned long long)ctx->thread_id, lwm, lwm_now_us() - _blk_start);
                 ctx->gpr[3] = (uint64_t)(int64_t)(int32_t)0x8001000Bu;

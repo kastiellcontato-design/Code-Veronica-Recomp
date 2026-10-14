@@ -93,7 +93,7 @@ static double s_tl_t0[TL_N];          /* begin stamp; each slot has one writer t
 static double s_tl_acc[TL_N];         /* seconds this window */
 static u32    s_tl_cnt[TL_N];
 static const char* const s_tl_name[TL_N] = {
-    "drain", "fc-sleep", "present", "wait-render", "render", "gpu-wait", NULL, "fc-sleep-behind",
+    "drain", "fc-sleep", "present", "wait-render", "render", "gpu-wait", NULL, "fc-sleep-behind", "vtx-upload", "draw-calls", "fc-pump", "fc-ticks", "MAIN-join", "MAIN-evflag", "MAIN-lwmutex",
 };
 void ps3_tl_begin(int ev) { if (tl_on() && ev >= 0 && ev < TL_N) s_tl_t0[ev] = tl_now(); }
 static int gcm_fifo_has_work(void);   /* with the FIFO walker below */
@@ -105,6 +105,10 @@ void ps3_tl_sleep_begin(void)
     ps3_tl_begin(gcm_fifo_has_work() ? 7 : 1);
 }
 void ps3_tl_sleep_end(void) { if (tl_on()) { ps3_tl_end(1); ps3_tl_end(7); } }
+/* Waits taken on the game's main (flipping) thread only. */
+static volatile DWORD s_tl_flip_tid;
+void ps3_tl_main_begin(int ev) { if (tl_on() && GetCurrentThreadId() == s_tl_flip_tid) ps3_tl_begin(ev); }
+void ps3_tl_main_end(int ev)   { if (tl_on() && GetCurrentThreadId() == s_tl_flip_tid) ps3_tl_end(ev); }
 void ps3_tl_end(int ev)
 {
     if (!tl_on() || ev < 0 || ev >= TL_N || s_tl_t0[ev] == 0.0) return;
@@ -117,7 +121,6 @@ extern int sys_timer_usleep_threads(unsigned* tid, unsigned long long* us,
                                     unsigned long long* calls, int max);
 static double s_tl_gflip_t[256];      /* flip request stamps, by flip number */
 static volatile u32 s_tl_gflips = 0, s_tl_dflips = 0;
-static volatile DWORD s_tl_flip_tid = 0;
 
 static void tl_game_flip(void)
 {
@@ -219,6 +222,8 @@ void ps3_tl_begin(int ev) { (void)ev; }
 void ps3_tl_end(int ev) { (void)ev; }
 void ps3_tl_sleep_begin(void) {}
 void ps3_tl_sleep_end(void) {}
+void ps3_tl_main_begin(int ev) { (void)ev; }
+void ps3_tl_main_end(int ev) { (void)ev; }
 static void tl_game_flip(void) {}
 void ps3_tl_frame(void) {}
 #endif
@@ -1645,12 +1650,27 @@ void cellGcm_ref_on_poll(void)
 /* Seconds spent draining the FIFO (the backend's [PERF] line reads and resets
  * it). Includes any catch-up present made from inside the drain. */
 double g_gcm_fifo_secs = 0.0;
+/* Bumped at the start of every drain pass, before `put` is read: the backend
+ * keys per-pass caches on it (see VTexSnap in rsx_d3d12_backend.c). */
+volatile u32 g_gcm_drain_epoch = 1;
+/* The last pass stopped at a flip with the next frame already queued behind
+ * it: the host loop should present and drain on without sleeping. Its 1 ms
+ * sleep is 1-2 ms on Windows, paid once per flip -- ~10 ms a frame in Code
+ * Veronica's lighter scene, with the work sitting there. */
+static volatile int s_gcm_stopped_at_flip = 0;
+int cellGcm_drain_more_ready(void)
+{
+    static int on = -1;
+    if (on < 0) { const char* e = getenv("GCM_FLIP_NOSLEEP"); on = (e && *e == '0') ? 0 : 1; }
+    return on && s_gcm_stopped_at_flip;
+}
 void cellGcm_rsx_process_fifo(void)
 {
     LARGE_INTEGER f, t0, t1;
     ps3_tl_begin(0);
     QueryPerformanceFrequency(&f); QueryPerformanceCounter(&t0);
     AcquireSRWLockExclusive(&s_gcm_fifo_lock);
+    g_gcm_drain_epoch++;
     gcm_rsx_process_fifo_unlocked();
     ReleaseSRWLockExclusive(&s_gcm_fifo_lock);
     QueryPerformanceCounter(&t1);
@@ -2188,6 +2208,7 @@ static void gcm_rsx_process_fifo_unlocked(void)
               since = now;
           }
       } else { last = s_fifo_getoff; since = now; } }
+    s_gcm_stopped_at_flip = (!strcmp(why, "flip") && s_fifo_getoff != put);
 
     /* Publish progress: get chases put; ref advances at most ONE queued fence
      * per tick (gcm_ref_push/gcm_ref_publish_one above) so every SET_REFERENCE
