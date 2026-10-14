@@ -27,6 +27,7 @@ rem Sequencia de eventos de troca de quadro apos N segundos ([FLIPTRACE]):
 rem set "PS3_FLIPTRACE=40"
 rem Amostrador de CPU ([samp] no log):
 rem set "PS3_SAMPLE=2"
+rem set "PS3_SAMPLE_SPU=1"
 rem Onde o jogo chama usleep, a cada 10 s:
 rem set "PS3_POLLTOP=10"
 set "GAME_EXE=%~dp0build-release\bin\MyGameRecomp.exe"
