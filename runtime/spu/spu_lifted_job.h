@@ -165,7 +165,9 @@ static inline int32_t spu_run_lifted_job_abi(spu_lifted_entry_fn entry,
     spu_context* const _ctxp = spu_ctx_pool_get();
     if (!_ctxp) return -1;
 #define ctx (*_ctxp)
-    spu_context_init(&ctx, 0);
+    /* Run on the caller's local store in place: no copy in, none back out. */
+    if (local_store) spu_context_init_ls(&ctx, 0, local_store);
+    else             spu_context_init(&ctx, 0);
     { static int s_cl = -1;
       if (s_cl < 0) s_cl = getenv("SPU_CTX_LOG") ? 1 : 0;
       if (s_cl) { fprintf(stderr, "[spu-ctx] new job context %p image=%d\n",
@@ -194,7 +196,6 @@ static inline int32_t spu_run_lifted_job_abi(spu_lifted_entry_fn entry,
      * this it is 0 from spu_context_init, so the first `r1 -= frame` wraps
      * negative -> garbage stack -> null function pointers -> branch to LS 0. */
     ctx.gpr[1]._u32[0] = SPU_LS_SIZE - 0x10;   /* 0x3FFF0 for a 256KB LS */
-    if (local_store) memcpy(ctx.ls, local_store, SPU_LS_SIZE);  /* job's LS in */
     /* A SpursTasksetContext at LS 0x2700 (built by spurs_pm_build_context) writes
      * syscallAddr=0xA70 at STC_SYSCALL_ADDR (0x27C4). That sentinel means "this is
      * a generic SPURS taskset task" (LBP's audio SPEEX/MultiStream tasks) -- flOw
@@ -341,7 +342,6 @@ static inline int32_t spu_run_lifted_job_abi(spu_lifted_entry_fn entry,
      * in the reserver set it is walked by the next PPU store to that line.
      * GH3's Havok task returning is what first hit it. */
     spu_coh_unregister(&ctx);
-    if (local_store) memcpy(local_store, ctx.ls, SPU_LS_SIZE);  /* LS back out */
     spu_ctx_pool_put(_ctxp);
     return 0;
 #undef ctx

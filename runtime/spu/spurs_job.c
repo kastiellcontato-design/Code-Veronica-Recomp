@@ -339,9 +339,8 @@ int spu_run_spurs_job(spu_lifted_entry_fn entry, int image_id,
     spu_context* const _ctxp = spu_ctx_pool_get();
     if (!_ctxp) { free(ls); return -1; }
 #define ctx (*_ctxp)
-    spu_context_init(&ctx, 0);
+    spu_context_init_ls(&ctx, 0, ls);   /* runs on `ls` in place */
     ctx.image_id = image_id;
-    memcpy(ctx.ls, ls, SPU_LS_SIZE);
     ctx.gpr[1]._u32[0] = (stack_top - 16u) & ~15u;   /* SPU stack grows down */
     /* Link register: where the job returns when it is done. The job manager
      * would pass an address inside itself; 0 makes the job re-enter its own

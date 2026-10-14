@@ -304,6 +304,7 @@ static void raw_spu_start(raw_spu* s)
     /* THE point of this whole file: local store is the guest window, not a copy.
      * The PPU keeps writing command buffers into it while the SPU runs. */
     s->ctx->ls       = vm_base + s->base;
+    s->ctx->ls_is_guest = 1;
     s->ctx->image_id = s_pending_image_id;
     s->entry         = s_pending_entry;
     s->ctx->gpr[1]._u32[0] = SPU_LS_SIZE - 0x10;      /* SPU ABI stack top */

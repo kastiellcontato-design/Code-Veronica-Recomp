@@ -966,7 +966,7 @@ void spu_wrch(spu_context* ctx, uint32_t channel, u128 value)
          * polling the MMIO window, whereas SPURS-thread mailboxes are drained
          * by paths that do not wake a stalled writer. A raw SPU's local store
          * is the guest window, not its own buffer. */
-        if (ctx->ls != ctx->ls_store)
+        if (ctx->ls_is_guest)
             while (ctx->ch_out_mbox.count >= SPU_MBOX_DEPTH && ctx->status != SPU_STATUS_STOPPED)
                 Sleep(0);
         spu_channel_write(&ctx->ch_out_mbox, v);

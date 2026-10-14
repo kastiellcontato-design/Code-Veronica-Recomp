@@ -12,6 +12,7 @@
 
 #include "../../include/ps3emu/ps3types.h"
 #include <stdint.h>
+#include <stddef.h>
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -184,6 +185,10 @@ typedef struct spu_context {
      * spurs_policy.c memsets and calls the init immediately after; keep it so. */
     SPU_ALIGN16 uint8_t ls_store[SPU_LS_SIZE];
     uint8_t* ls;
+    /* 1 when `ls` is the raw SPU's guest window (spu_raw.c). A job context may
+     * also point `ls` at its caller's buffer (spu_context_init_ls), so
+     * ls != ls_store no longer means "raw". */
+    int ls_is_guest;
 
     /* Program counter (local store address, 0-0x3FFFF) */
     uint32_t pc;
@@ -420,6 +425,20 @@ static inline void spu_context_init(spu_context* ctx, uint32_t spu_id)
 {
     memset(ctx, 0, sizeof(*ctx));
     ctx->ls     = ctx->ls_store;   /* a raw SPU repoints this at guest memory */
+    ctx->spu_id = spu_id;
+    ctx->status = SPU_STATUS_STOPPED;
+}
+
+/* Initialize a context that runs on the caller's 256 KB local store `ls`
+ * instead of its own: everything but ls_store is zeroed and nothing is
+ * copied. A job used to be copied into ls_store and back out, after a
+ * memset of ls_store as well -- four passes over 256 KB per SPU task, about
+ * 1.2 GB/s at Code Veronica's ~1170 tasks a second. */
+static inline void spu_context_init_ls(spu_context* ctx, uint32_t spu_id, uint8_t* ls)
+{
+    memset(ctx->gpr, 0, sizeof ctx->gpr);
+    memset(&ctx->ls, 0, sizeof(*ctx) - offsetof(spu_context, ls));
+    ctx->ls     = ls;
     ctx->spu_id = spu_id;
     ctx->status = SPU_STATUS_STOPPED;
 }
