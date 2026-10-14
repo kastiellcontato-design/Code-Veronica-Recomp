@@ -681,6 +681,78 @@ static void samp_report(void)
 static DWORD s_samp_boot_tid;
 static int   s_samp_main = -1;
 
+/* PS3_SAMPLE_SPU=1: sample only SPU task threads. They live ~10 ms each, so
+ * the system-wide thread survey (itself slow) almost never lands on one;
+ * the threads register themselves here instead. */
+#define SAMP_SPU_MAX 128
+static SRWLOCK s_spu_tl = SRWLOCK_INIT;
+static DWORD   s_spu_tid[SAMP_SPU_MAX];
+static int     s_samp_spu = 0;
+/* Outside-the-exe samples of SPU threads: where (nearest export of the
+ * module) and which runtime code got there (first exe frame found by a real
+ * unwind -- a stack scan picks up stale return addresses). */
+#define SAMP_OUT_N 256
+static char     s_out_name[SAMP_OUT_N][64];
+static uint32_t s_out_caller[SAMP_OUT_N];
+static uint64_t s_out_ct[SAMP_OUT_N];
+
+static void samp_export_name(uintptr_t rip, char* out, size_t cap)
+{
+    HMODULE h = NULL;
+    snprintf(out, cap, "?");
+    if (!GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                            GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCSTR)rip, &h) || !h) return;
+    char path[MAX_PATH]; const char* mod = "?";
+    if (GetModuleFileNameA(h, path, sizeof path)) { mod = strrchr(path, 92); mod = mod ? mod + 1 : path; }
+    const uint8_t* b = (const uint8_t*)h;
+    const IMAGE_NT_HEADERS* nt = (const IMAGE_NT_HEADERS*)(b + ((const IMAGE_DOS_HEADER*)b)->e_lfanew);
+    const IMAGE_DATA_DIRECTORY* dd = &nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT];
+    const char* best = NULL; uintptr_t bestv = 0;
+    if (dd->VirtualAddress) {
+        const IMAGE_EXPORT_DIRECTORY* ed = (const IMAGE_EXPORT_DIRECTORY*)(b + dd->VirtualAddress);
+        const DWORD* fn = (const DWORD*)(b + ed->AddressOfFunctions);
+        const DWORD* nm = (const DWORD*)(b + ed->AddressOfNames);
+        const WORD*  od = (const WORD*)(b + ed->AddressOfNameOrdinals);
+        for (DWORD i = 0; i < ed->NumberOfNames; i++) {
+            uintptr_t v = (uintptr_t)b + fn[od[i]];
+            if (v <= rip && v > bestv) { bestv = v; best = (const char*)(b + nm[i]); }
+        }
+    }
+    if (best) snprintf(out, cap, "%s!%s+0x%llX", mod, best, (unsigned long long)(rip - bestv));
+    else snprintf(out, cap, "%s+0x%llX", mod, (unsigned long long)(rip - (uintptr_t)b));
+}
+
+static void samp_out_hit(const char* name, uint32_t caller)
+{
+    for (int k = 0; k < SAMP_OUT_N; k++) {
+        if (!s_out_ct[k]) { strncpy(s_out_name[k], name, 63); s_out_caller[k] = caller; s_out_ct[k] = 1; return; }
+        if (s_out_caller[k] == caller && !strcmp(s_out_name[k], name)) { s_out_ct[k]++; return; }
+    }
+}
+
+static void samp_out_report(void)
+{
+    for (int rank = 0; rank < 25; rank++) {
+        uint64_t best = 0; int bi = -1;
+        for (int k = 0; k < SAMP_OUT_N; k++) if (s_out_ct[k] > best) { best = s_out_ct[k]; bi = k; }
+        if (bi < 0) break;
+        fprintf(stderr, "[samp] spu-out %6llu  %-48s from rva 0x%08X%c",
+                (unsigned long long)best, s_out_name[bi], s_out_caller[bi], 10);
+        s_out_ct[bi] = 0;
+    }
+    memset(s_out_ct, 0, sizeof s_out_ct);
+}
+
+extern "C" void ps3_samp_spu_thread(int enter)
+{
+    if (!s_samp_spu) return;
+    DWORD me = GetCurrentThreadId();
+    AcquireSRWLockExclusive(&s_spu_tl);
+    for (int i = 0; i < SAMP_SPU_MAX; i++)
+        if (enter ? !s_spu_tid[i] : s_spu_tid[i] == me) { s_spu_tid[i] = enter ? me : 0; break; }
+    ReleaseSRWLockExclusive(&s_spu_tl);
+}
+
 static uint32_t samp_stack_guest(HANDLE h, const CONTEXT* c)
 {
     (void)h;
@@ -743,7 +815,63 @@ static DWORD WINAPI samp_thread(LPVOID p)
         HANDLE snap = INVALID_HANDLE_VALUE;
         THREADENTRY32 te; te.dwSize = sizeof te;
         BOOL more;
-        if (s_samp_main > 0) {
+        if (s_samp_spu) {
+            /* Registered SPU task threads. Classify only after ResumeThread:
+             * module lookups take the loader lock, which a task thread being
+             * created or torn down may hold. */
+            AcquireSRWLockShared(&s_spu_tl);
+            for (int i = 0; i < SAMP_SPU_MAX; i++) {
+                DWORD tid = s_spu_tid[i];
+                if (!tid) continue;
+                HANDLE h = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT, FALSE, tid);
+                if (!h) continue;
+                CONTEXT c; c.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER; int ok = 0;
+                static uintptr_t exe, exe_end;
+                if (!exe) {
+                    exe = (uintptr_t)GetModuleHandleA(NULL);
+                    const IMAGE_NT_HEADERS* nt = (const IMAGE_NT_HEADERS*)(exe + ((const IMAGE_DOS_HEADER*)exe)->e_lfanew);
+                    exe_end = exe + nt->OptionalHeader.SizeOfImage;
+                }
+                uintptr_t first_exe = 0;
+                if (SuspendThread(h) != (DWORD)-1) {
+                    ok = GetThreadContext(h, &c) ? 1 : 0;
+                    /* Unwind (still suspended) to the first frame in the exe. */
+                    if (ok && (c.Rip < exe || c.Rip >= exe_end)) {
+                        CONTEXT u = c;
+                        for (int f = 0; f < 32; f++) {
+                            DWORD64 ib = 0;
+                            PRUNTIME_FUNCTION rf = RtlLookupFunctionEntry(u.Rip, &ib, NULL);
+                            if (rf) {
+                                PVOID hd = NULL; DWORD64 ef = 0;
+                                __try { RtlVirtualUnwind(UNW_FLAG_NHANDLER, ib, u.Rip, rf, &u, &hd, &ef, NULL); }
+                                __except (1) { break; }
+                            } else {
+                                if (samp_stack_words(u.Rsp, 1) < 1) break;
+                                __try { u.Rip = *(const DWORD64*)u.Rsp; } __except (1) { break; }
+                                u.Rsp += 8;
+                            }
+                            if (!u.Rip) break;
+                            if (u.Rip >= exe && u.Rip < exe_end) { first_exe = u.Rip; break; }
+                        }
+                    }
+                    ResumeThread(h);
+                }
+                CloseHandle(h);
+                if (!ok) continue;
+                s_samp_total++;
+                uint32_t g = samp_lookup((uintptr_t)c.Rip);
+                if (g) { s_samp_guest++; samp_hit(g); samp_tid2(1, 1, 0); }
+                else {
+                    int outside = ((uintptr_t)c.Rip - exe) >= 0x40000000u;
+                    if (!outside) samp_rva_hit((uintptr_t)c.Rip);
+                    else { char nm[64]; samp_export_name((uintptr_t)c.Rip, nm, sizeof nm);
+                           samp_out_hit(nm, first_exe ? (uint32_t)(first_exe - exe) : 0); }
+                    samp_tid2(1, 0, outside);     /* all SPU threads as "tid 1"; ntdll = outside the exe */
+                }
+            }
+            ReleaseSRWLockShared(&s_spu_tl);
+            more = FALSE;
+        } else if (s_samp_main > 0) {
             te.th32ThreadID = s_samp_boot_tid; te.th32OwnerProcessID = pid; more = TRUE;
         } else {
             snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
@@ -786,6 +914,7 @@ static DWORD WINAPI samp_thread(LPVOID p)
         if (GetTickCount64() >= next_report) {
             fprintf(stderr, "[samp] --- report at t=%llums ---\n",
                     (unsigned long long)(GetTickCount64() - t0));
+            if (s_samp_spu) samp_out_report();
             samp_report();
             if (ei + 1 < sizeof early / sizeof early[0]) { ei++; next_report = t0 + early[ei]; }
             else next_report = GetTickCount64() + 10000;
@@ -844,6 +973,7 @@ void ps3_sampler_start(void)
     unsigned ms = (unsigned)atoi(e); if (!ms) ms = 5;
     s_samp_boot_tid = GetCurrentThreadId();
     s_samp_main = getenv("PS3_SAMPLE_MAIN") ? 1 : 0;
+    s_samp_spu  = getenv("PS3_SAMPLE_SPU") ? 1 : 0;
     /* Self-check: does .pdata actually describe the lifted bodies? If not, the
      * exact attribution mode misses ALL guest code by construction and its "0
      * guest samples" means nothing. Print it rather than assume either way. */

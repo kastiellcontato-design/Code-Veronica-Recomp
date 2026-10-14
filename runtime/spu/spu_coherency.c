@@ -132,6 +132,12 @@ void spu_coh_reserve(spu_context* ctx, uint32_t ea)
 void spu_coh_unregister(spu_context* ctx)
 {
     if (!ctx) return;
+    /* Every run that ends here also gives back its MFC engine slot. SPURS
+     * task runs never did: after 64 tasks the table was full for good, and
+     * every DMA of every later task took the claim lock and shared one
+     * fallback engine -- Code Veronica's lighter tasks spent ~70% of their
+     * time waiting on that lock. */
+    { extern void spu_mfc_release(spu_context*); spu_mfc_release(ctx); }
     /* Under the lock-line lock, which every walker of s_coh_ctxs holds: a
      * notifier that loaded this pointer just before the NULL store would
      * otherwise go on dereferencing it after the job returned and its stack
@@ -151,6 +157,7 @@ void spu_coh_unregister(spu_context* ctx)
  * spu_coh_unregister if it keeps firing. */
 void spu_coh_forget_range(uintptr_t lo, uintptr_t hi)
 {
+    { extern void spu_mfc_forget_range(uintptr_t, uintptr_t); spu_mfc_forget_range(lo, hi); }
     spu_lockline_lock();
     for (int i = 0; i < SPU_COH_MAX_CTX; i++) {
         uintptr_t c = (uintptr_t)s_coh_ctxs[i];

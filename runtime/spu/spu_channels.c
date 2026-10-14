@@ -307,11 +307,24 @@ typedef struct {
 static spu_mfc_slot s_mfc_slots[SPU_MAX_CONTEXTS];
 static SRWLOCK      s_mfc_claim_lock = SRWLOCK_INIT;
 
+/* The slot this thread last found its context in: every MFC channel access
+ * comes through here, and scanning 64 slots each time showed up in profiles.
+ * Re-checked against the slot, so a stale hint only costs the scan. */
+#ifdef _MSC_VER
+static __declspec(thread) int t_mfc_hint = -1;
+#else
+static __thread int t_mfc_hint = -1;
+#endif
+
 static mfc_engine* mfc_for(spu_context* ctx)
 {
+    { int h = t_mfc_hint;
+      if (h >= 0 && s_mfc_slots[h].ctx == ctx) return &s_mfc_slots[h].mfc; }
     for (int i = 0; i < SPU_MAX_CONTEXTS; i++)
-        if (s_mfc_slots[i].ctx == ctx)
+        if (s_mfc_slots[i].ctx == ctx) {
+            t_mfc_hint = i;
             return &s_mfc_slots[i].mfc;
+        }
 
     /* No slot yet: take one. The engine is initialized before the slot is
      * published, so it is never visible to anyone in a half-reset state. */
@@ -322,6 +335,7 @@ static mfc_engine* mfc_for(spu_context* ctx)
         mfc_engine_init(&s_mfc_slots[i].mfc);
         s_mfc_slots[i].ctx = ctx;
         e = &s_mfc_slots[i].mfc;
+        t_mfc_hint = i;
     }
     if (!e) {
         /* Out of slots: fall back to a shared engine (correct for single-SPU).
@@ -362,6 +376,19 @@ void spu_mfc_release(spu_context* ctx)
         if (s_mfc_slots[i].ctx != ctx) continue;
         s_mfc_slots[i].ctx = NULL;
         break;
+    }
+    ReleaseSRWLockExclusive(&s_mfc_claim_lock);
+}
+
+/* Release every slot whose context lies in [lo, hi) -- a host thread's stack,
+ * as that thread exits. Safety net for a context whose run ended without
+ * spu_mfc_release. */
+void spu_mfc_forget_range(uintptr_t lo, uintptr_t hi)
+{
+    AcquireSRWLockExclusive(&s_mfc_claim_lock);
+    for (int i = 0; i < SPU_MAX_CONTEXTS; i++) {
+        uintptr_t c = (uintptr_t)s_mfc_slots[i].ctx;
+        if (c >= lo && c < hi) s_mfc_slots[i].ctx = NULL;
     }
     ReleaseSRWLockExclusive(&s_mfc_claim_lock);
 }
