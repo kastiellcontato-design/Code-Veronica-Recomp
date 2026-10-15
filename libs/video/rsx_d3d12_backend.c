@@ -23,6 +23,7 @@
 #include "rsx_ui_batch.h"
 #include "rsx_texture_layout.h"
 #include "rsx_tex_hook.h"
+#include "rsx_perf_overlay.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -436,9 +437,9 @@ static SRWLOCK s_ui_lock = SRWLOCK_INIT;
 static rsx_ui_quad s_ui_quads[UI_MAX_QUADS];
 static u32 s_ui_count;
 static ULONGLONG s_ui_updated;
-static ID3D12Resource* s_ui_vb[FRAME_COUNT];
-static void* s_ui_mapped[FRAME_COUNT];
-static u32 s_ui_vb_quads[FRAME_COUNT];
+/* A per-frame upload buffer of quad vertices, grown on demand. */
+typedef struct QuadVb { ID3D12Resource* vb[FRAME_COUNT]; void* mapped[FRAME_COUNT]; u32 quads[FRAME_COUNT]; } QuadVb;
+static QuadVb s_ui_vbs, s_ov_vbs;   /* the game's UI batch; the performance overlay */
 typedef struct UiVertex { float x,y,z,r,g,b,a,u,v; } UiVertex;
 void rsx_d3d12_set_ui_quads(const rsx_ui_quad* quads,u32 count)
 {
@@ -448,19 +449,18 @@ void rsx_d3d12_set_ui_quads(const rsx_ui_quad* quads,u32 count)
     s_ui_count=count;s_ui_updated=GetTickCount64();
     ReleaseSRWLockExclusive(&s_ui_lock);
 }
-static void ui_batch_draw(u32 fi)
+/* Draw `count` quads into back buffer `fi` with the flat UI pipeline, `mvp`
+ * mapping their coordinates to clip space. Holds no lock: the caller keeps
+ * `quads` alive until this returns. */
+static void quad_batch_draw(u32 fi, const rsx_ui_quad* quads, u32 count, const float mvp[16], QuadVb* vbs)
 {
     ID3D12GraphicsCommandList* cl=s_d3d.cmd_list;
-    if(!s_d3d.pipeline_state_ui || fi>=FRAME_COUNT)return;
-    AcquireSRWLockShared(&s_ui_lock);
-    u32 count=s_ui_count;
-    if(!count || GetTickCount64()-s_ui_updated>250) {
-        ReleaseSRWLockShared(&s_ui_lock);return;
-    }
-    if(!s_ui_vb[fi] || s_ui_vb_quads[fi] < count) {
-        u32 capacity=s_ui_vb_quads[fi] ? s_ui_vb_quads[fi] : 1024u;
+    if(!count || !s_d3d.pipeline_state_ui || fi>=FRAME_COUNT)return;
+    if(!vbs->vb[fi] || vbs->quads[fi] < count) {
+        u32 capacity=vbs->quads[fi] ? vbs->quads[fi] : 1024u;
         while(capacity<count && capacity<UI_MAX_QUADS)capacity*=2;
         if(capacity>UI_MAX_QUADS)capacity=UI_MAX_QUADS;
+        if(count>capacity)count=capacity;
         D3D12_HEAP_PROPERTIES hp={0};hp.Type=D3D12_HEAP_TYPE_UPLOAD;
         D3D12_RESOURCE_DESC rd={0};rd.Dimension=D3D12_RESOURCE_DIMENSION_BUFFER;
         rd.Width=(u64)capacity*6*sizeof(UiVertex);rd.Height=1;
@@ -475,18 +475,18 @@ static void ui_batch_draw(u32 fi)
         if(SUCCEEDED(hr))hr=grown->lpVtbl->Map(grown,0,&no_read,&grown_mapped);
         if(FAILED(hr)) {
             if(grown)grown->lpVtbl->Release(grown);
-            ReleaseSRWLockShared(&s_ui_lock);return;
+            return;
         }
-        if(s_ui_vb[fi])s_ui_vb[fi]->lpVtbl->Release(s_ui_vb[fi]);
-        s_ui_vb[fi]=grown;s_ui_mapped[fi]=grown_mapped;s_ui_vb_quads[fi]=capacity;
+        if(vbs->vb[fi])vbs->vb[fi]->lpVtbl->Release(vbs->vb[fi]);
+        vbs->vb[fi]=grown;vbs->mapped[fi]=grown_mapped;vbs->quads[fi]=capacity;
     }
-    UiVertex* dst=(UiVertex*)s_ui_mapped[fi];
+    UiVertex* dst=(UiVertex*)vbs->mapped[fi];
     /* Two triangles per quad, split along the diagonal whose corners agree
      * best, so interpolated corner alphas follow an edge instead of crossing
      * it. */
     static const unsigned split_bl_tr[6]={0,1,2,2,1,3}, split_tl_br[6]={0,1,3,0,3,2};
     for(u32 q=0;q<count;q++) {
-        const rsx_ui_quad* r=&s_ui_quads[q];
+        const rsx_ui_quad* r=&quads[q];
         const u32 ca=r->corner_a?r->corner_a:0xFFFFFFFFu;
         const int a0=(int)(ca&255),a1=(int)((ca>>8)&255),a2=(int)((ca>>16)&255),a3=(int)(ca>>24);
         const unsigned* corners=abs(a0-a3)<abs(a1-a2)?split_tl_br:split_bl_tr;
@@ -498,11 +498,7 @@ static void ui_batch_draw(u32 fi)
             dst[q*6+k]=v;
         }
     }
-    ReleaseSRWLockShared(&s_ui_lock);
     u32 w=rs_dim(s_d3d.width,s_rs),h=rs_dim(s_d3d.height,s_rs);
-    float mvp[16]={0};
-    mvp[0]=2.f*(float)h/(480.f*(float)w);mvp[5]=-2.f/480.f;
-    mvp[10]=mvp[15]=1;mvp[12]=-640.f*(float)h/(480.f*(float)w);mvp[13]=1;
     D3D12_CPU_DESCRIPTOR_HANDLE rtv;
     s_d3d.rtv_heap->lpVtbl->GetCPUDescriptorHandleForHeapStart(s_d3d.rtv_heap,&rtv);
     rtv.ptr+=(u64)fi*s_d3d.rtv_descriptor_size;
@@ -513,11 +509,38 @@ static void ui_batch_draw(u32 fi)
     cl->lpVtbl->SetGraphicsRootSignature(cl,s_d3d.root_signature);
     cl->lpVtbl->SetPipelineState(cl,s_d3d.pipeline_state_ui);
     cl->lpVtbl->SetGraphicsRoot32BitConstants(cl,0,16,mvp,0);
-    D3D12_VERTEX_BUFFER_VIEW vb={s_ui_vb[fi]->lpVtbl->GetGPUVirtualAddress(s_ui_vb[fi]),
+    D3D12_VERTEX_BUFFER_VIEW vb={vbs->vb[fi]->lpVtbl->GetGPUVirtualAddress(vbs->vb[fi]),
         count*6*sizeof(UiVertex),sizeof(UiVertex)};
     cl->lpVtbl->IASetVertexBuffers(cl,0,1,&vb);
     cl->lpVtbl->IASetPrimitiveTopology(cl,D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     cl->lpVtbl->DrawInstanced(cl,count*6,1,0,0);
+}
+
+/* The game's UI batch: logical 640x480, centred at 4:3. */
+static void ui_batch_draw(u32 fi)
+{
+    AcquireSRWLockShared(&s_ui_lock);
+    u32 count=s_ui_count;
+    if(count && GetTickCount64()-s_ui_updated<=250) {
+        u32 w=rs_dim(s_d3d.width,s_rs),h=rs_dim(s_d3d.height,s_rs);
+        float mvp[16]={0};
+        mvp[0]=2.f*(float)h/(480.f*(float)w);mvp[5]=-2.f/480.f;
+        mvp[10]=mvp[15]=1;mvp[12]=-640.f*(float)h/(480.f*(float)w);mvp[13]=1;
+        quad_batch_draw(fi,s_ui_quads,count,mvp,&s_ui_vbs);
+    }
+    ReleaseSRWLockShared(&s_ui_lock);
+}
+
+/* The performance overlay (rsx_perf_overlay.h): back-buffer pixels, over the
+ * finished frame, so anti-aliasing and the colour controls leave it alone. */
+static void perf_overlay_draw(u32 fi)
+{
+    u32 w=rs_dim(s_d3d.width,s_rs),h=rs_dim(s_d3d.height,s_rs),count=0;
+    const rsx_ui_quad* quads=perf_overlay_quads(w,h,&count);
+    if(!count)return;
+    float mvp[16]={0};
+    mvp[0]=2.f/(float)w;mvp[5]=-2.f/(float)h;mvp[10]=mvp[15]=1;mvp[12]=-1;mvp[13]=1;
+    quad_batch_draw(fi,quads,count,mvp,&s_ov_vbs);
 }
 static float rs_for(u32 w, u32 h) { return (s_rs != 1.0f && (u64)w * h > 16384u) ? s_rs : 1.0f; }
 static void rs_set_vp(float sc, const D3D12_VIEWPORT* vp, const D3D12_RECT* rc)
@@ -8142,6 +8165,7 @@ skip_dump_consider: ;
     composite_present(fi);
     if (s_rb.present) ui_batch_draw(fi);
     if (s_rb.present) aa_apply(fi);   /* anti-aliasing on the finished frame */
+    if (s_rb.present) perf_overlay_draw(fi);
     int dumping = (s_d3d.dump_frames_left > 0 && s_d3d.readback_buf
                    && s_d3d.dump_skip_left == 0);
     { static int mind2 = -1;
@@ -8376,7 +8400,8 @@ skip_dump_consider: ;
               ? s_d3d.swap_chain->lpVtbl->Present(s_d3d.swap_chain, 1, 0)
               : s_d3d.swap_chain->lpVtbl->Present(s_d3d.swap_chain, 0,
                                                  s_tearing ? DXGI_PRESENT_ALLOW_TEARING : 0);
-          if (_ph == DXGI_ERROR_DEVICE_REMOVED || _ph == DXGI_ERROR_DEVICE_RESET) dred_report("Present"); }   /* skipped for an offscreen-only batch */
+          if (_ph == DXGI_ERROR_DEVICE_REMOVED || _ph == DXGI_ERROR_DEVICE_RESET) dred_report("Present");
+          perf_overlay_frame(); }   /* skipped for an offscreen-only batch */
 
     if (s_rs_pending != 0.0f) apply_res_scale();
     move_to_next_frame();
@@ -10342,7 +10367,10 @@ void rsx_d3d12_backend_shutdown(void)
     if (s_d3d.pipeline_state_lines)  s_d3d.pipeline_state_lines->lpVtbl->Release(s_d3d.pipeline_state_lines);
     if (s_d3d.pipeline_state_points) s_d3d.pipeline_state_points->lpVtbl->Release(s_d3d.pipeline_state_points);
     if (s_d3d.pipeline_state_ui) s_d3d.pipeline_state_ui->lpVtbl->Release(s_d3d.pipeline_state_ui);
-    for(u32 i=0;i<FRAME_COUNT;i++)if(s_ui_vb[i])s_ui_vb[i]->lpVtbl->Release(s_ui_vb[i]);
+    for(u32 i=0;i<FRAME_COUNT;i++) {
+        if(s_ui_vbs.vb[i])s_ui_vbs.vb[i]->lpVtbl->Release(s_ui_vbs.vb[i]);
+        if(s_ov_vbs.vb[i])s_ov_vbs.vb[i]->lpVtbl->Release(s_ov_vbs.vb[i]);
+    }
     if (s_d3d.depth_buffer) s_d3d.depth_buffer->lpVtbl->Release(s_d3d.depth_buffer);
     if (s_d3d.dsv_heap)     s_d3d.dsv_heap->lpVtbl->Release(s_d3d.dsv_heap);
     if (s_d3d.root_signature) s_d3d.root_signature->lpVtbl->Release(s_d3d.root_signature);

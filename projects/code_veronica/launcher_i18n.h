@@ -42,6 +42,7 @@ enum StrId {
     S_CLEAR_CACHE, S_OPEN_FOLDER, S_CACHE_SIZE_FMT, S_CACHE_EMPTY, S_CACHE_HINT, S_CACHE_RUNNING,
     S_CACHE_CLEARED_FMT,
     S_LANG_SYSTEM,
+    S_OV_TITLE, S_OV_SHOW, S_OV_DESC, S_OV_FRAMETIME,
     S_COUNT
 };
 
@@ -88,6 +89,10 @@ static const wchar_t* const k_str_pt[] = {
     L"Na próxima vez, os shaders são refeitos aos poucos (o jogo pode dar pequenas travadas no começo).",
     L"Feche o jogo para limpar o cache.", L"Cache limpo: %d arquivos apagados.",
     L"Sistema",
+    L"OVERLAY DE DESEMPENHO",
+    L"Mostrar overlay de desempenho",
+    L"FPS, tempo de quadro e uso do PC no canto superior direito do jogo. Marque o que aparece:",
+    L"Tempo de quadro (ms)",
 };
 static_assert(sizeof k_str_pt / sizeof k_str_pt[0] == S_COUNT, "k_str_pt: one text per StrId");
 
@@ -134,6 +139,10 @@ static const wchar_t* const k_str_en[] = {
     L"Next time, shaders are rebuilt gradually (the game may stutter a little at first).",
     L"Close the game to clear the cache.", L"Cache cleared: %d files deleted.",
     L"System",
+    L"PERFORMANCE OVERLAY",
+    L"Show performance overlay",
+    L"FPS, frame time and PC usage in the game's top-right corner. Tick what it shows:",
+    L"Frame time (ms)",
 };
 static_assert(sizeof k_str_en / sizeof k_str_en[0] == S_COUNT, "k_str_en: one text per StrId");
 
@@ -180,6 +189,10 @@ static const wchar_t* const k_str_es[] = {
     L"La próxima vez, los shaders se rehacen poco a poco (el juego puede dar pequeños tirones al principio).",
     L"Cierra el juego para borrar la caché.", L"Caché borrada: %d archivos eliminados.",
     L"Sistema",
+    L"SUPERPOSICIÓN DE RENDIMIENTO",
+    L"Mostrar superposición de rendimiento",
+    L"FPS, tiempo de fotograma y uso del PC en la esquina superior derecha del juego. Marca lo que muestra:",
+    L"Tiempo de fotograma (ms)",
 };
 static_assert(sizeof k_str_es / sizeof k_str_es[0] == S_COUNT, "k_str_es: one text per StrId");
 
@@ -226,6 +239,10 @@ static const wchar_t* const k_str_ja[] = {
     L"次回はシェーダーが少しずつ再生成されます（最初は少しカクつくことがあります）。",
     L"キャッシュを削除するにはゲームを終了してください。", L"キャッシュを削除しました（%d ファイル）。",
     L"システム",
+    L"パフォーマンスオーバーレイ",
+    L"パフォーマンスオーバーレイを表示",
+    L"ゲーム画面の右上に FPS、フレーム時間、PC の使用状況を表示します。表示する項目:",
+    L"フレーム時間 (ms)",
 };
 static_assert(sizeof k_str_ja / sizeof k_str_ja[0] == S_COUNT, "k_str_ja: one text per StrId");
 
@@ -326,6 +343,10 @@ static const wchar_t* const k_str_fr[] = {
     L"Fermez le jeu pour vider le cache.",
     L"Cache vidé : %d fichiers supprimés.",
     L"Système",
+    L"OVERLAY DE PERFORMANCES",
+    L"Afficher l'overlay de performances",
+    L"FPS, temps d'image et utilisation du PC en haut à droite du jeu. Cochez ce qu'il affiche :",
+    L"Temps d'image (ms)",
 };
 static_assert(sizeof k_str_fr / sizeof k_str_fr[0] == S_COUNT, "k_str_fr: one text per StrId");
 
@@ -426,6 +447,10 @@ static const wchar_t* const k_str_de[] = {
     L"Beende das Spiel, um den Cache zu leeren.",
     L"Cache geleert: %d Dateien gelöscht.",
     L"System",
+    L"LEISTUNGS-OVERLAY",
+    L"Leistungs-Overlay anzeigen",
+    L"FPS, Frametime und PC-Auslastung oben rechts im Spiel. Wähle aus, was angezeigt wird:",
+    L"Frametime (ms)",
 };
 static_assert(sizeof k_str_de / sizeof k_str_de[0] == S_COUNT, "k_str_de: one text per StrId");
 
@@ -526,6 +551,10 @@ static const wchar_t* const k_str_it[] = {
     L"Chiudi il gioco per svuotare la cache.",
     L"Cache svuotata: %d file eliminati.",
     L"Sistema",
+    L"OVERLAY PRESTAZIONI",
+    L"Mostra overlay prestazioni",
+    L"FPS, tempo per fotogramma e uso del PC in alto a destra nel gioco. Scegli cosa mostrare:",
+    L"Tempo per fotogramma (ms)",
 };
 static_assert(sizeof k_str_it / sizeof k_str_it[0] == S_COUNT, "k_str_it: one text per StrId");
 
@@ -626,6 +655,10 @@ static const wchar_t* const k_str_pl[] = {
     L"Zamknij grę, aby wyczyścić pamięć podręczną.",
     L"Wyczyszczono: usunięto %d plików.",
     L"System",
+    L"NAKŁADKA WYDAJNOŚCI",
+    L"Pokaż nakładkę wydajności",
+    L"FPS, czas klatki i użycie komputera w prawym górnym rogu gry. Zaznacz, co pokazywać:",
+    L"Czas klatki (ms)",
 };
 static_assert(sizeof k_str_pl / sizeof k_str_pl[0] == S_COUNT, "k_str_pl: one text per StrId");
 
@@ -726,6 +759,10 @@ static const wchar_t* const k_str_tr[] = {
     L"Önbelleği temizlemek için oyunu kapatın.",
     L"Önbellek temizlendi: %d dosya silindi.",
     L"Sistem",
+    L"PERFORMANS KATMANI",
+    L"Performans katmanını göster",
+    L"Oyunun sağ üst köşesinde FPS, kare süresi ve PC kullanımı. Gösterilecekleri seçin:",
+    L"Kare süresi (ms)",
 };
 static_assert(sizeof k_str_tr / sizeof k_str_tr[0] == S_COUNT, "k_str_tr: one text per StrId");
 
@@ -826,6 +863,10 @@ static const wchar_t* const k_str_ar[] = {
     L"أغلق اللعبة لمسح الذاكرة المؤقتة.",
     L"تم مسح الذاكرة المؤقتة: حُذف %d ملف.",
     L"النظام",
+    L"طبقة الأداء",
+    L"إظهار طبقة الأداء",
+    L"عدد الإطارات وزمن الإطار واستخدام الحاسوب في الزاوية العلوية اليمنى من اللعبة. اختر ما يُعرض:",
+    L"زمن الإطار (ms)",
 };
 static_assert(sizeof k_str_ar / sizeof k_str_ar[0] == S_COUNT, "k_str_ar: one text per StrId");
 
@@ -926,6 +967,10 @@ static const wchar_t* const k_str_zh[] = {
     L"请先关闭游戏再清除缓存。",
     L"缓存已清除：删除了 %d 个文件。",
     L"系统",
+    L"性能浮层",
+    L"显示性能浮层",
+    L"在游戏右上角显示 FPS、帧时间和电脑占用。勾选要显示的项目：",
+    L"帧时间 (ms)",
 };
 static_assert(sizeof k_str_zh / sizeof k_str_zh[0] == S_COUNT, "k_str_zh: one text per StrId");
 
@@ -1026,6 +1071,10 @@ static const wchar_t* const k_str_ko[] = {
     L"캐시를 지우려면 게임을 종료하세요.",
     L"캐시를 지웠습니다: 파일 %d개 삭제.",
     L"시스템",
+    L"성능 오버레이",
+    L"성능 오버레이 표시",
+    L"게임 화면 오른쪽 위에 FPS, 프레임 시간, PC 사용량을 표시합니다. 표시할 항목을 선택하세요:",
+    L"프레임 시간 (ms)",
 };
 static_assert(sizeof k_str_ko / sizeof k_str_ko[0] == S_COUNT, "k_str_ko: one text per StrId");
 
@@ -1126,6 +1175,10 @@ static const wchar_t* const k_str_ru[] = {
     L"Закройте игру, чтобы очистить кэш.",
     L"Кэш очищен: удалено файлов — %d.",
     L"Система",
+    L"ОВЕРЛЕЙ ПРОИЗВОДИТЕЛЬНОСТИ",
+    L"Показывать оверлей производительности",
+    L"FPS, время кадра и загрузка ПК в правом верхнем углу игры. Отметьте, что показывать:",
+    L"Время кадра (мс)",
 };
 static_assert(sizeof k_str_ru / sizeof k_str_ru[0] == S_COUNT, "k_str_ru: one text per StrId");
 

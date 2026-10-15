@@ -128,10 +128,17 @@ struct Settings {
     int saturation = 100; /* 0..200 percent */
     bool patch[8] = {};    /* k_patches on/off */
     int layout = 2;        /* button icons: 0 PlayStation, 1 Xbox, 2 automatic, 3 keyboard */
+    bool overlay = false;  /* the performance overlay (rsx_perf_overlay.h) */
+    int overlay_items = 3; /* bits of k_overlay_items: FPS and frame time */
     std::wstring game, rap, fw;
     int key[PA_COUNT][PAD_KEY_SLOTS];   /* 0: empty; the first is what the game's icons show */
     int btn[PA_COUNT][PAD_BTN_SLOTS];   /* -1: empty */
 };
+/* What the performance overlay can show, in its order; the ids are
+ * PERF_OVERLAY's. A name of 0 takes S_OV_FRAMETIME. */
+const struct { const char* id; const wchar_t* name; } k_overlay_items[] = {
+    { "fps", L"FPS" }, { "ms", nullptr }, { "cpu", L"CPU" }, { "gpu", L"GPU" }, { "ram", L"RAM" }, { "vram", L"VRAM" } };
+const int NOVERLAY = sizeof k_overlay_items / sizeof k_overlay_items[0];
 struct ResOpt { const wchar_t* name; const char* scale; };
 const ResOpt k_res[] = {
     { L"480p (854x480)", "0.6667" }, { L"Nativa (720p)", "1" }, { L"1080p (1920x1080)", "1.5" },
@@ -237,6 +244,8 @@ Settings load_settings()
             { def_game = g.wstring(); break; }
         }
     }
+    s.overlay = _wtoi(ini_get(L"overlay", L"mostrar", L"0").c_str()) != 0;
+    s.overlay_items = _wtoi(ini_get(L"overlay", L"itens", L"3").c_str()) & ((1 << NOVERLAY) - 1);
     s.game = ini_get(L"pastas", L"jogo", def_game);
     s.rap  = ini_get(L"pastas", L"rap", find_rap(env_w("PS3_RAP_DIR")));
     /* No page for it any more: without a firmware tree the runtime serves its
@@ -271,6 +280,8 @@ void save_settings(const Settings& s)
     ini_set(L"launcher", L"idioma", g_lang_pick < 0 ? std::wstring(L"system") : widen(k_lang_id[g_lang_pick]));
     for (int i = 0; i < NPATCHES; i++)
         ini_set(L"patches", widen(k_patches[i].id).c_str(), s.patch[i] ? L"1" : L"0");
+    ini_set(L"overlay", L"mostrar", s.overlay ? L"1" : L"0");
+    ini_set(L"overlay", L"itens", std::to_wstring(s.overlay_items));
     ini_set(L"pastas", L"jogo", s.game);
     ini_set(L"pastas", L"rap", s.rap);
     ini_set(L"pastas", L"firmware", s.fw);
@@ -422,6 +433,7 @@ enum {
     ID_KEY = 700, ID_BTN = 800, ID_RESTORE = 900, ID_PATCH = 1000,  /* + index (keys and buttons: action * slots + slot) */
     ID_CACHE_CLEAR = 1100, ID_CACHE_OPEN,
     ID_KEY_CLEAR = 1200, ID_BTN_CLEAR = 1300,                      /* + action * slots + slot */
+    ID_OVERLAY = 1400, ID_OVERLAY_ITEM = 1410,                     /* + item */
 };
 
 void hit(float x, float y, float w, float h, int id) { g.hits.push_back({ RectF(x, y, w, h), id }); }
@@ -1092,6 +1104,46 @@ void draw_avancado(Graphics& gr, const Font& head, const Font& body, const Font&
     text(gr, st, x, y, body, g.running ? C_RED_HI : C_TEXT, StringAlignmentNear, w, 24);
     text(gr, cache_dir().wstring(), x, y + 26, fsm, C_DIM, StringAlignmentNear, w, 20);
     text(gr, T(S_CACHE_HINT), x, y + 48, fsm, C_DIM, StringAlignmentNear, w, 20);
+    y += 92;
+    /* The performance overlay: a switch, then what it shows */
+    section(gr, T(S_OV_TITLE), x, y, w, head);
+    y += 46;
+    {
+        const bool on = g.s.overlay, hot = g.hover == ID_OVERLAY;
+        RectF card(x, y, w, 64);
+        GraphicsPath* cp = round_rect(card, 6);
+        SolidBrush cb(hot ? C_HOVER : C_PANEL); gr.FillPath(&cb, cp);
+        Pen cbd(on ? C_RED : C_FIELD_BD, 1); gr.DrawPath(&cbd, cp); delete cp;
+        RectF sw(x + w - 70, y + 19, 48, 26);
+        GraphicsPath* sp = round_rect(sw, 13);
+        SolidBrush sb(on ? C_RED : Color(255, 60, 52, 52)); gr.FillPath(&sb, sp); delete sp;
+        SolidBrush knob(C_TEXT);
+        gr.FillEllipse(&knob, on ? sw.X + sw.Width - 23 : sw.X + 3, sw.Y + 3, 20.0f, 20.0f);
+        text(gr, T(S_OV_SHOW), x + 18, y + 8, body, C_TEXT, StringAlignmentNear, w - 120, 24);
+        text(gr, T(S_OV_DESC), x + 18, y + 34, fsm, C_DIM, StringAlignmentNear, w - 120, 20);
+        hit(x, y, w, 64, ID_OVERLAY);
+    }
+    y += 78;
+    /* one tick box per item, dimmed while the overlay is off */
+    StringFormat sf(StringFormat::GenericTypographic());
+    float cx = x + 4;
+    for (int i = 0; i < NOVERLAY; i++) {
+        const std::wstring name = k_overlay_items[i].name ? k_overlay_items[i].name : T(S_OV_FRAMETIME);
+        const bool ticked = (g.s.overlay_items >> i) & 1, hot = g.hover == ID_OVERLAY_ITEM + i;
+        const Color ink = !g.s.overlay ? C_DIM : C_TEXT;
+        RectF box(cx, y + 6, 16, 16);
+        SolidBrush bb(ticked && g.s.overlay ? C_RED : C_FIELD); gr.FillRectangle(&bb, box);
+        Pen bp(hot ? C_TEXT : (ticked && g.s.overlay ? C_RED : C_FIELD_BD), 1); gr.DrawRectangle(&bp, box);
+        if (ticked) {
+            Pen tick(ink, 2);
+            PointF pts[3] = { PointF(cx + 3.5f, y + 14), PointF(cx + 7, y + 17.5f), PointF(cx + 13, y + 10) };
+            gr.DrawLines(&tick, pts, 3);
+        }
+        RectF m; gr.MeasureString(name.c_str(), -1, &body, PointF(0, 0), &sf, &m);
+        text(gr, name, cx + 24, y, body, ink, StringAlignmentNear, m.Width + 8, 28);
+        hit(cx, y, 24 + m.Width + 8, 28, ID_OVERLAY_ITEM + i);
+        cx += 24 + m.Width + 26;
+    }
 }
 
 void paint(HDC hdc)
@@ -1217,6 +1269,7 @@ void open_in_explorer(const std::wstring& p)
 
 /* While the game runs: display mode, resolution and controls apply at once. */
 void set_map_env();
+void set_overlay_env();
 
 void apply_live(bool restore_menu = true)
 {
@@ -1322,6 +1375,10 @@ void click(int id)
         g.cap = CAP_BTN; g.cap_action = (id - ID_BTN) / PAD_BTN_SLOTS; g.cap_slot = (id - ID_BTN) % PAD_BTN_SLOTS;
         g.cap_since = GetTickCount64();
         for (int i = 0; i < PAD_PHYS_MAX; i++) { PadPhys p; pad_phys_poll(i, &p); g.pad_prev[i] = p.buttons; }
+    }
+    else if (id == ID_OVERLAY) { g.s.overlay = !g.s.overlay; set_overlay_env(); changed(); }
+    else if (id >= ID_OVERLAY_ITEM && id < ID_OVERLAY_ITEM + NOVERLAY) {
+        g.s.overlay_items ^= 1 << (id - ID_OVERLAY_ITEM); set_overlay_env(); changed();
     }
     else if (id == ID_RESTORE) {
         for (int a = 0; a < PA_COUNT; a++) {
@@ -1475,6 +1532,17 @@ void set_icon_env()
 }
 void set_env_default(const char* k, const char* v) { if (!getenv(k)) _putenv_s(k, v); }
 
+/* PERF_OVERLAY from the settings: empty while the overlay is off. The game
+ * reads it again twice a second, so a change shows at once. */
+void set_overlay_env()
+{
+    std::string items;
+    if (g.s.overlay)
+        for (int i = 0; i < NOVERLAY; i++)
+            if ((g.s.overlay_items >> i) & 1) items += (items.empty() ? "" : ",") + std::string(k_overlay_items[i].id);
+    set_env("PERF_OVERLAY", items);
+}
+
 /* PAD_BTNMAP / PAD_KEYMAP from the settings: read by the pad at start, and by
  * the button icons whenever they change (the keys drawn in the game). */
 void set_map_env()
@@ -1560,6 +1628,7 @@ void start_game()
         if (s.patch[i]) pl += (pl.empty() ? "" : ",") + std::string(k_patches[i].id);
     set_env("PS3_PATCHES", pl);
     set_map_env();
+    set_overlay_env();
     /* Sound effects decode through the runtime's own ATRAC3 plug-in, so no
      * PS3 firmware is needed even when a dev_flash path is configured. */
     set_env_default("PS3_ATRAC_STANDIN", "1");

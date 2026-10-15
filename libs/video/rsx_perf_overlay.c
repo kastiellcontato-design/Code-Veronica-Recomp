@@ -1,0 +1,310 @@
+/* rsx_perf_overlay.c -- see rsx_perf_overlay.h.
+ *
+ * Twice a second the numbers are taken and the panel is drawn on the CPU (GDI
+ * lettering, an antialiased rounded box) into a small image at the back
+ * buffer's own pixels; the image goes to the GPU as runs of equal pixels, the
+ * same flat quads the UI batch draws. GPU load comes from the "GPU Engine"
+ * performance counters, read on a thread of its own since a read can take
+ * tens of milliseconds.
+ */
+#include "rsx_perf_overlay.h"
+#include <windows.h>
+#include <psapi.h>
+#include <pdh.h>
+#include <pdhmsg.h>
+#include <dxgi1_4.h>
+#include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#pragma comment(lib, "pdh.lib")
+#pragma comment(lib, "psapi.lib")
+
+enum { OV_FPS = 1, OV_MS = 2, OV_CPU = 4, OV_GPU = 8, OV_RAM = 16, OV_VRAM = 32 };
+
+static unsigned overlay_items(void)
+{
+    const char* e = getenv("PERF_OVERLAY");
+    static const struct { const char* id; unsigned bit; } k[] = {
+        { "fps", OV_FPS }, { "ms", OV_MS }, { "cpu", OV_CPU }, { "gpu", OV_GPU }, { "ram", OV_RAM }, { "vram", OV_VRAM } };
+    unsigned items = 0;
+    while (e && *e) {
+        const char* end = strchr(e, ',');
+        const size_t n = end ? (size_t)(end - e) : strlen(e);
+        for (size_t i = 0; i < sizeof k / sizeof k[0]; i++)
+            if (strlen(k[i].id) == n && !_strnicmp(e, k[i].id, n)) items |= k[i].bit;
+        e = end ? end + 1 : NULL;
+    }
+    return items;
+}
+
+/* ---- the numbers -------------------------------------------------------- */
+static LARGE_INTEGER s_qpf, s_win_start;
+static unsigned s_win_frames;
+
+void perf_overlay_frame(void)
+{
+    if (!s_qpf.QuadPart) { QueryPerformanceFrequency(&s_qpf); QueryPerformanceCounter(&s_win_start); }
+    s_win_frames++;
+}
+
+/* GPU: the 3D engines' utilization over every process, once a second. */
+static volatile LONG s_gpu_pct = -1;
+static DWORD WINAPI gpu_thread(LPVOID unused)
+{
+    (void)unused;
+    for (;;) {
+        PDH_HQUERY q = NULL; PDH_HCOUNTER c = NULL;
+        if (PdhOpenQueryW(NULL, 0, &q) != ERROR_SUCCESS) { Sleep(5000); continue; }
+        if (PdhAddEnglishCounterW(q, L"\\GPU Engine(*engtype_3D)\\Utilization Percentage", 0, &c) != ERROR_SUCCESS) {
+            PdhCloseQuery(q); Sleep(10000); continue;
+        }
+        PdhCollectQueryData(q);
+        /* the instances (one per process and engine) are expanded when the
+         * counter is added: start over now and then to see new ones */
+        for (int i = 0; i < 10; i++) {
+            Sleep(1000);
+            if (PdhCollectQueryData(q) != ERROR_SUCCESS) break;
+            DWORD size = 0, n = 0;
+            if (PdhGetFormattedCounterArrayW(c, PDH_FMT_DOUBLE | PDH_FMT_NOCAP100, &size, &n, NULL) != PDH_MORE_DATA) continue;
+            PDH_FMT_COUNTERVALUE_ITEM_W* items = (PDH_FMT_COUNTERVALUE_ITEM_W*)malloc(size);
+            if (!items) continue;
+            if (PdhGetFormattedCounterArrayW(c, PDH_FMT_DOUBLE | PDH_FMT_NOCAP100, &size, &n, items) == ERROR_SUCCESS) {
+                double sum = 0;
+                for (DWORD k = 0; k < n; k++)
+                    if (items[k].FmtValue.CStatus == PDH_CSTATUS_VALID_DATA || items[k].FmtValue.CStatus == PDH_CSTATUS_NEW_DATA)
+                        sum += items[k].FmtValue.doubleValue;
+                InterlockedExchange(&s_gpu_pct, (LONG)(sum > 100 ? 100 : sum + 0.5));
+            }
+            free(items);
+        }
+        PdhCloseQuery(q);
+    }
+}
+
+/* VRAM: this process's use of each hardware adapter's local memory. */
+static const GUID k_iid_factory1 = { 0x770aae78, 0xf26f, 0x4dba, { 0xa8, 0x29, 0x25, 0x3c, 0x83, 0xd1, 0xb3, 0x87 } };
+static const GUID k_iid_adapter3 = { 0x645967a4, 0x1392, 0x4310, { 0xa7, 0x98, 0x80, 0x53, 0xce, 0x3e, 0x93, 0xfd } };
+static unsigned long long vram_used(void)
+{
+    static IDXGIAdapter3* adapters[8];
+    static int n = -1;
+    if (n < 0) {
+        n = 0;
+        IDXGIFactory1* f = NULL;
+        if (SUCCEEDED(CreateDXGIFactory1(&k_iid_factory1, (void**)&f))) {
+            IDXGIAdapter1* a = NULL;
+            for (UINT i = 0; n < 8 && f->lpVtbl->EnumAdapters1(f, i, &a) != DXGI_ERROR_NOT_FOUND; i++) {
+                DXGI_ADAPTER_DESC1 d;
+                if (SUCCEEDED(a->lpVtbl->GetDesc1(a, &d)) && !(d.Flags & DXGI_ADAPTER_FLAG_SOFTWARE)) {
+                    if (SUCCEEDED(a->lpVtbl->QueryInterface(a, &k_iid_adapter3, (void**)&adapters[n]))) n++;
+                    else adapters[n] = NULL;
+                }
+                a->lpVtbl->Release(a);
+            }
+            f->lpVtbl->Release(f);
+        }
+    }
+    unsigned long long used = 0;
+    for (int i = 0; i < n; i++) {
+        DXGI_QUERY_VIDEO_MEMORY_INFO info;
+        if (SUCCEEDED(adapters[i]->lpVtbl->QueryVideoMemoryInfo(adapters[i], 0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &info)))
+            used += info.CurrentUsage;
+    }
+    return used;
+}
+
+/* CPU: the whole system's busy share since the last call. */
+static int cpu_pct(void)
+{
+    static unsigned long long last_idle, last_total;
+    FILETIME fi, fk, fu;
+    if (!GetSystemTimes(&fi, &fk, &fu)) return -1;
+    const unsigned long long idle = ((unsigned long long)fi.dwHighDateTime << 32) | fi.dwLowDateTime;
+    const unsigned long long total = (((unsigned long long)fk.dwHighDateTime << 32) | fk.dwLowDateTime)
+                                   + (((unsigned long long)fu.dwHighDateTime << 32) | fu.dwLowDateTime);   /* kernel includes idle */
+    const unsigned long long di = idle - last_idle, dt = total - last_total;
+    const int first = last_total == 0;
+    last_idle = idle; last_total = total;
+    if (first || !dt) return -1;
+    return (int)((dt - di) * 100 / dt);
+}
+
+/* ---- the panel ---------------------------------------------------------- */
+typedef struct { float r, g, b, a; } Px;   /* premultiplied */
+
+static rsx_ui_quad* s_quads;
+static uint32_t s_nquads, s_cap;
+static void put_quad(float x, float y, float w, float h, uint32_t argb)
+{
+    if (s_nquads == s_cap) {
+        uint32_t cap = s_cap ? s_cap * 2 : 2048;
+        rsx_ui_quad* q = (rsx_ui_quad*)realloc(s_quads, cap * sizeof *q);
+        if (!q) return;
+        s_quads = q; s_cap = cap;
+    }
+    rsx_ui_quad* q = &s_quads[s_nquads++];
+    q->x = x; q->y = y; q->w = w; q->h = h; q->argb = argb; q->corner_a = 0;
+}
+
+/* Coverage of a rounded rectangle (0,0)-(w,h), radius r, at pixel (x, y). */
+static float rr_cover(float x, float y, float w, float h, float r)
+{
+    const float px = x + 0.5f, py = y + 0.5f;
+    const float cx = px < r ? r : px > w - r ? w - r : px, cy = py < r ? r : py > h - r ? h - r : py;
+    const float d = sqrtf((px - cx) * (px - cx) + (py - cy) * (py - cy));
+    if (px >= r && px <= w - r) return fminf(1.0f, fmaxf(0.0f, fminf(py, h - py) + 0.5f));
+    if (py >= r && py <= h - r) return fminf(1.0f, fmaxf(0.0f, fminf(px, w - px) + 0.5f));
+    return fminf(1.0f, fmaxf(0.0f, r - d + 0.5f));
+}
+
+typedef struct { wchar_t label[16], value[24]; } Seg;
+
+static uint32_t px_argb(const Px* p)
+{
+    if (p->a <= 0.002f) return 0;
+    const long a = lroundf(p->a * 255), r = lroundf(p->r / p->a), g = lroundf(p->g / p->a), b = lroundf(p->b / p->a);
+    return (uint32_t)(a > 255 ? 255 : a) << 24 | (uint32_t)(r > 255 ? 255 : r) << 16
+         | (uint32_t)(g > 255 ? 255 : g) << 8 | (uint32_t)(b > 255 ? 255 : b);
+}
+
+static void build(uint32_t bw, uint32_t bh, unsigned items, const Seg* segs, int nseg)
+{
+    s_nquads = 0;
+    const float s = bh / 720.0f < 0.75f ? 0.75f : bh / 720.0f;
+    const int font_px = (int)lroundf(16 * s), pad = (int)lroundf(12 * s), gap = (int)lroundf(16 * s), lgap = (int)lroundf(5 * s);
+    const int H = (int)lroundf(32 * s), margin = (int)lroundf(14 * s);
+    (void)items;
+
+    HDC dc = CreateCompatibleDC(NULL);
+    HFONT font = CreateFontW(-font_px, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                             CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY, DEFAULT_PITCH, L"Segoe UI");
+    HGDIOBJ old_font = SelectObject(dc, font);
+    /* where each piece goes */
+    int lx[8], vx[8], W = pad;
+    for (int i = 0; i < nseg; i++) {
+        SIZE sz;
+        if (i) W += gap;
+        if (segs[i].label[0]) { lx[i] = W; GetTextExtentPoint32W(dc, segs[i].label, (int)wcslen(segs[i].label), &sz); W += sz.cx + lgap; }
+        else lx[i] = -1;
+        vx[i] = W; GetTextExtentPoint32W(dc, segs[i].value, (int)wcslen(segs[i].value), &sz); W += sz.cx;
+    }
+    W += pad;
+
+    /* two masks: names (grey) and numbers (white) */
+    BITMAPINFO bi = { { sizeof(BITMAPINFOHEADER), W, -H, 1, 32, BI_RGB } };
+    Px* img = (Px*)calloc((size_t)W * H, sizeof(Px));
+    for (int pass = 0; pass < 2 && img; pass++) {
+        void* bits = NULL;
+        HBITMAP bmp = CreateDIBSection(dc, &bi, DIB_RGB_COLORS, &bits, NULL, 0);
+        if (!bmp) continue;
+        HGDIOBJ old_bmp = SelectObject(dc, bmp);
+        memset(bits, 0, (size_t)W * H * 4);
+        SetBkMode(dc, TRANSPARENT); SetTextColor(dc, RGB(255, 255, 255));
+        TEXTMETRICW tm; GetTextMetricsW(dc, &tm);
+        const int ty = (H - tm.tmHeight) / 2;
+        for (int i = 0; i < nseg; i++) {
+            if (pass == 0 && lx[i] >= 0) TextOutW(dc, lx[i], ty, segs[i].label, (int)wcslen(segs[i].label));
+            if (pass == 1) TextOutW(dc, vx[i], ty, segs[i].value, (int)wcslen(segs[i].value));
+        }
+        GdiFlush();
+        if (pass == 0) {   /* the box first: dark, translucent, a faint rim */
+            const float r = 8 * s;
+            for (int y = 0; y < H; y++)
+                for (int x = 0; x < W; x++) {
+                    const float outer = rr_cover((float)x, (float)y, (float)W, (float)H, r);
+                    const float inner = rr_cover((float)x - 1, (float)y - 1, (float)W - 2, (float)H - 2, r - 1);
+                    const float rim = outer - inner, fill = inner;
+                    Px* p = &img[(size_t)y * W + x];
+                    const float af = fill * 0.74f, ar = rim * 0.30f;
+                    p->r = 16 * af + 255 * ar; p->g = 17 * af + 255 * ar; p->b = 20 * af + 255 * ar; p->a = af + ar;
+                }
+        }
+        const float col[2][3] = { { 175, 179, 188 }, { 255, 255, 255 } };
+        const unsigned char* m = (const unsigned char*)bits;
+        for (int i = 0; i < W * H; i++) {
+            const float t = m[i * 4 + 1] / 255.0f;   /* grey text: any channel is the coverage */
+            if (t <= 0) continue;
+            Px* p = &img[i];
+            p->r = col[pass][0] * t + p->r * (1 - t); p->g = col[pass][1] * t + p->g * (1 - t);
+            p->b = col[pass][2] * t + p->b * (1 - t); p->a = t + p->a * (1 - t);
+        }
+        SelectObject(dc, old_bmp);
+        DeleteObject(bmp);
+    }
+    SelectObject(dc, old_font);
+    DeleteObject(font);
+    DeleteDC(dc);
+    if (!img) return;
+
+    /* runs of equal pixels; a run the row above also has extends its quad */
+    const float ox = (float)bw - margin - W, oy = (float)margin;
+    uint32_t* open_prev = (uint32_t*)malloc((size_t)W * sizeof(uint32_t));
+    uint32_t* open_cur = (uint32_t*)malloc((size_t)W * sizeof(uint32_t));
+    int nprev = 0;
+    for (int y = 0; y < H && open_prev && open_cur; y++) {
+        int ncur = 0;
+        for (int x = 0; x < W; ) {
+            const uint32_t argb = px_argb(&img[(size_t)y * W + x]);
+            int end = x + 1;
+            while (end < W && px_argb(&img[(size_t)y * W + end]) == argb) end++;
+            if (argb) {
+                uint32_t k = UINT32_MAX;
+                for (int o = 0; o < nprev && k == UINT32_MAX; o++) {
+                    const rsx_ui_quad* u = &s_quads[open_prev[o]];
+                    if (u->x == ox + x && u->w == (float)(end - x) && u->argb == argb) k = open_prev[o];
+                }
+                if (k != UINT32_MAX) s_quads[k].h += 1;
+                else { put_quad(ox + x, oy + y, (float)(end - x), 1, argb); k = s_nquads - 1; }
+                open_cur[ncur++] = k;
+            }
+            x = end;
+        }
+        uint32_t* t = open_prev; open_prev = open_cur; open_cur = t; nprev = ncur;
+    }
+    free(open_prev); free(open_cur);
+    free(img);
+}
+
+const rsx_ui_quad* perf_overlay_quads(uint32_t w, uint32_t h, uint32_t* count)
+{
+    static unsigned last_items;
+    static uint32_t last_w, last_h;
+    static ULONGLONG last_build;
+    static HANDLE gpu;
+    *count = 0;
+    const unsigned items = overlay_items();
+    if (!items || !s_qpf.QuadPart) { last_items = 0; return NULL; }
+    if ((items & OV_GPU) && !gpu) gpu = CreateThread(NULL, 0, gpu_thread, NULL, 0, NULL);
+    const ULONGLONG now = GetTickCount64();
+    if (items != last_items || w != last_w || h != last_h || now - last_build >= 500) {
+        LARGE_INTEGER t; QueryPerformanceCounter(&t);
+        const double secs = (double)(t.QuadPart - s_win_start.QuadPart) / (double)s_qpf.QuadPart;
+        static double fps, ms;
+        if (s_win_frames && secs > 0.2) {
+            fps = s_win_frames / secs; ms = secs * 1000.0 / s_win_frames;
+            s_win_frames = 0; s_win_start = t;
+        }
+        static int cpu = -1;
+        const int c = cpu_pct();
+        if (c >= 0) cpu = c;
+        Seg segs[6]; int n = 0;
+        memset(segs, 0, sizeof segs);
+        if (items & OV_FPS) { swprintf(segs[n++].value, 24, L"%.0f FPS", fps); }
+        if (items & OV_MS)  { swprintf(segs[n++].value, 24, L"%.1f ms", ms); }
+        if (items & OV_CPU) { wcscpy(segs[n].label, L"CPU"); if (cpu >= 0) swprintf(segs[n].value, 24, L"%d%%", cpu); else wcscpy(segs[n].value, L"-"); n++; }
+        if (items & OV_GPU) { const LONG g = s_gpu_pct; wcscpy(segs[n].label, L"GPU");
+                              if (g >= 0) swprintf(segs[n].value, 24, L"%ld%%", g); else wcscpy(segs[n].value, L"-"); n++; }
+        if (items & OV_RAM) { PROCESS_MEMORY_COUNTERS pmc; wcscpy(segs[n].label, L"RAM");
+                              if (GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof pmc))
+                                  swprintf(segs[n].value, 24, L"%.2f GB", pmc.WorkingSetSize / 1073741824.0);
+                              else wcscpy(segs[n].value, L"-");
+                              n++; }
+        if (items & OV_VRAM) { wcscpy(segs[n].label, L"VRAM"); swprintf(segs[n].value, 24, L"%.2f GB", vram_used() / 1073741824.0); n++; }
+        build(w, h, items, segs, n);
+        last_items = items; last_w = w; last_h = h; last_build = now;
+    }
+    *count = s_nquads;
+    return s_quads;
+}
