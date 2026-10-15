@@ -85,6 +85,7 @@ static void guest_strcpy(char* dst, uint32_t gaddr, size_t cap)
  * translators. (extern "C" is ill-formed at block scope.) */
 extern "C" void ps3_vfs_ps3game_fallback(char* path, size_t cap);
 extern "C" int ps3_vfs_resolve_hdd_title(const char*, char*, size_t);
+extern "C" void ps3_vfs_firmware_fallback(const char* guest, char* path, size_t cap);
 
 /* Translate a guest path to a host path under ppu_vfs_root. Known PS3 mount
  * prefixes are stripped; the rest is appended to the root. */
@@ -115,6 +116,7 @@ static void host_path(char* out, size_t cap, const char* guest)
         if (!fw || !*fw) fw = "D:/recomp/tools/rpcs3/dev_flash";
         snprintf(out, cap, "%s/%s", fw, guest + 11);
         for (char* p = out; *p; p++) if (*p == '\\') *p = '/';
+        ps3_vfs_firmware_fallback(guest, out, cap);
         return;
     }
 

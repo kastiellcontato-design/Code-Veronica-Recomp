@@ -2,7 +2,7 @@
  * Code Veronica launcher: the window shown before the game starts.
  *
  * Five pages -- Inicio (display mode, render resolution, anti-aliasing), Jogo
- * (game folder, licence .rap, firmware), Controles (keyboard and controller
+ * (game folder, licence .rap), Controles (keyboard and controller
  * mapping), Patches and Avancado (language, shader cache) -- drawn with GDI+ in
  * the Resident Evil palette, in Portuguese, English, Spanish or Japanese
  * (launcher_i18n.h). Every change is written to
@@ -223,6 +223,8 @@ Settings load_settings()
     }
     s.game = ini_get(L"pastas", L"jogo", def_game);
     s.rap  = ini_get(L"pastas", L"rap", find_rap(env_w("PS3_RAP_DIR")));
+    /* No page for it any more: without a firmware tree the runtime serves its
+     * own flashATRAC.pic stand-in. A path in the ini still reaches PS3_DEV_FLASH. */
     s.fw   = ini_get(L"pastas", L"firmware", env_w("PS3_DEV_FLASH"));
     for (int a = 0; a < PA_COUNT; a++) {
         std::wstring kid = L"tecla_" + widen(k_pad_action_id[a]);
@@ -267,12 +269,6 @@ std::wstring check_rap(const std::wstring& r, bool* ok)
 {
     std::error_code ec; *ok = !r.empty() && fs::is_regular_file(r, ec);
     return T(*ok ? S_CHK_RAP_OK : S_CHK_RAP_BAD);
-}
-std::wstring check_fw(const std::wstring& f, bool* ok)
-{
-    std::error_code ec;
-    *ok = !f.empty() && fs::exists(fs::path(f) / L"sys" / L"external" / L"flashATRAC.pic", ec);
-    return T(*ok ? S_CHK_FW_OK : S_CHK_FW_BAD);
 }
 
 /* ---------------------------------------------------------------- keys */
@@ -354,7 +350,7 @@ enum {
     ID_DD_MODE = 200, ID_DD_RES = 201, ID_DD_AA = 202, ID_DD_LANG = 203, ID_DD_ITEM = 300,  /* + item index */
     ID_DD_UP = 390, ID_DD_DOWN = 391,
     ID_PLAY = 400, ID_RESUME, ID_QUIT,
-    ID_GAME_BROWSE = 500, ID_GAME_OPEN, ID_RAP_BROWSE, ID_RAP_OPEN, ID_FW_BROWSE, ID_FW_OPEN,
+    ID_GAME_BROWSE = 500, ID_GAME_OPEN, ID_RAP_BROWSE, ID_RAP_OPEN,
     ID_LAYOUT_PS = 600, ID_LAYOUT_XB,
     ID_KEY = 700, ID_BTN = 800, ID_RESTORE = 900, ID_PATCH = 1000,  /* + index */
     ID_CACHE_CLEAR = 1100, ID_CACHE_OPEN,
@@ -630,10 +626,10 @@ void draw_inicio(Graphics& gr, const Font& head, const Font& body, const Font& c
     text(gr, T(S_AA), x + 450, y, body, C_TEXT, StringAlignmentNear, 180, 30);
     dropdown(gr, RectF(x + 630, y, 150, 30), aa_name(g.s.aa), ID_DD_AA, body);
     y += 54;
-    bool o1, o2, o3;
-    std::wstring m1 = check_game(g.s.game, &o1), m2 = check_rap(g.s.rap, &o2), m3 = check_fw(g.s.fw, &o3);
-    const std::wstring* ms[3] = { &m1, &m2, &m3 }; bool oks[3] = { o1, o2, o3 };
-    for (int i = 0; i < 3; i++) {
+    bool o1, o2;
+    std::wstring m1 = check_game(g.s.game, &o1), m2 = check_rap(g.s.rap, &o2);
+    const std::wstring* ms[2] = { &m1, &m2 }; bool oks[2] = { o1, o2 };
+    for (int i = 0; i < 2; i++) {
         text(gr, (oks[i] ? L"✔  " : L"✖  ") + *ms[i], x, y + i * 24.0f, body, oks[i] ? C_OK : C_RED_HI,
              StringAlignmentNear, cw - 64, 22);
     }
@@ -669,9 +665,6 @@ void draw_jogo(Graphics& gr, const Font& head, const Font& body, const Font& fsm
     text(gr, T(S_LICENSE_HINT),
          x + 175, y + 58, fsm, C_DIM, StringAlignmentNear, 690, 20);
     y += 110;
-    n = check_fw(g.s.fw, &ok);
-    path_row(gr, x, y, T(S_FIRMWARE), g.s.fw, n, ok, ID_FW_BROWSE, ID_FW_OPEN, body, fsm);
-    text(gr, T(S_FIRMWARE_HINT), x + 175, y + 58, fsm, C_DIM, StringAlignmentNear, 690, 20);
     if (g.running)
         text(gr, T(S_PATHS_RESTART), x, y + 110, body, C_RED_HI,
              StringAlignmentNear, 690, 24);
@@ -1145,10 +1138,8 @@ void click(int id)
     else if (id == ID_CACHE_OPEN) { std::error_code ec; fs::create_directories(cache_dir(), ec); open_in_explorer(cache_dir().wstring()); }
     else if (id == ID_GAME_BROWSE) { auto p = pick(true, g.s.game, nullptr, nullptr); if (!p.empty()) { g.s.game = p; changed(); } }
     else if (id == ID_RAP_BROWSE) { auto p = pick(false, g.s.rap, T(S_RAP_FILTER), L"*.rap"); if (!p.empty()) { g.s.rap = p; changed(); } }
-    else if (id == ID_FW_BROWSE) { auto p = pick(true, g.s.fw, nullptr, nullptr); if (!p.empty()) { g.s.fw = p; changed(); } }
     else if (id == ID_GAME_OPEN) open_in_explorer(g.s.game);
     else if (id == ID_RAP_OPEN) open_in_explorer(g.s.rap);
-    else if (id == ID_FW_OPEN) open_in_explorer(g.s.fw);
     else if (id == ID_LAYOUT_PS || id == ID_LAYOUT_XB) { g.s.layout = id - ID_LAYOUT_PS; changed(); }
     else if (id >= ID_KEY && id < ID_KEY + PA_COUNT) { g.cap = CAP_KEY; g.cap_action = id - ID_KEY; g.cap_since = GetTickCount64(); SetFocus(g.hwnd); }
     else if (id >= ID_BTN && id < ID_BTN + PA_COUNT) {
@@ -1307,6 +1298,9 @@ void start_game()
     }
     set_env("PAD_BTNMAP", bm);
     set_env("PAD_KEYMAP", km);
+    /* Sound effects decode through the runtime's own ATRAC3 plug-in, so no
+     * PS3 firmware is needed even when a dev_flash path is configured. */
+    set_env_default("PS3_ATRAC_STANDIN", "1");
     /* The tuning the launcher script carries, for a direct start. */
     set_env_default("SPU_INTERP_UNLIFTED", "1");
     set_env_default("SPU_MAX_RUNNING", "10");

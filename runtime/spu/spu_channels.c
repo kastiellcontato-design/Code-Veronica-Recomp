@@ -17,6 +17,7 @@
 #include "spu_helpers.h"   /* spu_splat_u32 / spu_ls_read128 (SMC microstep) */
 #include "spu_lockstep.h"
 #include "spu_interp.h"    /* spu_lifted_fn / spu_lifted_lookup -- defined below */
+#include "../../libs/codec/ms_atrac3.h" /* native MultiStream ATRAC3 plug-in decode */
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -2491,6 +2492,24 @@ void spu_indirect_branch(spu_context* ctx)
         { uint32_t p = ctx->pc & SPU_LS_MASK;
           uint32_t w0 = ((uint32_t)ctx->ls[p] << 24) | ((uint32_t)ctx->ls[p+1] << 16) |
                         ((uint32_t)ctx->ls[p+2] << 8) | ctx->ls[p+3];
+          /* The built-in flashATRAC.pic stand-in (runtime/syscalls/sys_fs.c):
+           * its code is tagged by the .SpuGUID just below the entry, and it
+           * always runs through the interpreter. Its decode opens with
+           * "ila $2,0x3A7C0": decode natively, leave the result in $r3, and
+           * let the stub's `bi $r0` return to the mixer. */
+          int standin = 0;
+          for (uint32_t q = p & ~0xFu; !standin && q >= 0x10 && p - q < 0x70; q -= 0x10)
+              standin = memcmp(&ctx->ls[q], "PS3RECOMP-ATRAC", 15) == 0;
+          if (standin) {
+              if (w0 == 0x43D3E002u) {
+                  uint32_t r[8];
+                  for (int i = 0; i < 8; i++) r[i] = ctx->gpr[3 + i]._u32[0];
+                  uint32_t ret = ms_atrac3_decode(ctx->ls, r);
+                  for (int i = 0; i < 4; i++) ctx->gpr[3]._u32[i] = i == 0 ? ret : 0;
+              }
+              spu_interp_run(ctx, p);
+              return;
+          }
           static int s_iu = -1;
           if (s_iu < 0) { const char* e = getenv("SPU_INTERP_UNLIFTED"); s_iu = e ? 1 : 0; }
           if (s_iu && w0) {
