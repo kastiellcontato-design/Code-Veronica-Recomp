@@ -991,3 +991,9 @@ int edat_sha1_file(const char* path, uint8_t out[20])
     sha1_final(&c, out);
     return 0;
 }
+
+int edat_inflate(const uint8_t* src, size_t srclen, uint8_t* dst, size_t dstlen)
+{
+    if (srclen > 0x7FFFFFFF || dstlen > 0x7FFFFFFF) return -1;
+    return stbi_zlib_decode_buffer((char*)dst, (int)dstlen, (const char*)src, (int)srclen);
+}

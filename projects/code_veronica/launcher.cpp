@@ -118,7 +118,7 @@ struct Settings {
     int res = 1;           /* index into k_res */
     int aa = 0;            /* anti-aliasing: 0 off, 1 FXAA, 2 SMAA */
     bool patch[8] = {};    /* k_patches on/off */
-    int layout = 0;        /* 0 PlayStation, 1 Xbox */
+    int layout = 2;        /* button icons: 0 PlayStation, 1 Xbox, 2 follow the controller */
     std::wstring game, rap, fw;
     int key[PA_COUNT];
     int btn[PA_COUNT];
@@ -152,7 +152,7 @@ const wchar_t* k_pb_name[2][PB_COUNT] = {
     { L"Cross", L"Circle", L"Square", L"Triangle", L"L1", L"R1", L"L2", L"R2", L"L3", L"R3",
       L"Select", L"Start", L"D-pad cima", L"D-pad baixo", L"D-pad esquerda", L"D-pad direita", L"PS", L"Touchpad" },
     { L"A", L"B", L"X", L"Y", L"LB", L"RB", L"LT", L"RT", L"LS", L"RS",
-      L"Select", L"Start", L"D-pad cima", L"D-pad baixo", L"D-pad esquerda", L"D-pad direita", L"Guide", L"-" } };
+      L"Back", L"Start", L"D-pad cima", L"D-pad baixo", L"D-pad esquerda", L"D-pad direita", L"Guide", L"-" } };
 /* The d-pad's names are translated; the rest are the buttons' own names. */
 std::wstring action_name(int a)
 {
@@ -200,7 +200,7 @@ Settings load_settings()
     s.mode   = _wtoi(ini_get(L"tela", L"modo", L"0").c_str());
     s.res    = _wtoi(ini_get(L"tela", L"resolucao", L"1").c_str());
     s.aa     = _wtoi(ini_get(L"tela", L"antialias", L"0").c_str());
-    s.layout = _wtoi(ini_get(L"controles", L"layout", L"0").c_str());
+    s.layout = _wtoi(ini_get(L"controles", L"layout", L"2").c_str());
     { std::wstring l = ini_get(L"launcher", L"idioma", L"system");
       int pick = -1;
       for (int i = 0; i < LANG_COUNT; i++) if (l == widen(k_lang_id[i])) pick = i;
@@ -210,7 +210,7 @@ Settings load_settings()
     if (s.mode < 0 || s.mode > 2) s.mode = 0;
     if (s.res < 0 || s.res > 4) s.res = 1;
     if (s.aa < 0 || s.aa > 2) s.aa = 0;
-    if (s.layout < 0 || s.layout > 1) s.layout = 0;
+    if (s.layout < 0 || s.layout > 2) s.layout = 2;
     /* First run: take the paths the old launcher script set, if any. */
     std::wstring def_game = env_w("PS3_VFS_ROOT");
     if (def_game.empty()) {
@@ -391,7 +391,7 @@ enum {
     ID_DD_UP = 390, ID_DD_DOWN = 391,
     ID_PLAY = 400, ID_RESUME, ID_QUIT,
     ID_GAME_BROWSE = 500, ID_GAME_OPEN, ID_RAP_BROWSE, ID_RAP_OPEN,
-    ID_LAYOUT_PS = 600, ID_LAYOUT_XB,
+    ID_LAYOUT_PS = 600, ID_LAYOUT_XB, ID_LAYOUT_AUTO,
     ID_KEY = 700, ID_BTN = 800, ID_RESTORE = 900, ID_PATCH = 1000,  /* + index */
     ID_CACHE_CLEAR = 1100, ID_CACHE_OPEN,
 };
@@ -860,17 +860,30 @@ void draw_pad_card(Graphics& gr, float x, float y, float w, float h, const Font&
     std::wstring title = T(S_PAD_NONE);
     if (on) { title = T(S_PAD_CONNECTED_FMT); title.replace(title.find(L"%s"), 2, model); }
     if (on && g.pad_count > 1) title += L"  (+" + std::to_wstring(g.pad_count - 1) + L")";
-    text(gr, title, x + 82, y + h / 2 - 22, body, on ? C_TEXT : C_RED_HI, StringAlignmentNear, w - 200, 22);
+    /* The card's colour and this dot carry the state, so the text gets the
+     * whole width (the old CONECTADO pill left it ~100 px and cut it off). */
+    SolidBrush dot(accent); gr.FillEllipse(&dot, x + 82, y + h / 2 - 15, 8.0f, 8.0f);
+    text(gr, title, x + 96, y + h / 2 - 22, body, on ? C_TEXT : C_RED_HI, StringAlignmentNear, w - 104, 22);
     text(gr, T(on ? S_PAD_KB_TOO : S_PAD_PLUG),
-         x + 82, y + h / 2, fsm, C_DIM, StringAlignmentNear, w - 200, 20);
-    /* status pill */
-    RectF pr(x + w - 130, y + h / 2 - 11, 118, 22);
-    GraphicsPath* pp = round_rect(pr, 11);
-    SolidBrush pb(on ? Color(255, 34, 66, 32) : Color(255, 70, 26, 26)); gr.FillPath(&pb, pp); delete pp;
-    SolidBrush dot(accent); gr.FillEllipse(&dot, pr.X + 10, pr.Y + 7, 8.0f, 8.0f);
-    FontFamily ff(family(false, g_lang)); Font pf(&ff, 10.5f, FontStyleBold, UnitPixel);
-    text(gr, T(on ? S_CONNECTED : S_DISCONNECTED), pr.X + 22, pr.Y, pf, accent, StringAlignmentNear, pr.Width - 24, pr.Height);
+         x + 82, y + h / 2, fsm, C_DIM, StringAlignmentNear, w - 90, 20);
 }
+
+/* The icon set in use: the chosen one, or the connected controller's. */
+int icon_layout() { return g.s.layout == 2 ? (g.pad_kind == PAD_KIND_XINPUT ? 1 : 0) : g.s.layout; }
+
+/* The Xbox button that plays a PS3 role. Xbox icons come with the Xbox 360
+ * layout (pad_phys_360_layout, set from set_icon_env): the L1/R1 roles sit on
+ * the triggers and Select/Start on Start/Back, so they are drawn and named so. */
+int xbox_button(int pb)
+{
+    switch (pb) {
+    case PB_L1: return PB_L2;  case PB_L2: return PB_L1;
+    case PB_R1: return PB_R2;  case PB_R2: return PB_R1;
+    case PB_SELECT: return PB_START;  case PB_START: return PB_SELECT;
+    default: return pb;
+    }
+}
+int shown_button(int pb) { return icon_layout() == 1 ? xbox_button(pb) : pb; }
 
 void draw_controles(Graphics& gr, const Font& head, const Font& body, const Font& fsm, const Font& col)
 {
@@ -879,11 +892,14 @@ void draw_controles(Graphics& gr, const Font& head, const Font& body, const Font
     text(gr, T(S_CONTROLS_HINT), x, y + 32, fsm, C_DIM, StringAlignmentNear, 820, 20);
     y += 72;
     text(gr, T(S_ICONS), x, y, body, C_TEXT, StringAlignmentNear, 160, 28);
-    draw_radio(gr, x + 170, y, L"PlayStation", g.s.layout == 0, ID_LAYOUT_PS, body);
-    draw_radio(gr, x + 310, y, L"Xbox", g.s.layout == 1, ID_LAYOUT_XB, body);
-    draw_pad_card(gr, x + 420, y - 14, W - SIDE - 64.0f - 420, 56, body, fsm);
+    draw_radio(gr, x + 170, y, T(S_ICONS_AUTO), g.s.layout == 2, ID_LAYOUT_AUTO, body);
+    draw_radio(gr, x + 300, y, L"PlayStation", g.s.layout == 0, ID_LAYOUT_PS, body);
+    draw_radio(gr, x + 430, y, L"Xbox", g.s.layout == 1, ID_LAYOUT_XB, body);
+    draw_pad_card(gr, x + 520, y - 14, W - SIDE - 64.0f - 520, 56, body, fsm);
     y += 54;
-    const float c1 = x, c2 = x + 250, c3 = x + 480, rowh = 31;
+    /* 28 px rows: with 16 of them the Restore row ends above the bottom bar
+     * (Jogar / Voltar ao jogo at H - 78); 31 px ran the two into each other. */
+    const float c1 = x, c2 = x + 250, c3 = x + 480, rowh = 28;
     text(gr, T(S_COL_GAME), c1, y, col, C_RED);
     text(gr, T(S_COL_KB), c2, y, col, C_RED);
     text(gr, T(S_COL_PAD), c3, y, col, C_RED);
@@ -891,30 +907,30 @@ void draw_controles(Graphics& gr, const Font& head, const Font& body, const Font
     for (int i = 0; i < NROWS; i++) {
         int a = k_rows[i];
         float ry = y + i * rowh;
-        btn_glyph(gr, 0, k_pad_default_btn[a], c1 - 2, ry);
-        text(gr, action_name(a), c1 + 38, ry, body, C_TEXT, StringAlignmentNear, 200, 30);
+        btn_glyph(gr, 0, k_pad_default_btn[a], c1, ry + 1, 26.0f);
+        text(gr, action_name(a), c1 + 38, ry, body, C_TEXT, StringAlignmentNear, 200, 28);
         /* keyboard cell */
-        RectF kr(c2, ry + 1, 200, 28);
+        RectF kr(c2, ry + 1, 200, 25);
         bool kact = g.cap == CAP_KEY && g.cap_action == a;
         field(gr, kr, g.hover == ID_KEY + a, kact);
         text(gr, kact ? std::wstring(T(S_PRESS_KEY)) : key_name(g.s.key[a]), kr.X + 8, kr.Y, body,
              kact ? C_RED_HI : C_TEXT, StringAlignmentNear, kr.Width - 12, kr.Height);
         hit(kr.X, kr.Y, kr.Width, kr.Height, ID_KEY + a);
         /* controller cell */
-        RectF br(c3 + 34, ry + 1, 228, 28);
+        RectF br(c3 + 34, ry + 1, 228, 25);
         bool bact = g.cap == CAP_BTN && g.cap_action == a;
         int pb = g.s.btn[a];
-        if (!bact && pb >= 0) btn_glyph(gr, g.s.layout, pb, c3 - 2, ry);
+        if (!bact && pb >= 0) btn_glyph(gr, icon_layout(), shown_button(pb), c3, ry + 1, 26.0f);
         field(gr, br, g.hover == ID_BTN + a, bact);
-        text(gr, bact ? std::wstring(T(S_PRESS_BTN)) : pb_name(g.s.layout, pb),
+        text(gr, bact ? std::wstring(T(S_PRESS_BTN)) : pb_name(icon_layout(), shown_button(pb)),
              br.X + 8, br.Y, body, bact ? C_RED_HI : C_TEXT, StringAlignmentNear, br.Width - 30, br.Height);
         SolidBrush ab(C_DIM);
-        PointF tri[3] = { PointF(br.X + br.Width - 18, br.Y + 11), PointF(br.X + br.Width - 8, br.Y + 11),
-                          PointF(br.X + br.Width - 13, br.Y + 17) };
+        PointF tri[3] = { PointF(br.X + br.Width - 18, br.Y + 10), PointF(br.X + br.Width - 8, br.Y + 10),
+                          PointF(br.X + br.Width - 13, br.Y + 16) };
         gr.FillPolygon(&ab, tri, 3);
         hit(br.X, br.Y, br.Width, br.Height, ID_BTN + a);
     }
-    float by = y + NROWS * rowh + 10;
+    float by = y + NROWS * rowh + 8;
     button(gr, RectF(x, by, 160, 32), T(S_RESTORE), ID_RESTORE, body);
     text(gr, T(S_CONTROLS_FOOT), x + 175, by, fsm, C_DIM, StringAlignmentNear, W - 280.0f - (x + 175), 32);
 }
@@ -1148,6 +1164,7 @@ void quit_game()
 }
 void start_game();
 int prepare_eboot();
+void set_icon_env();
 
 void changed() { save_settings(g.s); g.play_msg.clear(); apply_live(); InvalidateRect(g.hwnd, NULL, FALSE); }
 
@@ -1181,7 +1198,11 @@ void click(int id)
     else if (id == ID_RAP_BROWSE) { auto p = pick(false, g.s.rap, T(S_RAP_FILTER), L"*.rap"); if (!p.empty()) { g.s.rap = p; changed(); } }
     else if (id == ID_GAME_OPEN) open_in_explorer(g.s.game);
     else if (id == ID_RAP_OPEN) open_in_explorer(g.s.rap);
-    else if (id == ID_LAYOUT_PS || id == ID_LAYOUT_XB) { g.s.layout = id - ID_LAYOUT_PS; changed(); }
+    else if (id == ID_LAYOUT_PS || id == ID_LAYOUT_XB || id == ID_LAYOUT_AUTO) {
+        g.s.layout = id == ID_LAYOUT_AUTO ? 2 : id - ID_LAYOUT_PS;
+        set_icon_env();   /* the game reads it when it next loads a screen with icons */
+        changed();
+    }
     else if (id >= ID_KEY && id < ID_KEY + PA_COUNT) { g.cap = CAP_KEY; g.cap_action = id - ID_KEY; g.cap_since = GetTickCount64(); SetFocus(g.hwnd); }
     else if (id >= ID_BTN && id < ID_BTN + PA_COUNT) {
         g.cap = CAP_BTN; g.cap_action = id - ID_BTN; g.cap_since = GetTickCount64();
@@ -1307,6 +1328,16 @@ LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp)
 }
 
 void set_env(const char* k, const std::string& v) { _putenv_s(k, v.c_str()); }
+
+/* In-game icons (button_icons.cpp): auto follows the first controller. */
+void set_icon_env()
+{
+    const char* v = g.s.layout == 2 ? "auto" : g.s.layout == 1 ? "xbox" : "ps";
+    set_env("CV_BUTTON_ICONS", v);
+    /* The controls follow the icons, so the 360 manual shown is what the pad
+     * does: Xbox icons, 360 layout (on any controller); auto, Xbox pads only. */
+    set_env("PAD_360_LAYOUT", g.s.layout == 2 ? "auto" : g.s.layout == 1 ? "on" : "off");
+}
 void set_env_default(const char* k, const char* v) { if (!getenv(k)) _putenv_s(k, v); }
 std::string narrow(const std::wstring& w)
 {
@@ -1367,6 +1398,7 @@ void start_game()
     set_env("RES_SCALE", k_res[s.res].scale);
     set_env("WINDOW_MODE", k_mode_env[s.mode]);
     set_env("AA_MODE", std::to_string(s.aa));
+    set_icon_env();
     std::string pl;
     for (int i = 0; i < NPATCHES; i++)
         if (s.patch[i]) pl += (pl.empty() ? "" : ",") + std::string(k_patches[i].id);
@@ -1405,6 +1437,7 @@ DWORD WINAPI launcher_thread(void*)
     GdiplusStartupInput gsi; ULONG_PTR gtok;
     GdiplusStartup(&gtok, &gsi, NULL);
     g.s = load_settings();
+    set_icon_env();   /* the button capture below reads the layout it implies */
     g.banner = load_png("BANNER");
 
     WNDCLASSEXW wc = { sizeof wc };

@@ -15,6 +15,7 @@
  */
 #include "ppu_recomp.h"      /* ppu_context */
 #include "../../libs/filesystem/edat.h"
+#include "../../libs/filesystem/vfs_overlay.h"
 #include "ps3emu/nid.h"      /* ps3_compute_nid */
 #include "ps3emu/guest_call.h" /* ps3_invoke_guest: AIO completion is a guest OPD */
 #include "sdata_decrypt.h"   /* SDATA/EDAT (NPD) decryption for cellFsSdataOpen */
@@ -184,6 +185,10 @@ static void cellFsOpen(ppu_context* ctx)
     { char dec_path[1200];
       const char* use = edat_resolve(hpath, dec_path, sizeof dec_path);
       if (use != hpath) snprintf(hpath, sizeof hpath, "%s", use); }
+    /* A title's own copy of this file, if it registered one (vfs_overlay.h). */
+    { char ovl_path[1200];
+      const char* use = vfs_overlay_resolve(hpath, ovl_path, sizeof ovl_path);
+      if (use != hpath) snprintf(hpath, sizeof hpath, "%s", use); }
 
     /* fopen() mode strings can't express the PS3/POSIX open semantics (e.g.
      * O_WRONLY without create+truncate, or O_CREAT without O_TRUNC), so build
@@ -283,6 +288,10 @@ static void cellFsSdataOpen(ppu_context* ctx)
      * cellFsOpen. One decryptor, reached from both doors. */
     { char dec_path[1200];
       const char* use = edat_resolve(hpath, dec_path, sizeof dec_path);
+      if (use != hpath) snprintf(hpath, sizeof hpath, "%s", use); }
+    /* A title's own copy of this file, if it registered one (vfs_overlay.h). */
+    { char ovl_path[1200];
+      const char* use = vfs_overlay_resolve(hpath, ovl_path, sizeof ovl_path);
       if (use != hpath) snprintf(hpath, sizeof hpath, "%s", use); }
 
     int hfd = open(hpath, O_RDONLY | O_BINARY, 0666);

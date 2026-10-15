@@ -63,6 +63,9 @@ int npdrm_self_decrypt(const char* self_path, const char* rap_path, const char* 
  * recompiled code was built from). 0 on success, -1 if it cannot be read. */
 int edat_sha1_file(const char* path, uint8_t out[20]);
 
+/* zlib (RFC 1950) stream -> dst. Returns the bytes written, or -1. */
+int edat_inflate(const uint8_t* src, size_t srclen, uint8_t* dst, size_t dstlen);
+
 #ifdef __cplusplus
 }
 #endif

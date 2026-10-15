@@ -392,6 +392,7 @@ static void harness_guest_caller(uint32_t opd, uint64_t a0, uint64_t a1,
 }
 
 extern "C" int cv_launcher_run(char* eboot_out, size_t cap);
+extern "C" void cv_button_icons_init(void);   /* button_icons.cpp */
 
 int main(int argc, char** argv)
 {
@@ -408,6 +409,9 @@ int main(int argc, char** argv)
           if (freopen(log.c_str(), "w", stdout)) _dup2(_fileno(stdout), _fileno(stderr));
           FreeConsole();
       } }
+    /* Xbox button icons: the game's own Xbox 360 art, swapped in per archive. */
+    cv_button_icons_init();
+
     /* The options window. CV_NO_LAUNCHER=1 skips it (tests, scripts). */
     if (!getenv("CV_NO_LAUNCHER")) {
         char chosen[1024] = {0};

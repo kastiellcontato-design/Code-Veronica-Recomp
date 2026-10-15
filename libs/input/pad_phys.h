@@ -49,6 +49,12 @@ int pad_phys_poll(int index, PadPhys* out);
 void pad_phys_rumble(int index, uint8_t large, uint8_t weak);
 void pad_phys_rumble_off(void);   /* every controller */
 
+/* 1 when a controller of this PAD_KIND_* uses the Xbox 360 release's layout:
+ * pad_phys_poll then reports RT/LT (R2/L2) as R1/L1, RB/LB (R1/L1) as R2/L2,
+ * Start as Select and Back (Share/Create) as Start. Set by PAD_360_LAYOUT =
+ * on | off | auto (default: Xbox controllers only). */
+int pad_phys_360_layout(int kind);
+
 /* Short identifiers used in config strings ("south", "l1", "up", ...). */
 const char* pad_phys_id(int pb);
 int         pad_phys_from_id(const char* id);   /* -1 if unknown */

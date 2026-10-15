@@ -21,6 +21,7 @@
 #include "rsx_primitives.h"
 #include "rsx_vertex_fetch.h"
 #include "rsx_texture_layout.h"
+#include "rsx_tex_hook.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -4328,6 +4329,10 @@ static int vp_upload_tex_slot_impl(u32 off, u32 w, u32 h, u32 fmt, int cube, u32
         }
         fresh = 1;
     }
+
+    /* A title may rewrite the image in place first (rsx_tex_hook.h). */
+    if (g_rsx_tex_source_hook && !cube)
+        g_rsx_tex_source_hook(vm_base + off, dxt ? blkrow * blkrows : w * h * bpp, off);
 
     void* mapped = NULL; D3D12_RANGE nr = {0,0};
     if (FAILED(t->up->lpVtbl->Map(t->up, 0, &nr, &mapped)) || !mapped) return -1;

@@ -4,6 +4,7 @@
 
 #include "sys_fs.h"
 #include "../../libs/filesystem/edat.h"
+#include "../../libs/filesystem/vfs_overlay.h"
 #include "../memory/vm.h"
 #include <string.h>
 #include <stdio.h>
@@ -421,6 +422,10 @@ int64_t sys_fs_open(ppu_context* ctx)
      * every read/seek/stat path below stays unchanged. (libs/filesystem/edat.c) */
     { char dec_path[1200];
       const char* use = edat_resolve(host_path, dec_path, sizeof dec_path);
+      if (use != host_path) snprintf(host_path, sizeof host_path, "%s", use); }
+    /* A title's own copy of this file, if it registered one (vfs_overlay.h). */
+    { char ovl_path[1200];
+      const char* use = vfs_overlay_resolve(host_path, ovl_path, sizeof ovl_path);
       if (use != host_path) snprintf(host_path, sizeof host_path, "%s", use); }
 
     /* Find free fd slot */

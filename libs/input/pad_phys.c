@@ -41,6 +41,38 @@ static uint8_t xi_axis(short v, int invert)
     return (uint8_t)(r < 0 ? 0 : r > 255 ? 255 : r);
 }
 
+/* PAD_360_LAYOUT: "on" for every controller, "off", or "auto" (the default)
+ * for Xbox controllers only. Read on every poll, so a launcher can switch it. */
+int pad_phys_360_layout(int kind)
+{
+    const char* e = getenv("PAD_360_LAYOUT");
+    if (e && !strcmp(e, "on")) return 1;
+    if (e && !strcmp(e, "off")) return 0;
+    return kind == PAD_KIND_XINPUT;
+}
+
+/* The Xbox 360 releases of PS3 games put the PS3's L1/R1 actions on the
+ * triggers and its Select/Start on Start/Back: aim with RT (R2 on a Sony pad),
+ * Status on Start. Applied as the pad is read, so the game, a launcher's
+ * button capture and its labels all see the same thing. */
+static void apply_360_layout(PadPhys* p)
+{
+    if (!pad_phys_360_layout(p->kind)) return;
+    const uint32_t b = p->buttons;
+    const uint32_t sw = (1u << PB_L1) | (1u << PB_R1) | (1u << PB_L2) | (1u << PB_R2) |
+                        (1u << PB_SELECT) | (1u << PB_START);
+    uint32_t o = b & ~sw;
+    if (b & (1u << PB_L2))     o |= 1u << PB_L1;
+    if (b & (1u << PB_R2))     o |= 1u << PB_R1;
+    if (b & (1u << PB_L1))     o |= 1u << PB_L2;
+    if (b & (1u << PB_R1))     o |= 1u << PB_R2;
+    if (b & (1u << PB_START))  o |= 1u << PB_SELECT;
+    if (b & (1u << PB_SELECT)) o |= 1u << PB_START;
+    p->buttons = o;
+    p->l2 = (o & (1u << PB_L2)) ? 255 : 0;   /* the bumpers are digital */
+    p->r2 = (o & (1u << PB_R2)) ? 255 : 0;
+}
+
 static int xi_read(int i, PadPhys* p)
 {
     XINPUT_STATE st; memset(&st, 0, sizeof st);
@@ -363,14 +395,14 @@ int pad_phys_poll(int index, PadPhys* out)
     int n = 0;
     for (int i = 0; i < 4; i++) {
         PadPhys p; memset(&p, 0, sizeof p);
-        if (xi_read(i, &p)) { if (n == index) { *out = p; return 1; } n++; }
+        if (xi_read(i, &p)) { if (n == index) { apply_360_layout(&p); *out = p; return 1; } n++; }
     }
     for (int k = 0; k < SONY_MAX; k++) {
         if (!s_sony[k].used) continue;
         PadPhys p;
         AcquireSRWLockShared(&s_sony[k].lock); p = s_sony[k].st; ReleaseSRWLockShared(&s_sony[k].lock);
         if (!p.connected) continue;
-        if (n == index) { *out = p; return 1; }
+        if (n == index) { apply_360_layout(&p); *out = p; return 1; }
         n++;
     }
     return 0;
@@ -391,4 +423,5 @@ int pad_phys_from_id(const char* id)
 int pad_phys_poll(int index, PadPhys* out) { (void)index; memset(out, 0, sizeof *out); return 0; }
 void pad_phys_rumble(int index, uint8_t large, uint8_t weak) { (void)index; (void)large; (void)weak; }
 void pad_phys_rumble_off(void) { }
+int pad_phys_360_layout(int kind) { (void)kind; return 0; }
 #endif
