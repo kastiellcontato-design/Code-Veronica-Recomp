@@ -56,6 +56,7 @@
 #include <vector>
 #include <filesystem>
 #include <algorithm>
+#include <cmath>
 #include <mutex>
 #include <set>
 #include <thread>
@@ -266,10 +267,263 @@ void watcher()
     }
 }
 
+/* ---- the map screen -----------------------------------------------------
+ * The map's atlas (mry/mp_dat0..4.arc, one per playable character) has the
+ * PlayStation icons and "L1 ZOOM R1" painted into it, and unlike the screens
+ * above it has no Xbox version in the game. One is drawn here, from the
+ * user's own files, the first time a map atlas is opened: Circle becomes B,
+ * Square becomes X (the Cross icon itself, a blue X), Cross becomes A, all on
+ * the map's grey disc; the B and A letters come from the button guide's Xbox
+ * icons. The zoom labels become LT / RT, where the 360 layout puts zoom.
+ * Geometry checked for every language and character (only DXT noise differs). */
+struct Rgba { float r, g, b, a; };
+const int MAP_W = 192, MAP_H = 192;
+const int CIRCLE_X = 159, CIRCLE_Y = 26, SQUARE_X = 159, SQUARE_Y = 62, CROSS_X = 159, CROSS_Y = 98;
+
+void unpack565(unsigned v, float c[3])
+{
+    c[0] = (float)((v >> 11) & 31) * 255.0f / 31.0f;
+    c[1] = (float)((v >> 5) & 63) * 255.0f / 63.0f;
+    c[2] = (float)(v & 31) * 255.0f / 31.0f;
+}
+
+/* DXT5 (BC3), the PC byte order: what the game's textures use. */
+std::vector<Rgba> dxt5_decode(const unsigned char* d, int w, int h)
+{
+    std::vector<Rgba> px((size_t)w * h);
+    for (int by = 0; by < h / 4; by++)
+        for (int bx = 0; bx < w / 4; bx++) {
+            const unsigned char* b = d + ((size_t)by * (w / 4) + bx) * 16;
+            float al[8] = { (float)b[0], (float)b[1] };
+            for (int i = 2; i < 8; i++)
+                al[i] = b[0] > b[1] ? ((8 - i) * al[0] + (i - 1) * al[1]) / 7.0f
+                      : i < 6 ? ((6 - i) * al[0] + (i - 1) * al[1]) / 5.0f : (i == 6 ? 0.0f : 255.0f);
+            uint64_t ai = 0;
+            for (int i = 0; i < 6; i++) ai |= (uint64_t)b[2 + i] << (8 * i);
+            float c[4][3];
+            unpack565(b[8] | b[9] << 8, c[0]); unpack565(b[10] | b[11] << 8, c[1]);
+            for (int k = 0; k < 3; k++) { c[2][k] = (2 * c[0][k] + c[1][k]) / 3; c[3][k] = (c[0][k] + 2 * c[1][k]) / 3; }
+            const uint32_t ci = (uint32_t)b[12] | b[13] << 8 | b[14] << 16 | (uint32_t)b[15] << 24;
+            for (int i = 0; i < 16; i++) {
+                const float* cc = c[(ci >> (2 * i)) & 3];
+                px[(size_t)(by * 4 + i / 4) * w + bx * 4 + i % 4] = { cc[0], cc[1], cc[2], al[(ai >> (3 * i)) & 7] };
+            }
+        }
+    return px;
+}
+
+unsigned pack565(const float c[3])
+{
+    auto q = [](float v, int bits) { int m = (1 << bits) - 1; int r = (int)(v * m / 255.0f + 0.5f); return (unsigned)(r < 0 ? 0 : r > m ? m : r); };
+    return q(c[0], 5) << 11 | q(c[1], 6) << 5 | q(c[2], 5);
+}
+
+/* Bounding-box DXT5 encoder: plenty for a few icon blocks. */
+void dxt5_encode_block(const Rgba p[16], unsigned char* b)
+{
+    float amin = 255, amax = 0;
+    for (int i = 0; i < 16; i++) { amin = std::min(amin, p[i].a); amax = std::max(amax, p[i].a); }
+    b[0] = (unsigned char)(amax + 0.5f); b[1] = (unsigned char)(amin + 0.5f);
+    float al[8] = { (float)b[0], (float)b[1] };
+    for (int i = 2; i < 8; i++) al[i] = ((8 - i) * al[0] + (i - 1) * al[1]) / 7.0f;
+    uint64_t ai = 0;
+    for (int i = 0; i < 16; i++) {
+        int best = 0;
+        for (int k = 1; k < 8; k++) if (std::fabs(al[k] - p[i].a) < std::fabs(al[best] - p[i].a)) best = k;
+        if (b[0] == b[1]) best = 0;
+        ai |= (uint64_t)best << (3 * i);
+    }
+    for (int i = 0; i < 6; i++) b[2 + i] = (unsigned char)(ai >> (8 * i));
+    /* colour: the box of the visible texels (all of them if none is) */
+    float lo[3] = { 255, 255, 255 }, hi[3] = { 0, 0, 0 };
+    bool any = false;
+    for (int pass = 0; pass < 2 && !any; pass++)
+        for (int i = 0; i < 16; i++) {
+            if (pass == 0 && p[i].a < 16) continue;
+            const float v[3] = { p[i].r, p[i].g, p[i].b };
+            for (int k = 0; k < 3; k++) { lo[k] = std::min(lo[k], v[k]); hi[k] = std::max(hi[k], v[k]); }
+            any = true;
+        }
+    unsigned c0 = pack565(hi), c1 = pack565(lo);
+    if (c0 < c1) std::swap(c0, c1);
+    float c[4][3];
+    unpack565(c0, c[0]); unpack565(c1, c[1]);
+    for (int k = 0; k < 3; k++) { c[2][k] = (2 * c[0][k] + c[1][k]) / 3; c[3][k] = (c[0][k] + 2 * c[1][k]) / 3; }
+    uint32_t ci = 0;
+    if (c0 != c1)
+        for (int i = 0; i < 16; i++) {
+            int best = 0; float bd = 1e30f;
+            for (int k = 0; k < 4; k++) {
+                const float dr = c[k][0] - p[i].r, dg = c[k][1] - p[i].g, db = c[k][2] - p[i].b;
+                const float dd = dr * dr + dg * dg + db * db;
+                if (dd < bd) { bd = dd; best = k; }
+            }
+            ci |= (uint32_t)best << (2 * i);
+        }
+    b[8] = (unsigned char)c0; b[9] = (unsigned char)(c0 >> 8);
+    b[10] = (unsigned char)c1; b[11] = (unsigned char)(c1 >> 8);
+    for (int i = 0; i < 4; i++) b[12 + i] = (unsigned char)(ci >> (8 * i));
+}
+
+float sat(const Rgba& c) { return std::max({ c.r, c.g, c.b }) - std::min({ c.r, c.g, c.b }); }
+float radius(int x, int y) { return std::hypot((float)x - 15.5f, (float)y - 15.5f); }
+
+/* The bright letter of a 32x32 Xbox icon, as a 0..1 mask inside its disc. */
+std::vector<float> letter_mask(const std::vector<Rgba>& icon)
+{
+    std::vector<float> lum;
+    for (int y = 0; y < 32; y++)
+        for (int x = 0; x < 32; x++) {
+            const Rgba& c = icon[(size_t)y * 32 + x];
+            if (c.a > 200 && radius(x, y) < 10.5f) lum.push_back((c.r + c.g + c.b) / 3);
+        }
+    std::vector<float> m(32 * 32, 0.0f);
+    if (lum.empty()) return m;
+    std::nth_element(lum.begin(), lum.begin() + (long)(lum.size() * 55 / 100), lum.end());
+    const float base = lum[lum.size() * 55 / 100];
+    for (int y = 0; y < 32; y++)
+        for (int x = 0; x < 32; x++) {
+            const Rgba& c = icon[(size_t)y * 32 + x];
+            if (c.a > 200 && radius(x, y) < 10.5f)
+                m[(size_t)y * 32 + x] = std::clamp(((c.r + c.g + c.b) / 3 - base) / 40.0f, 0.0f, 1.0f);
+        }
+    return m;
+}
+
+/* The disc with `mask` painted on it in `col`, with a soft dark edge. */
+std::vector<Rgba> paint_letter(std::vector<Rgba> disc, const std::vector<float>& m, const float col[3])
+{
+    for (int y = 0; y < 32; y++)
+        for (int x = 0; x < 32; x++) {
+            float e = 0;
+            for (int dy = -1; dy <= 1; dy++)
+                for (int dx = -1; dx <= 1; dx++) {
+                    const int xx = x + dx, yy = y + dy;
+                    if (xx >= 0 && xx < 32 && yy >= 0 && yy < 32) e = std::max(e, m[(size_t)yy * 32 + xx]);
+                }
+            const float k = m[(size_t)y * 32 + x];
+            e = std::max(0.0f, e - k) * 0.6f;
+            Rgba& c = disc[(size_t)y * 32 + x];
+            c.r = (c.r * (1 - e) + 40 * e) * (1 - k) + col[0] * k;
+            c.g = (c.g * (1 - e) + 40 * e) * (1 - k) + col[1] * k;
+            c.b = (c.b * (1 - e) + 40 * e) * (1 - k) + col[2] * k;
+        }
+    return disc;
+}
+
+/* The Xbox version of a map atlas (DXT5, MAP_W x MAP_H), or empty. */
+std::vector<unsigned char> xbox_map_atlas(const std::vector<unsigned char>& dxt,
+                                          const std::vector<unsigned char>& a_icon,
+                                          const std::vector<unsigned char>& b_icon)
+{
+    if (dxt.size() != (size_t)MAP_W * MAP_H || a_icon.size() != 1024 || b_icon.size() != 1024) return {};
+    std::vector<Rgba> img = dxt5_decode(dxt.data(), MAP_W, MAP_H);
+    const std::vector<Rgba> orig = img;
+    auto at = [&](int x, int y) -> Rgba& { return img[(size_t)y * MAP_W + x]; };
+    auto cell = [&](int x0, int y0) {
+        std::vector<Rgba> c(32 * 32);
+        for (int y = 0; y < 32; y++) for (int x = 0; x < 32; x++) c[(size_t)y * 32 + x] = orig[(size_t)(y0 + y) * MAP_W + x0 + x];
+        return c;
+    };
+    const std::vector<Rgba> circle = cell(CIRCLE_X, CIRCLE_Y), square = cell(SQUARE_X, SQUARE_Y), cross = cell(CROSS_X, CROSS_Y);
+    /* A clean disc: per texel the greyest of the three icons; texels still
+     * coloured take the mean grey at their radius. */
+    std::vector<Rgba> disc(32 * 32);
+    for (size_t i = 0; i < disc.size(); i++) {
+        const Rgba* c3[3] = { &circle[i], &square[i], &cross[i] };
+        disc[i] = *std::min_element(c3, c3 + 3, [](const Rgba* a, const Rgba* b) { return sat(*a) < sat(*b); })[0];
+    }
+    for (int r = 0; r <= 23; r++) {
+        float sum[4] = { 0, 0, 0, 0 }; int n = 0;
+        for (int i = 0; i < 32 * 32; i++)
+            if ((int)std::lround(radius(i % 32, i / 32)) == r && sat(disc[i]) < 18) {
+                sum[0] += disc[i].r; sum[1] += disc[i].g; sum[2] += disc[i].b; sum[3] += disc[i].a; n++;
+            }
+        if (!n) continue;
+        for (int i = 0; i < 32 * 32; i++)
+            if ((int)std::lround(radius(i % 32, i / 32)) == r && sat(disc[i]) >= 18)
+                disc[i] = { sum[0] / n, sum[1] / n, sum[2] / n, sum[3] / n };
+    }
+    static const float A_COL[3] = { 110, 220, 60 }, B_COL[3] = { 240, 80, 90 };
+    const std::vector<Rgba> a = paint_letter(disc, letter_mask(dxt5_decode(a_icon.data(), 32, 32)), A_COL);
+    const std::vector<Rgba> b = paint_letter(disc, letter_mask(dxt5_decode(b_icon.data(), 32, 32)), B_COL);
+    for (int y = 0; y < 32; y++)
+        for (int x = 0; x < 32; x++) {
+            at(SQUARE_X + x, SQUARE_Y + y) = cross[(size_t)y * 32 + x];   /* Square -> X */
+            at(CROSS_X + x, CROSS_Y + y) = a[(size_t)y * 32 + x];         /* Cross  -> A */
+            at(CIRCLE_X + x, CIRCLE_Y + y) = b[(size_t)y * 32 + x];       /* Circle -> B */
+        }
+    /* "L1" / "R1" -> "LT" / "RT": erase the 1 and draw a T in the label grey,
+     * 2-px strokes like the font's, with a soft third pixel. */
+    const Rgba grey = at(12, 106);
+    if (grey.a > 200) {
+        auto put = [&](int x, int y, float a) { Rgba& c = at(x, y); c = { grey.r, grey.g, grey.b, std::max(c.a, a) }; };
+        auto one_to_t = [&](int x0, int x1, int stem, bool keep_foot) {
+            for (int y = 99; y <= 116; y++)
+                for (int x = x0; x <= x1; x++)
+                    if (!(keep_foot && x == x0 && y >= 114)) at(x, y).a = 0;
+            for (int x = x0; x <= x1 + 2; x++) { put(x, 99, 255); put(x, 100, 255); put(x, 101, 110); }
+            for (int y = 99; y <= 116; y++) { put(stem, y, 255); put(stem + 1, y, 255); put(stem + 2, y, 110); }
+        };
+        one_to_t(9, 14, 12, true);      /* L1: the L's foot reaches x 9 on rows 114-116 */
+        one_to_t(118, 124, 121, false); /* R1 */
+    }
+    /* Re-encode only the blocks that changed; the rest keep their bytes. */
+    std::vector<unsigned char> out = dxt;
+    for (int by = 0; by < MAP_H / 4; by++)
+        for (int bx = 0; bx < MAP_W / 4; bx++) {
+            Rgba blk[16]; bool changed = false;
+            for (int i = 0; i < 16; i++) {
+                const size_t k = (size_t)(by * 4 + i / 4) * MAP_W + bx * 4 + i % 4;
+                blk[i] = img[k];
+                changed = changed || memcmp(&img[k], &orig[k], sizeof(Rgba)) != 0;
+            }
+            if (changed) dxt5_encode_block(blk, &out[((size_t)by * (MAP_W / 4) + bx) * 16]);
+        }
+    return out;
+}
+
+std::vector<unsigned char> read_file(const std::string& path)
+{
+    std::vector<unsigned char> d;
+    FILE* f = fopen(path.c_str(), "rb");
+    if (!f) return d;
+    fseek(f, 0, SEEK_END); long size = ftell(f); fseek(f, 0, SEEK_SET);
+    if (size > 0) { d.resize((size_t)size); if (fread(d.data(), 1, d.size(), f) != d.size()) d.clear(); }
+    fclose(f);
+    return d;
+}
+
+/* A map atlas was opened: register its PlayStation/Xbox pair. */
+void load_map_pair(const std::string& path, const std::string& key)
+{
+    {
+        std::lock_guard<std::mutex> l(s_mu);
+        if (!s_loaded.insert(path).second) return;
+    }
+    const size_t m = key.rfind("/mry/");
+    if (m == std::string::npos) return;
+    const std::string guide = path.substr(0, m) + "/window/button_guide.arc";
+    const std::vector<unsigned char> g = unblock(read_file(guide)), s = unblock(read_file(path));
+    Pair p{ tex_bytes(s, "tex0000_BM"), {} };
+    p.xbox = xbox_map_atlas(p.ps, tex_bytes(g, "buifma_x_BM_NOMIP"), tex_bytes(g, "buifba_x_BM_NOMIP"));
+    if (p.xbox.empty()) { fprintf(stderr, "[icons] %s: not the expected map atlas\n", path.c_str()); return; }
+    if (const char* dump = getenv("CV_ICONS_DUMP")) {   /* the generated atlas, raw DXT5, for checking */
+        if (FILE* f = fopen(dump, "wb")) { fwrite(p.xbox.data(), 1, p.xbox.size(), f); fclose(f); }
+    }
+    std::lock_guard<std::mutex> l(s_mu);
+    s_pairs.push_back(std::move(p));
+    fprintf(stderr, "[icons] map atlas pair from %s\n", path.c_str());
+}
+
 const char* overlay(const char* host_path, char* buf, size_t cap)
 {
     std::string key(host_path);
     for (char& c : key) if (c == '\\') c = '/';
+    if (key.find("/mry/mp_dat") != std::string::npos && ends_with(key, ".arc")) {
+        load_map_pair(host_path, key);   /* texture swap only: the file is served as it is */
+        return host_path;
+    }
     bool ours = false;
     for (const Swap& s : k_swaps) ours = ours || ends_with(key, s.file);
     if (!ours) return host_path;
@@ -299,4 +553,12 @@ extern "C" void cv_button_icons_init(void)
     vfs_overlay_set(overlay);
     g_rsx_tex_source_hook = on_upload;
     std::thread(watcher).detach();
+    /* CV_ICONS_TEST_MAP=<a map .arc> builds its Xbox atlas at once (with
+     * CV_ICONS_DUMP=<file> to write it out), so it can be checked without
+     * playing up to the map. */
+    if (const char* t = getenv("CV_ICONS_TEST_MAP")) {
+        std::string key(t);
+        for (char& c : key) if (c == '\\') c = '/';
+        load_map_pair(t, key);
+    }
 }
