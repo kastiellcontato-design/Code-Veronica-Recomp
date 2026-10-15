@@ -46,6 +46,9 @@ enum StrId {
     S_PATCH_FOLDER, S_PATCH_FOLDER_HINT, S_PATCH_FOUND_FMT, S_PATCH_NONE, S_PATCH_CODE, S_PATCH_TYPE_FMT,
     S_PATCH_FROM_FMT,
     S_PATCH_LOGO_T, S_PATCH_LOGO_D, S_PATCH_LOGO_C,
+    S_LOG_TITLE, S_LOG_VIEW, S_LOG_COPY, S_LOG_SAVE, S_LOG_NONE, S_LOG_COPIED_FMT,
+    S_LOG_SAVED, S_LOG_FOLLOW, S_LOG_COPY_ALL, S_LOG_CUT, S_LOG_WINDOW, S_LOG_SIZE_FMT,
+    S_LOG_CONSOLE,
     S_COUNT
 };
 
@@ -106,6 +109,19 @@ static const wchar_t* const k_str_pt[] = {
     L"Pular logos e introdução",
     L"Ao abrir o jogo, os logos CAPCOM e MT FRAMEWORK e o vídeo de introdução são pulados: o jogo abre direto na tela de título.",
     L"Feito para este port.",
+    L"LOG DO JOGO",
+    L"Ver log",
+    L"Copiar log",
+    L"Salvar cópia...",
+    L"Ainda sem log: ele é criado quando o jogo abre.",
+    L"Log copiado (%.1f MB): é só colar.",
+    L"Cópia salva.",
+    L"Seguir o fim",
+    L"Copiar tudo",
+    L"[... o começo do log não aparece aqui; Copiar tudo e Salvar cópia levam o arquivo inteiro ...]",
+    L"Log — Resident Evil Code: Veronica X",
+    L"%s  ·  %.1f MB",
+    L"O log está indo para a janela do terminal que abriu o jogo; abra pelo atalho para ter o arquivo.",
 };
 static_assert(sizeof k_str_pt / sizeof k_str_pt[0] == S_COUNT, "k_str_pt: one text per StrId");
 
@@ -166,6 +182,19 @@ static const wchar_t* const k_str_en[] = {
     L"Skip logos and intro",
     L"When the game starts, the CAPCOM and MT FRAMEWORK logos and the intro movie are skipped: it opens straight on the title screen.",
     L"Made for this port.",
+    L"GAME LOG",
+    L"View log",
+    L"Copy log",
+    L"Save a copy...",
+    L"No log yet: it is created when the game starts.",
+    L"Log copied (%.1f MB): just paste it.",
+    L"Copy saved.",
+    L"Follow the end",
+    L"Copy all",
+    L"[... the start of the log is not shown here; Copy all and Save a copy take the whole file ...]",
+    L"Log — Resident Evil Code: Veronica X",
+    L"%s  ·  %.1f MB",
+    L"The log is going to the terminal window that started the game; start it from the shortcut to get the file.",
 };
 static_assert(sizeof k_str_en / sizeof k_str_en[0] == S_COUNT, "k_str_en: one text per StrId");
 
@@ -226,6 +255,19 @@ static const wchar_t* const k_str_es[] = {
     L"Saltar logos e introducción",
     L"Al abrir el juego, se saltan los logos de CAPCOM y MT FRAMEWORK y el vídeo de introducción: abre directo en la pantalla de título.",
     L"Hecho para este port.",
+    L"REGISTRO DEL JUEGO",
+    L"Ver registro",
+    L"Copiar registro",
+    L"Guardar copia...",
+    L"Aún no hay registro: se crea al abrir el juego.",
+    L"Registro copiado (%.1f MB): solo pégalo.",
+    L"Copia guardada.",
+    L"Seguir el final",
+    L"Copiar todo",
+    L"[... el comienzo del registro no se muestra aquí; Copiar todo y Guardar copia llevan el archivo completo ...]",
+    L"Registro — Resident Evil Code: Veronica X",
+    L"%s  ·  %.1f MB",
+    L"El registro va a la ventana de terminal que abrió el juego; ábrelo desde el acceso directo para tener el archivo.",
 };
 static_assert(sizeof k_str_es / sizeof k_str_es[0] == S_COUNT, "k_str_es: one text per StrId");
 
@@ -286,6 +328,19 @@ static const wchar_t* const k_str_ja[] = {
     L"ロゴとオープニングをスキップ",
     L"ゲーム起動時の CAPCOM と MT FRAMEWORK のロゴとオープニングムービーを飛ばし、タイトル画面から始まります。",
     L"この移植版のために作成。",
+    L"ゲームログ",
+    L"ログを表示",
+    L"ログをコピー",
+    L"コピーを保存...",
+    L"ログはまだありません。ゲームの起動時に作成されます。",
+    L"ログをコピーしました (%.1f MB)。貼り付けてください。",
+    L"コピーを保存しました。",
+    L"末尾を追う",
+    L"すべてコピー",
+    L"[... ログの先頭はここに表示されません。「すべてコピー」と「コピーを保存」はファイル全体を扱います ...]",
+    L"ログ — Resident Evil Code: Veronica X",
+    L"%s  ·  %.1f MB",
+    L"ログはゲームを起動したターミナルに出力されています。ファイルにするにはショートカットから起動してください。",
 };
 static_assert(sizeof k_str_ja / sizeof k_str_ja[0] == S_COUNT, "k_str_ja: one text per StrId");
 
@@ -400,6 +455,19 @@ static const wchar_t* const k_str_fr[] = {
     L"Passer les logos et l'introduction",
     L"Au lancement, les logos CAPCOM et MT FRAMEWORK et la vidéo d'introduction sont passés : le jeu s'ouvre directement sur l'écran titre.",
     L"Créé pour ce portage.",
+    L"JOURNAL DU JEU",
+    L"Voir le journal",
+    L"Copier le journal",
+    L"Enregistrer une copie...",
+    L"Pas encore de journal : il est créé au lancement du jeu.",
+    L"Journal copié (%.1f Mo) : il suffit de le coller.",
+    L"Copie enregistrée.",
+    L"Suivre la fin",
+    L"Tout copier",
+    L"[... le début du journal n'est pas affiché ici ; Tout copier et Enregistrer une copie prennent le fichier entier ...]",
+    L"Journal — Resident Evil Code: Veronica X",
+    L"%s  ·  %.1f Mo",
+    L"Le journal part dans la fenêtre du terminal qui a lancé le jeu ; lancez-le par le raccourci pour avoir le fichier.",
 };
 static_assert(sizeof k_str_fr / sizeof k_str_fr[0] == S_COUNT, "k_str_fr: one text per StrId");
 
@@ -514,6 +582,19 @@ static const wchar_t* const k_str_de[] = {
     L"Logos und Intro überspringen",
     L"Beim Start werden die Logos von CAPCOM und MT FRAMEWORK und das Intro-Video übersprungen: das Spiel beginnt direkt im Titelbildschirm.",
     L"Für diese Portierung erstellt.",
+    L"SPIEL-LOG",
+    L"Log ansehen",
+    L"Log kopieren",
+    L"Kopie speichern...",
+    L"Noch kein Log: es entsteht beim Start des Spiels.",
+    L"Log kopiert (%.1f MB): einfach einfügen.",
+    L"Kopie gespeichert.",
+    L"Ende folgen",
+    L"Alles kopieren",
+    L"[... der Anfang des Logs wird hier nicht gezeigt; Alles kopieren und Kopie speichern nehmen die ganze Datei ...]",
+    L"Log — Resident Evil Code: Veronica X",
+    L"%s  ·  %.1f MB",
+    L"Das Log geht in das Terminalfenster, das das Spiel gestartet hat; starte über die Verknüpfung, um die Datei zu bekommen.",
 };
 static_assert(sizeof k_str_de / sizeof k_str_de[0] == S_COUNT, "k_str_de: one text per StrId");
 
@@ -628,6 +709,19 @@ static const wchar_t* const k_str_it[] = {
     L"Salta loghi e introduzione",
     L"All'avvio i loghi CAPCOM e MT FRAMEWORK e il filmato introduttivo vengono saltati: il gioco si apre direttamente sulla schermata del titolo.",
     L"Creato per questo port.",
+    L"LOG DEL GIOCO",
+    L"Vedi log",
+    L"Copia log",
+    L"Salva una copia...",
+    L"Ancora nessun log: viene creato all'avvio del gioco.",
+    L"Log copiato (%.1f MB): basta incollarlo.",
+    L"Copia salvata.",
+    L"Segui la fine",
+    L"Copia tutto",
+    L"[... l'inizio del log non è mostrato qui; Copia tutto e Salva una copia prendono l'intero file ...]",
+    L"Log — Resident Evil Code: Veronica X",
+    L"%s  ·  %.1f MB",
+    L"Il log va nella finestra del terminale che ha avviato il gioco; avvialo dal collegamento per avere il file.",
 };
 static_assert(sizeof k_str_it / sizeof k_str_it[0] == S_COUNT, "k_str_it: one text per StrId");
 
@@ -742,6 +836,19 @@ static const wchar_t* const k_str_pl[] = {
     L"Pomiń logo i intro",
     L"Po uruchomieniu gry logo CAPCOM i MT FRAMEWORK oraz filmik wprowadzający są pomijane: gra startuje od razu na ekranie tytułowym.",
     L"Stworzone dla tego portu.",
+    L"LOG GRY",
+    L"Pokaż log",
+    L"Kopiuj log",
+    L"Zapisz kopię...",
+    L"Nie ma jeszcze logu: powstaje przy uruchomieniu gry.",
+    L"Log skopiowany (%.1f MB): wystarczy wkleić.",
+    L"Kopia zapisana.",
+    L"Śledź koniec",
+    L"Kopiuj wszystko",
+    L"[... początek logu nie jest tu pokazany; Kopiuj wszystko i Zapisz kopię biorą cały plik ...]",
+    L"Log — Resident Evil Code: Veronica X",
+    L"%s  ·  %.1f MB",
+    L"Log trafia do okna terminala, z którego uruchomiono grę; uruchom ją ze skrótu, aby mieć plik.",
 };
 static_assert(sizeof k_str_pl / sizeof k_str_pl[0] == S_COUNT, "k_str_pl: one text per StrId");
 
@@ -856,6 +963,19 @@ static const wchar_t* const k_str_tr[] = {
     L"Logoları ve girişi atla",
     L"Oyun açılırken CAPCOM ve MT FRAMEWORK logoları ile giriş videosu atlanır: oyun doğrudan başlık ekranında açılır.",
     L"Bu port için yapıldı.",
+    L"OYUN GÜNLÜĞÜ",
+    L"Günlüğü göster",
+    L"Günlüğü kopyala",
+    L"Kopyasını kaydet...",
+    L"Henüz günlük yok: oyun açılınca oluşturulur.",
+    L"Günlük kopyalandı (%.1f MB): yapıştırmanız yeterli.",
+    L"Kopya kaydedildi.",
+    L"Sonu takip et",
+    L"Tümünü kopyala",
+    L"[... günlüğün başı burada gösterilmiyor; Tümünü kopyala ve Kopyasını kaydet tüm dosyayı alır ...]",
+    L"Günlük — Resident Evil Code: Veronica X",
+    L"%s  ·  %.1f MB",
+    L"Günlük, oyunu başlatan terminal penceresine gidiyor; dosyayı almak için kısayoldan başlatın.",
 };
 static_assert(sizeof k_str_tr / sizeof k_str_tr[0] == S_COUNT, "k_str_tr: one text per StrId");
 
@@ -970,6 +1090,19 @@ static const wchar_t* const k_str_ar[] = {
     L"تخطي الشعارات والمقدمة",
     L"عند تشغيل اللعبة تُتخطّى شعارات CAPCOM وMT FRAMEWORK وفيديو المقدمة، فتبدأ مباشرة من شاشة العنوان.",
     L"صُنع لهذا المنفذ.",
+    L"سجل اللعبة",
+    L"عرض السجل",
+    L"نسخ السجل",
+    L"حفظ نسخة...",
+    L"لا يوجد سجل بعد: يُنشأ عند تشغيل اللعبة.",
+    L"تم نسخ السجل (%.1f ميغابايت): ما عليك إلا لصقه.",
+    L"تم حفظ النسخة.",
+    L"متابعة النهاية",
+    L"نسخ الكل",
+    L"[... بداية السجل غير معروضة هنا؛ «نسخ الكل» و«حفظ نسخة» يأخذان الملف كاملاً ...]",
+    L"السجل — Resident Evil Code: Veronica X",
+    L"%s  ·  %.1f MB",
+    L"يذهب السجل إلى نافذة الطرفية التي شغّلت اللعبة؛ شغّلها من الاختصار للحصول على الملف.",
 };
 static_assert(sizeof k_str_ar / sizeof k_str_ar[0] == S_COUNT, "k_str_ar: one text per StrId");
 
@@ -1084,6 +1217,19 @@ static const wchar_t* const k_str_zh[] = {
     L"跳过标志和开场动画",
     L"启动游戏时跳过 CAPCOM 和 MT FRAMEWORK 标志以及开场动画，直接进入标题画面。",
     L"为本移植版制作。",
+    L"游戏日志",
+    L"查看日志",
+    L"复制日志",
+    L"保存副本...",
+    L"还没有日志：游戏启动时才会创建。",
+    L"已复制日志 (%.1f MB)，直接粘贴即可。",
+    L"副本已保存。",
+    L"跟随末尾",
+    L"全部复制",
+    L"[... 此处不显示日志开头；“全部复制”和“保存副本”会使用完整文件 ...]",
+    L"日志 — Resident Evil Code: Veronica X",
+    L"%s  ·  %.1f MB",
+    L"日志正输出到启动游戏的终端窗口；请从快捷方式启动以获得日志文件。",
 };
 static_assert(sizeof k_str_zh / sizeof k_str_zh[0] == S_COUNT, "k_str_zh: one text per StrId");
 
@@ -1198,6 +1344,19 @@ static const wchar_t* const k_str_ko[] = {
     L"로고와 인트로 건너뛰기",
     L"게임을 시작하면 CAPCOM과 MT FRAMEWORK 로고와 인트로 영상을 건너뛰고 바로 타이틀 화면으로 갑니다.",
     L"이 포트를 위해 제작.",
+    L"게임 로그",
+    L"로그 보기",
+    L"로그 복사",
+    L"사본 저장...",
+    L"아직 로그가 없습니다. 게임을 시작하면 만들어집니다.",
+    L"로그를 복사했습니다 (%.1f MB). 붙여넣기만 하면 됩니다.",
+    L"사본을 저장했습니다.",
+    L"끝 따라가기",
+    L"모두 복사",
+    L"[... 로그의 앞부분은 여기 표시되지 않습니다. '모두 복사'와 '사본 저장'은 파일 전체를 사용합니다 ...]",
+    L"로그 — Resident Evil Code: Veronica X",
+    L"%s  ·  %.1f MB",
+    L"로그가 게임을 실행한 터미널 창으로 출력되고 있습니다. 파일로 받으려면 바로 가기로 실행하세요.",
 };
 static_assert(sizeof k_str_ko / sizeof k_str_ko[0] == S_COUNT, "k_str_ko: one text per StrId");
 
@@ -1312,6 +1471,19 @@ static const wchar_t* const k_str_ru[] = {
     L"Пропускать логотипы и вступление",
     L"При запуске пропускаются логотипы CAPCOM и MT FRAMEWORK и вступительный ролик: игра сразу открывается на титульном экране.",
     L"Сделано для этого порта.",
+    L"ЖУРНАЛ ИГРЫ",
+    L"Открыть журнал",
+    L"Скопировать журнал",
+    L"Сохранить копию...",
+    L"Журнала пока нет: он создаётся при запуске игры.",
+    L"Журнал скопирован (%.1f МБ): просто вставьте его.",
+    L"Копия сохранена.",
+    L"Следить за концом",
+    L"Копировать всё",
+    L"[... начало журнала здесь не показано; «Копировать всё» и «Сохранить копию» берут весь файл ...]",
+    L"Журнал — Resident Evil Code: Veronica X",
+    L"%s  ·  %.1f МБ",
+    L"Журнал выводится в окно терминала, из которого запущена игра; запустите её через ярлык, чтобы получить файл.",
 };
 static_assert(sizeof k_str_ru / sizeof k_str_ru[0] == S_COUNT, "k_str_ru: one text per StrId");
 

@@ -35,6 +35,7 @@
 #include "pad_map.h"
 #include "launcher_i18n.h"
 #include "patch_files.h"
+#include "log_viewer.h"
 
 /* button_icons.cpp: the keycaps' short labels and font, shared with the game. */
 std::wstring cv_key_cap_label(int vk);
@@ -428,6 +429,7 @@ struct UI {
     Capture cap = CAP_NONE; int cap_action = -1, cap_slot = 0; ULONGLONG cap_since = 0;
     std::vector<FilePatch> fpatches;   /* read from s.patch_dir when it changes or the page opens */
     int fpatch_files = 0; float patch_scroll = 0, patch_scroll_max = 0;
+    std::wstring log_msg;   /* after Copy / Save on the Advanced page */
     uint32_t pad_prev[PAD_PHYS_MAX] = {};
     std::vector<Hit> hits;
     std::wstring play_msg;
@@ -458,6 +460,7 @@ enum {
     ID_KEY_CLEAR = 1200, ID_BTN_CLEAR = 1300,                      /* + action * slots + slot */
     ID_OVERLAY = 1400, ID_OVERLAY_ITEM = 1410,                     /* + item */
     ID_PATCH_DIR_BROWSE = 1500, ID_PATCH_DIR_OPEN, ID_FPATCH = 1600,  /* + file patch index */
+    ID_LOG_VIEW = 2100, ID_LOG_COPY, ID_LOG_SAVE, ID_LOG_FOLDER,
 };
 
 void hit(float x, float y, float w, float h, int id) { g.hits.push_back({ RectF(x, y, w, h), id }); }
@@ -1222,6 +1225,22 @@ void draw_avancado(Graphics& gr, const Font& head, const Font& body, const Font&
         hit(cx, y, 24 + m.Width + 8, 28, ID_OVERLAY_ITEM + i);
         cx += 24 + m.Width + 26;
     }
+    y += 50;
+    /* The game's log: view it live, copy it, save a copy */
+    section(gr, T(S_LOG_TITLE), x, y, w, head);
+    y += 46;
+    const std::wstring lp = log_file_path();
+    button(gr, RectF(x, y, 150, 34), T(S_LOG_VIEW), ID_LOG_VIEW, body);
+    button(gr, RectF(x + 160, y, 150, 34), T(S_LOG_COPY), ID_LOG_COPY, body, false, !lp.empty());
+    button(gr, RectF(x + 320, y, 170, 34), T(S_LOG_SAVE), ID_LOG_SAVE, body, false, !lp.empty());
+    button(gr, RectF(x + 500, y, 150, 34), T(S_OPEN_FOLDER), ID_LOG_FOLDER, body, false, !lp.empty());
+    y += 44;
+    std::wstring log_note = g.log_msg;
+    if (log_note.empty()) {
+        if (lp.empty()) log_note = T(log_to_console() ? S_LOG_CONSOLE : S_LOG_NONE);
+        else { wchar_t b[1024]; swprintf(b, 1024, T(S_LOG_SIZE_FMT), lp.c_str(), log_size() / 1048576.0); log_note = b; }
+    }
+    text(gr, log_note, x, y, fsm, g.log_msg.empty() ? C_DIM : C_OK, StringAlignmentNear, w, 20);
 }
 
 void paint(HDC hdc)
@@ -1337,6 +1356,37 @@ std::wstring pick(bool folder, const std::wstring& start, const wchar_t* filter_
     return out;
 }
 
+/* Where to save a copy of the log: a Save dialog, a dated name to start from. */
+std::wstring pick_log_save(HWND owner)
+{
+    std::wstring out;
+    IFileSaveDialog* dlg = nullptr;
+    if (FAILED(CoCreateInstance(CLSID_FileSaveDialog, NULL, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dlg)))) return out;
+    SYSTEMTIME t; GetLocalTime(&t);
+    wchar_t name[64];
+    swprintf(name, 64, L"code_veronica_log_%04d-%02d-%02d_%02d%02d.txt", t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute);
+    dlg->SetFileName(name);
+    dlg->SetDefaultExtension(L"txt");
+    COMDLG_FILTERSPEC f[2] = { { L"Log (*.txt)", L"*.txt" }, { T(S_ALL_FILES), L"*.*" } };
+    dlg->SetFileTypes(2, f);
+    if (SUCCEEDED(dlg->Show(owner))) {
+        IShellItem* r = nullptr;
+        if (SUCCEEDED(dlg->GetResult(&r))) {
+            PWSTR p = nullptr;
+            if (SUCCEEDED(r->GetDisplayName(SIGDN_FILESYSPATH, &p))) { out = p; CoTaskMemFree(p); }
+            r->Release();
+        }
+    }
+    dlg->Release();
+    return out;
+}
+
+LogViewerText log_viewer_text()
+{
+    return { T(S_LOG_WINDOW), T(S_LOG_COPY_ALL), T(S_LOG_SAVE), T(S_OPEN_FOLDER), T(S_LOG_FOLLOW), T(S_LOG_CUT),
+             T(S_LOG_NONE), T(S_LOG_CONSOLE), T(S_LOG_COPIED_FMT), T(S_LOG_SAVED) };
+}
+
 void open_in_explorer(const std::wstring& p)
 {
     if (p.empty()) return;
@@ -1421,7 +1471,7 @@ void click(int id)
     }
     if (g.cap != CAP_NONE) { g.cap = CAP_NONE; g.cap_action = -1; }
     if (id >= ID_NAV && id < ID_NAV + P_COUNT) {
-        g.page = (Page)(id - ID_NAV); g.cache_msg.clear();
+        g.page = (Page)(id - ID_NAV); g.cache_msg.clear(); g.log_msg.clear();
         if (g.page == P_PATCHES) scan_patch_dir();   /* the folder may have new files */
     }
     else if (id >= ID_PATCH && id < ID_PATCH + NPATCHES) { g.s.patch[id - ID_PATCH] ^= true; changed(); }
@@ -1457,6 +1507,16 @@ void click(int id)
         g.cap_since = GetTickCount64();
         for (int i = 0; i < PAD_PHYS_MAX; i++) { PadPhys p; pad_phys_poll(i, &p); g.pad_prev[i] = p.buttons; }
     }
+    else if (id == ID_LOG_VIEW) { g.log_msg.clear(); log_viewer_open(g.hwnd, log_viewer_text(), pick_log_save); }
+    else if (id == ID_LOG_COPY) {
+        const unsigned long long n = log_copy_to_clipboard(g.hwnd);
+        if (n) { wchar_t b[200]; swprintf(b, 200, T(S_LOG_COPIED_FMT), n / 1048576.0); g.log_msg = b; }
+    }
+    else if (id == ID_LOG_SAVE) {
+        const std::wstring d = pick_log_save(g.hwnd);
+        if (!d.empty() && log_save_copy(d)) g.log_msg = T(S_LOG_SAVED);
+    }
+    else if (id == ID_LOG_FOLDER) open_in_explorer(log_file_path());
     else if (id == ID_PATCH_DIR_BROWSE) {
         auto p = pick(true, g.s.patch_dir, nullptr, nullptr);
         if (!p.empty()) { g.s.patch_dir = p; scan_patch_dir(); changed(); }

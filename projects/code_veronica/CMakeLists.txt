@@ -217,6 +217,7 @@ add_executable(${PROJECT_NAME}
     launcher.cpp
     button_icons.cpp
     patch_files.cpp
+    log_viewer.cpp
     stubs.cpp
     ${PS3RECOMP_SCAFFOLD}
     ${HLE_NID_TABLE}
@@ -386,3 +387,10 @@ foreach(FFMPEG_DLL avcodec-61.dll avutil-59.dll swscale-8.dll swresample-5.dll)
         "${PS3RECOMP_DIR}/third_party/ffmpeg/bin/${FFMPEG_DLL}"
         "$<TARGET_FILE_DIR:MyGameRecomp>/${FFMPEG_DLL}")
 endforeach()
+
+# Opt-in regression check, built only through build-release.cmd when
+# CV_FP_TESTS=1. It has no game assets, runtime or graphics-device dependency.
+add_executable(code_veronica_fp_tests EXCLUDE_FROM_ALL
+    "${PS3RECOMP_DIR}/libs/video/tests/test_fp_decompiler.c"
+    "${PS3RECOMP_DIR}/libs/video/rsx_fp_decompiler.c")
+target_include_directories(code_veronica_fp_tests PRIVATE "${PS3RECOMP_DIR}/include")
