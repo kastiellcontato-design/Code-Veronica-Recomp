@@ -56,6 +56,8 @@
 #include <io.h>        /* _dup2: the log redirect of a double-clicked start */
 #endif
 
+extern "C" void pad_phys_rumble_off(void);   /* libs/input/pad_phys.c */
+
 /* ---------------------------------------------------------------------------
  * What the scaffold gives this file
  * -----------------------------------------------------------------------*/
@@ -289,7 +291,9 @@ static DWORD WINAPI frame_clock(LPVOID)
             if (pumped != 0) {
                 /* Window closed: end the process. Left running, the guest went
                  * on headless (CPU, audio) with nothing on screen. Terminate,
-                 * not exit(): SPU and PPU threads are still mid-flight. */
+                 * not exit(): SPU and PPU threads are still mid-flight. A motor
+                 * the game left running would keep going, so stop them first. */
+                pad_phys_rumble_off();
                 fflush(nullptr);
 #ifdef _WIN32
                 TerminateProcess(GetCurrentProcess(), 0);

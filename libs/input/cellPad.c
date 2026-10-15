@@ -1112,12 +1112,20 @@ s32 cellPadSetActDirect(u32 port_no, CellPadActParam* param)
     param = GUEST_PTR(param, CellPadActParam*);
 
 #if PAD_BACKEND_XINPUT
-    /* Map to XInput vibration */
+    /* The PS3's small motor is on/off (0 or 1) and its large one 0..255.
+     * Xbox, DualShock 4 and DualSense pads -- pad_phys.c. While the options
+     * menu has the focus the game is paused, so keep the motors still. */
     if (port_no < PAD_MAX_HOST_PORTS && s_host_state[port_no].connected) {
-        XINPUT_VIBRATION vib;
-        vib.wLeftMotorSpeed  = (WORD)(param->motor[CELL_PAD_ACTUATOR_PARAM_LARGE] * 257);
-        vib.wRightMotorSpeed = (WORD)(param->motor[CELL_PAD_ACTUATOR_PARAM_SMALL] * 257);
-        XInputSetState((DWORD)port_no, &vib);
+        uint8_t large = param->motor[CELL_PAD_ACTUATOR_PARAM_LARGE];
+        uint8_t weak = param->motor[CELL_PAD_ACTUATOR_PARAM_SMALL] ? 255 : 0;
+        static int s_said;
+        if ((large || weak) && !s_said) {
+            s_said = 1;
+            fprintf(stderr, "[cellPad] first rumble: port %u, large %u, weak %u\n",
+                    port_no, large, weak);
+        }
+        if (g_pad_block) large = weak = 0;
+        pad_phys_rumble((int)port_no, large, weak);
     }
 #endif
 

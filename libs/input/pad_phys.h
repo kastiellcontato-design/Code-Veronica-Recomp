@@ -43,6 +43,12 @@ typedef struct {
 #define PAD_PHYS_MAX 4
 int pad_phys_poll(int index, PadPhys* out);
 
+/* Set controller `index`'s motors (same numbering as pad_phys_poll): `large`
+ * is the strong low-frequency motor, `weak` the weak high-frequency one,
+ * 0..255 each. Sony pads are written only when the values change. */
+void pad_phys_rumble(int index, uint8_t large, uint8_t weak);
+void pad_phys_rumble_off(void);   /* every controller */
+
 /* Short identifiers used in config strings ("south", "l1", "up", ...). */
 const char* pad_phys_id(int pb);
 int         pad_phys_from_id(const char* id);   /* -1 if unknown */

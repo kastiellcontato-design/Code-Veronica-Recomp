@@ -79,7 +79,11 @@ typedef struct {
     volatile LONG used;
     HANDLE   h;
     int      ds5;          /* DualSense family */
+    int      bt;           /* over Bluetooth (its input report is not the 64-byte USB one) */
     USHORT   in_len;       /* InputReportByteLength */
+    USHORT   out_len;      /* OutputReportByteLength */
+    int      rumble;       /* last motors sent, large << 8 | weak; -1 = none yet */
+    uint8_t  seq;          /* DualSense Bluetooth output sequence */
     SRWLOCK  lock;
     PadPhys  st;
     char     path[512];
@@ -214,12 +218,13 @@ static void sony_scan(void)
         HIDD_ATTRIBUTES at; at.Size = sizeof at;
         int kind = 0;
         if (HidD_GetAttributes(h, &at) && at.VendorID == 0x054C) kind = sony_pid_kind(at.ProductID);
-        USHORT in_len = 0;
+        USHORT in_len = 0, out_len = 0;
         if (kind) {
             PHIDP_PREPARSED_DATA pp = NULL; HIDP_CAPS caps;
             if (HidD_GetPreparsedData(h, &pp)) {
                 if (HidP_GetCaps(pp, &caps) == HIDP_STATUS_SUCCESS) {
                     in_len = caps.InputReportByteLength;
+                    out_len = caps.OutputReportByteLength;
                     /* the gamepad collection only (usage page 1, usage 5) */
                     if (!(caps.UsagePage == 1 && caps.Usage == 5)) kind = 0;
                 }
@@ -232,6 +237,7 @@ static void sony_scan(void)
         if (slot < 0) { CloseHandle(h); continue; }
         SonyDev* d = &s_sony[slot];
         d->h = h; d->ds5 = (kind == PAD_KIND_DUALSENSE); d->in_len = in_len;
+        d->out_len = out_len; d->bt = in_len != 64; d->rumble = -1; d->seq = 0;
         strncpy(d->path, det->DevicePath, sizeof d->path - 1);
         HANDLE th = CreateThread(NULL, 0, sony_reader, d, 0, NULL);
         if (th) CloseHandle(th);
@@ -254,6 +260,100 @@ static void sony_start(void)
     if (getenv("PAD_NO_HID")) return;
     HANDLE th = CreateThread(NULL, 0, sony_manager, NULL, 0, NULL);
     if (th) CloseHandle(th);
+}
+
+/* ---- Rumble ----------------------------------------------------------------
+ * Sony controllers take it in an HID output report: DualShock 4 report 0x05
+ * (USB) / 0x11 (Bluetooth), DualSense 0x02 (USB) / 0x31 (Bluetooth, in its
+ * "compatible vibration" mode). Bluetooth reports end in a CRC-32 of 0xA2 plus
+ * the report. Only the motor bits are flagged valid, so the light bar and the
+ * rest keep their state. */
+static uint32_t crc32_bt(const uint8_t* p, size_t n)
+{
+    uint32_t c = 0xFFFFFFFFu;
+    const uint8_t a2 = 0xA2;
+    for (size_t i = 0; i <= n; i++) {
+        c ^= i == 0 ? a2 : p[i - 1];
+        for (int k = 0; k < 8; k++) c = (c >> 1) ^ (0xEDB88320u & (0u - (c & 1u)));
+    }
+    return ~c;
+}
+
+static void sony_write(SonyDev* d, const uint8_t* buf, DWORD len)
+{
+    OVERLAPPED ov; memset(&ov, 0, sizeof ov);
+    ov.hEvent = CreateEventA(NULL, TRUE, FALSE, NULL);
+    if (!ov.hEvent) return;
+    DWORD put = 0;
+    if (!WriteFile(d->h, buf, len, &put, &ov) && GetLastError() == ERROR_IO_PENDING) {
+        if (WaitForSingleObject(ov.hEvent, 100) != WAIT_OBJECT_0) CancelIo(d->h);
+        GetOverlappedResult(d->h, &ov, &put, TRUE);
+    }
+    CloseHandle(ov.hEvent);
+}
+
+static void sony_rumble(SonyDev* d, uint8_t large, uint8_t weak)
+{
+    uint8_t b[96]; memset(b, 0, sizeof b);
+    DWORD len;
+    if (!d->ds5 && !d->bt) {                       /* DualShock 4, USB */
+        b[0] = 0x05; b[1] = 0x01; b[4] = weak; b[5] = large;
+        len = 32;
+    } else if (!d->ds5) {                          /* DualShock 4, Bluetooth */
+        b[0] = 0x11; b[1] = 0xC0; b[3] = 0x01; b[6] = weak; b[7] = large;
+        uint32_t c = crc32_bt(b, 74);
+        b[74] = (uint8_t)c; b[75] = (uint8_t)(c >> 8); b[76] = (uint8_t)(c >> 16); b[77] = (uint8_t)(c >> 24);
+        len = 78;
+    } else if (!d->bt) {                           /* DualSense, USB */
+        b[0] = 0x02; b[1] = 0x03; b[3] = weak; b[4] = large;
+        len = 48;
+    } else {                                       /* DualSense, Bluetooth */
+        b[0] = 0x31; b[1] = (uint8_t)(d->seq << 4); b[2] = 0x10;
+        d->seq = (uint8_t)((d->seq + 1) & 0x0F);
+        b[3] = 0x03; b[5] = weak; b[6] = large;
+        uint32_t c = crc32_bt(b, 74);
+        b[74] = (uint8_t)c; b[75] = (uint8_t)(c >> 8); b[76] = (uint8_t)(c >> 16); b[77] = (uint8_t)(c >> 24);
+        len = 78;
+    }
+    if (d->out_len && d->out_len > len && d->out_len <= sizeof b) len = d->out_len;
+    sony_write(d, b, len);
+}
+
+void pad_phys_rumble(int index, uint8_t large, uint8_t weak)
+{
+    sony_start();
+    int n = 0;
+    for (int i = 0; i < 4; i++) {
+        XINPUT_STATE st;
+        if (XInputGetState((DWORD)i, &st) != ERROR_SUCCESS) continue;
+        if (n++ == index) {
+            XINPUT_VIBRATION v;
+            v.wLeftMotorSpeed = (WORD)(large * 257);
+            v.wRightMotorSpeed = (WORD)(weak * 257);
+            XInputSetState((DWORD)i, &v);
+            return;
+        }
+    }
+    for (int k = 0; k < SONY_MAX; k++) {
+        SonyDev* d = &s_sony[k];
+        if (!d->used) continue;
+        AcquireSRWLockShared(&d->lock);
+        int on = d->st.connected;
+        ReleaseSRWLockShared(&d->lock);
+        if (!on) continue;
+        if (n++ != index) continue;
+        const int want = large << 8 | weak;
+        if (want != d->rumble && d->h) {
+            d->rumble = want;
+            sony_rumble(d, large, weak);
+        }
+        return;
+    }
+}
+
+void pad_phys_rumble_off(void)
+{
+    for (int i = 0; i < PAD_PHYS_MAX; i++) pad_phys_rumble(i, 0, 0);
 }
 
 int pad_phys_poll(int index, PadPhys* out)
@@ -289,4 +389,6 @@ int pad_phys_from_id(const char* id)
     return -1;
 }
 int pad_phys_poll(int index, PadPhys* out) { (void)index; memset(out, 0, sizeof *out); return 0; }
+void pad_phys_rumble(int index, uint8_t large, uint8_t weak) { (void)index; (void)large; (void)weak; }
+void pad_phys_rumble_off(void) { }
 #endif
