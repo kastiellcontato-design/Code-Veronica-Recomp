@@ -444,6 +444,8 @@ extern "C" void ps3_indirect_call(ppu_context* ctx);
  * instead of running the literal `load OPD ptr; bctrl` trampoline (whose import
  * pointer table the recomp never fills). See --hle-stubs. */
 extern "C" void ps3_hle_call(unsigned int nid, ppu_context* ctx);
+/* Switchable instruction patches (--patches): the flag a patched site tests. */
+extern "C" volatile unsigned char* ps3_patch_flag(const char* name);
 
 /* Trampoline function pointer for cross-fragment branches (TLS).
  * PPU_THREAD_LOCAL comes from ppu_recomp.h, included above. */
@@ -626,6 +628,11 @@ class PPULifter:
         # `.lib.stub` trampoline (which derefs an import pointer table the recomp
         # never populates -> bctrl to garbage). Populated from --hle-stubs.
         self.hle_stub_nids: dict[int, int] = {}
+        # Switchable instruction patches (--patches): addr -> (name, word). The
+        # site is lifted twice, original and replacement, and a runtime flag
+        # named after the patch picks one -- the equivalent of an emulator
+        # patch that writes one instruction word, but switchable at run time.
+        self.patches: dict[int, tuple[str, int]] = {}
         # Module primary TOC (r2). Set by main() only when the ELF yields exactly
         # one TOC candidate; enables the `ld r2, N(r1)` restore lowering below.
         self.toc_base: int = 0
@@ -734,6 +741,14 @@ class PPULifter:
                 emitted_labels.add(insn.addr)
 
             c_line = self._translate(insn, func)
+            patch = self.patches.get(insn.addr)
+            if patch is not None:
+                pname, pword = patch
+                alt = self._translate(decode(pword, insn.addr), func) or ";"
+                c_line = (f'{{ static volatile unsigned char* _pf = 0; '
+                          f'if (!_pf) _pf = ps3_patch_flag("{pname}"); '
+                          f'if (*_pf) {{ {alt} }} else {{ {c_line or ";"} }} }}'
+                          f'  /* patch {pname}: 0x{pword:08X} */')
             if c_line:
                 func.body_lines.append(f"    {c_line}")
 
@@ -4036,7 +4051,7 @@ _WORKER_STATE: dict = {}
 
 def _worker_init(segs, big_endian, name_map, prefix, hle_stub_nids=None,
                  function_entries=None, code_lo=0, code_hi=None, jump_tables=None,
-                 toc_base=0):
+                 toc_base=0, patches=None):
     _WORKER_STATE["segs"] = segs
     _WORKER_STATE["be"] = big_endian
     _WORKER_STATE["names"] = name_map
@@ -4051,6 +4066,7 @@ def _worker_init(segs, big_endian, name_map, prefix, hle_stub_nids=None,
     _WORKER_STATE["code_lo"] = code_lo
     _WORKER_STATE["code_hi"] = code_hi
     _WORKER_STATE["jump_tables"] = jump_tables or {}
+    _WORKER_STATE["patches"] = patches or {}
 
 
 def _worker_lift(task):
@@ -4066,6 +4082,7 @@ def _worker_lift(task):
     lifter.code_hi = _WORKER_STATE.get("code_hi", None)
     lifter.jump_tables = _WORKER_STATE.get("jump_tables", {})
     lifter.toc_base = _WORKER_STATE.get("toc_base", 0)
+    lifter.patches = _WORKER_STATE.get("patches", {})
     results = []
     for start, end in bounds:
         blob = b""
@@ -4100,7 +4117,7 @@ def _parallel_lift(lifter, func_bounds, segs, big_endian, jobs):
                    initargs=(segs, big_endian, lifter.name_map, lifter.prefix,
                              lifter.hle_stub_nids, lifter.function_entries,
                              lifter.code_lo, lifter.code_hi, lifter.jump_tables,
-                             getattr(lifter, "toc_base", 0)))
+                             getattr(lifter, "toc_base", 0), lifter.patches))
     try:
         for idx0, results, ct, bt in pool.imap_unordered(_worker_lift, tasks):
             results_by_idx[idx0] = results
@@ -4170,7 +4187,22 @@ def main() -> None:
                              "instead of its literal .lib.stub trampoline, and "
                              "split out as its own 0x20-byte function so direct "
                              "calls to it dispatch to the HLE handler.")
+    parser.add_argument("--patches", metavar="FILE", default=None,
+                        help="JSON list of switchable instruction patches: "
+                             "[{\"name\": ..., \"addr\": \"0x...\", \"word\": \"0x...\"}]. "
+                             "Each site is lifted as both its original and the "
+                             "replacement word; the runtime flag of that name "
+                             "(PS3_PATCHES env, ps3_patch_set) picks one.")
     args = parser.parse_args()
+
+    patches: dict[int, tuple[str, int]] = {}
+    if args.patches:
+        with open(args.patches, encoding="utf-8") as _pf:
+            for _e in json.load(_pf).get("patches", []):
+                for _site in _e["sites"]:
+                    patches[int(str(_site["addr"]), 0)] = (
+                        _e["name"], int(str(_site["word"]), 0) & 0xFFFFFFFF)
+        print(f"  {len(patches)} patch site(s) from {args.patches}")
 
     # Load firmware-import stubs (addr -> NID) up front; applied to func_bounds
     # and the lifter below.
@@ -4614,6 +4646,7 @@ def main() -> None:
         lifter.code_lo = min(s for s, _ in func_bounds)
         lifter.code_hi = max(e for _, e in func_bounds)
     lifter.hle_stub_nids = hle_stubs
+    lifter.patches = patches
     lifter.function_entries = _func_entries
     lifter.jump_tables = jt_dispatchers
 

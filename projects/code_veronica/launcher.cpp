@@ -50,6 +50,7 @@ void* rsx_d3d12_window(void);
 extern void (*g_rsx_menu_hook)(void);
 extern int g_pad_block;
 void  cellpad_set_map(const int* btn, const int* key);
+void  ps3_patch_set(const char* name, int on);
 }
 namespace {
 
@@ -67,6 +68,7 @@ struct Settings {
     int mode = 0;          /* 0 janela, 1 sem borda, 2 tela cheia */
     int res = 1;           /* index into k_res */
     int aa = 0;            /* anti-aliasing: 0 off, 1 FXAA, 2 SMAA */
+    bool patch[8] = {};    /* k_patches on/off */
     int layout = 0;        /* 0 PlayStation, 1 Xbox */
     std::wstring game, rap, fw;
     int key[PA_COUNT];
@@ -79,6 +81,16 @@ const ResOpt k_res[] = {
 const wchar_t* k_modes[] = { L"Em janela", L"Janela sem borda", L"Tela cheia" };
 const char* k_mode_env[] = { "window", "borderless", "fullscreen" };
 const wchar_t* k_aa[] = { L"Desligado", L"FXAA (leve)", L"SMAA (melhor)" };
+
+/* Game patches (projects/code_veronica/patches.json, lifted as switchable
+ * sites): id = the runtime flag name. */
+struct PatchOpt { const char* id; const wchar_t* title; const wchar_t* desc; const wchar_t* credit; };
+const PatchOpt k_patches[] = {
+    { "cv_door_skip", L"Pular animação das portas",
+      L"Ao passar por uma porta, a próxima sala carrega direto, sem a animação da porta abrindo.",
+      L"\"Remove Door Animations\" por Kapdap, da lista de patches do RPCS3." },
+};
+const int NPATCHES = sizeof k_patches / sizeof k_patches[0];
 
 /* Actions shown on the Controles page. */
 const int k_rows[] = { PA_CROSS, PA_CIRCLE, PA_SQUARE, PA_TRIANGLE, PA_L1, PA_R1, PA_L2, PA_R2,
@@ -130,6 +142,8 @@ Settings load_settings()
     s.res    = _wtoi(ini_get(L"tela", L"resolucao", L"1").c_str());
     s.aa     = _wtoi(ini_get(L"tela", L"antialias", L"0").c_str());
     s.layout = _wtoi(ini_get(L"controles", L"layout", L"0").c_str());
+    for (int i = 0; i < NPATCHES; i++)
+        s.patch[i] = _wtoi(ini_get(L"patches", widen(k_patches[i].id).c_str(), L"0").c_str()) != 0;
     if (s.mode < 0 || s.mode > 2) s.mode = 0;
     if (s.res < 0 || s.res > 4) s.res = 1;
     if (s.aa < 0 || s.aa > 2) s.aa = 0;
@@ -165,6 +179,8 @@ void save_settings(const Settings& s)
     ini_set(L"tela", L"resolucao", std::to_wstring(s.res));
     ini_set(L"tela", L"antialias", std::to_wstring(s.aa));
     ini_set(L"controles", L"layout", std::to_wstring(s.layout));
+    for (int i = 0; i < NPATCHES; i++)
+        ini_set(L"patches", widen(k_patches[i].id).c_str(), s.patch[i] ? L"1" : L"0");
     ini_set(L"pastas", L"jogo", s.game);
     ini_set(L"pastas", L"rap", s.rap);
     ini_set(L"pastas", L"firmware", s.fw);
@@ -241,7 +257,7 @@ Bitmap* load_png(const char* name)
 }
 
 /* ---------------------------------------------------------------- UI state */
-enum Page { P_INICIO, P_JOGO, P_CONTROLES };
+enum Page { P_INICIO, P_JOGO, P_CONTROLES, P_PATCHES };
 enum Capture { CAP_NONE, CAP_KEY, CAP_BTN };
 
 struct Hit { RectF r; int id; };
@@ -274,7 +290,7 @@ enum {
     ID_PLAY = 400, ID_RESUME, ID_QUIT,
     ID_GAME_BROWSE = 500, ID_GAME_OPEN, ID_RAP_BROWSE, ID_RAP_OPEN, ID_FW_BROWSE, ID_FW_OPEN,
     ID_LAYOUT_PS = 600, ID_LAYOUT_XB,
-    ID_KEY = 700, ID_BTN = 800, ID_RESTORE = 900,
+    ID_KEY = 700, ID_BTN = 800, ID_RESTORE = 900, ID_PATCH = 1000,  /* + index */
 };
 
 void hit(float x, float y, float w, float h, int id) { g.hits.push_back({ RectF(x, y, w, h), id }); }
@@ -474,8 +490,8 @@ void draw_sidebar(Graphics& gr, const Font& title, const Font& title2, const Fon
     SolidBrush side(C_SIDE); gr.FillRectangle(&side, 0, 0, SIDE, H);
     text(gr, L"RESIDENT EVIL", 22, 26, title, C_TEXT);
     text(gr, L"CODE:VERONICA X", 22, 56, title2, C_RED);
-    const wchar_t* items[] = { L"Início", L"Jogo", L"Controles" };
-    for (int i = 0; i < 3; i++) {
+    const wchar_t* items[] = { L"Início", L"Jogo", L"Controles", L"Patches" };
+    for (int i = 0; i < 4; i++) {
         float y = 120.0f + i * 46;
         bool act = (int)g.page == i, hot = g.hover == ID_NAV + i;
         if (act || hot) { SolidBrush hb(act ? Color(255, 30, 22, 22) : C_HOVER); gr.FillRectangle(&hb, 0.0f, y, (float)SIDE, 44.0f); }
@@ -583,6 +599,34 @@ void draw_jogo(Graphics& gr, const Font& head, const Font& body, const Font& fsm
     if (g.running)
         text(gr, L"Mudanças nesta aba valem quando o jogo for aberto de novo.", x, y + 110, body, C_RED_HI,
              StringAlignmentNear, 690, 24);
+}
+
+void draw_patches(Graphics& gr, const Font& head, const Font& body, const Font& fsm)
+{
+    float x = SIDE + 32.0f, y = 34;
+    const float w = W - SIDE - 64.0f;
+    section(gr, L"PATCHES DO JOGO", x, y, w, head);
+    text(gr, L"Mudanças no próprio código do jogo. Valem na hora, mesmo com o jogo aberto.",
+         x, y + 32, fsm, C_DIM, StringAlignmentNear, w, 20);
+    y += 74;
+    for (int i = 0; i < NPATCHES; i++) {
+        const bool on = g.s.patch[i], hot = g.hover == ID_PATCH + i;
+        RectF card(x, y, w, 84);
+        GraphicsPath* cp = round_rect(card, 6);
+        SolidBrush cb(hot ? C_HOVER : C_PANEL); gr.FillPath(&cb, cp);
+        Pen cbd(on ? C_RED : C_FIELD_BD, 1); gr.DrawPath(&cbd, cp); delete cp;
+        /* switch */
+        RectF sw(x + w - 70, y + 28, 48, 26);
+        GraphicsPath* sp = round_rect(sw, 13);
+        SolidBrush sb(on ? C_RED : Color(255, 60, 52, 52)); gr.FillPath(&sb, sp); delete sp;
+        SolidBrush knob(C_TEXT);
+        gr.FillEllipse(&knob, on ? sw.X + sw.Width - 23 : sw.X + 3, sw.Y + 3, 20.0f, 20.0f);
+        text(gr, k_patches[i].title, x + 18, y + 10, body, C_TEXT, StringAlignmentNear, w - 120, 24);
+        text(gr, k_patches[i].desc, x + 18, y + 34, fsm, C_DIM, StringAlignmentNear, w - 120, 20);
+        text(gr, k_patches[i].credit, x + 18, y + 54, fsm, Color(255, 120, 110, 104), StringAlignmentNear, w - 120, 20);
+        hit(x, y, w, 84, ID_PATCH + i);
+        y += 96;
+    }
 }
 
 void draw_radio(Graphics& gr, float x, float y, const std::wstring& t, bool on, int id, const Font& f)
@@ -785,7 +829,8 @@ void paint(HDC hdc)
 
     if (g.page == P_INICIO) draw_inicio(gr, fHead, fBody, fCode);
     else if (g.page == P_JOGO) draw_jogo(gr, fHead, fBody, fSmall);
-    else draw_controles(gr, fHead, fBody, fSmall, fCol);
+    else if (g.page == P_CONTROLES) draw_controles(gr, fHead, fBody, fSmall, fCol);
+    else draw_patches(gr, fHead, fBody, fSmall);
     draw_sidebar(gr, fTitle, fTitle2, fNav);
     draw_play(gr, fBig, fSmall);
 
@@ -872,6 +917,7 @@ void apply_live()
         rsx_d3d12_set_aa(g.s.aa);
     }
     cellpad_set_map(g.s.btn, g.s.key);
+    for (int i = 0; i < NPATCHES; i++) ps3_patch_set(k_patches[i].id, g.s.patch[i]);
 }
 
 void show_menu()
@@ -914,7 +960,8 @@ void click(int id)
         g.open_dd = -1; InvalidateRect(g.hwnd, NULL, FALSE); return;
     }
     if (g.cap != CAP_NONE) { g.cap = CAP_NONE; g.cap_action = -1; }
-    if (id >= ID_NAV && id < ID_NAV + 3) { g.page = (Page)(id - ID_NAV); }
+    if (id >= ID_NAV && id < ID_NAV + 4) { g.page = (Page)(id - ID_NAV); }
+    else if (id >= ID_PATCH && id < ID_PATCH + NPATCHES) { g.s.patch[id - ID_PATCH] ^= true; changed(); }
     else if (id == ID_DD_MODE || id == ID_DD_RES || id == ID_DD_AA) { g.open_dd = id; }
     else if (id == ID_GAME_BROWSE) { auto p = pick(true, g.s.game, nullptr, nullptr); if (!p.empty()) { g.s.game = p; changed(); } }
     else if (id == ID_RAP_BROWSE) { auto p = pick(false, g.s.rap, L"Licença PS3 (*.rap)", L"*.rap"); if (!p.empty()) { g.s.rap = p; changed(); } }
@@ -1063,6 +1110,10 @@ void start_game()
     set_env("RES_SCALE", k_res[s.res].scale);
     set_env("WINDOW_MODE", k_mode_env[s.mode]);
     set_env("AA_MODE", std::to_string(s.aa));
+    std::string pl;
+    for (int i = 0; i < NPATCHES; i++)
+        if (s.patch[i]) pl += (pl.empty() ? "" : ",") + std::string(k_patches[i].id);
+    set_env("PS3_PATCHES", pl);
     std::string bm, km;
     for (int a = 0; a < PA_COUNT; a++) {
         bm += std::string(k_pad_action_id[a]) + "=" + pad_phys_id(s.btn[a]) + (a + 1 < PA_COUNT ? "," : "");
