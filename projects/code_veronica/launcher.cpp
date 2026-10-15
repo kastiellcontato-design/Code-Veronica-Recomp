@@ -1,9 +1,11 @@
 /*
  * Code Veronica launcher: the window shown before the game starts.
  *
- * Three pages -- Inicio (display mode, render resolution), Jogo (game folder,
- * licence .rap, firmware) and Controles (keyboard and controller mapping) --
- * drawn with GDI+ in the Resident Evil palette. Every change is written to
+ * Five pages -- Inicio (display mode, render resolution, anti-aliasing), Jogo
+ * (game folder, licence .rap, firmware), Controles (keyboard and controller
+ * mapping), Patches and Avancado (language, shader cache) -- drawn with GDI+ in
+ * the Resident Evil palette, in Portuguese, English, Spanish or Japanese
+ * (launcher_i18n.h). Every change is written to
  * cv_launcher.ini beside the executable at once; "Jogar" turns the settings
  * into the environment the runtime reads (RES_SCALE, WINDOW_MODE, PS3_VFS_ROOT,
  * PS3_RAP_DIR, PS3_DEV_FLASH, PAD_BTNMAP, PAD_KEYMAP) and hands back the
@@ -31,6 +33,7 @@
 #include <cstdlib>
 #include "pad_phys.h"
 #include "pad_map.h"
+#include "launcher_i18n.h"
 
 #pragma comment(lib, "gdiplus.lib")
 #pragma comment(lib, "dwmapi.lib")
@@ -61,6 +64,52 @@ const Color C_BG(255, 21, 17, 17), C_SIDE(255, 13, 11, 11), C_PANEL(255, 30, 25,
             C_FIELD(255, 26, 22, 22), C_FIELD_BD(255, 70, 60, 58), C_OK(255, 120, 190, 110);
 
 const wchar_t* GAME_CODE = L"NPEB00553";
+
+/* ---------------------------------------------------------------- language */
+int g_lang = LANG_PT;        /* the language shown */
+int g_lang_pick = -1;        /* the choice: -1 = Sistema (follow Windows), else a Lang */
+const wchar_t* T(int id) { return k_str[g_lang][id]; }
+
+/* Windows' display language -> ours; anything we lack shows in English. */
+int system_lang()
+{
+    switch (PRIMARYLANGID(GetUserDefaultUILanguage())) {
+    case LANG_PORTUGUESE: return LANG_PT;  case LANG_SPANISH: return LANG_ES;
+    case LANG_JAPANESE:   return LANG_JA;  case LANG_FRENCH:  return LANG_FR;
+    case LANG_GERMAN:     return LANG_DE;  case LANG_ITALIAN: return LANG_IT;
+    case LANG_POLISH:     return LANG_PL;  case LANG_TURKISH: return LANG_TR;
+    case LANG_ARABIC:     return LANG_AR;  case LANG_CHINESE: return LANG_ZH;
+    case LANG_KOREAN:     return LANG_KO;  case LANG_RUSSIAN: return LANG_RU;
+    default:              return LANG_EN;
+    }
+}
+void set_lang_pick(int pick)
+{
+    g_lang_pick = pick;
+    g_lang = pick < 0 ? system_lang() : pick;
+}
+std::wstring Tf(int id, int n)                   /* a text with one %d */
+{
+    wchar_t b[256]; swprintf(b, 256, T(id), n); return b;
+}
+/* Font families for a language. Georgia and Segoe UI cover Latin and
+ * Cyrillic; Segoe UI also Arabic; Japanese, Chinese and Korean use the
+ * system's faces for them (the first one installed wins). */
+const wchar_t* family(bool serif, int lang)
+{
+    static const wchar_t* const ja_sans[] = { L"Yu Gothic UI", L"Meiryo UI", L"Meiryo", L"MS UI Gothic", nullptr };
+    static const wchar_t* const ja_serif[] = { L"Yu Mincho", L"MS Mincho", L"Yu Gothic UI", L"Meiryo", nullptr };
+    static const wchar_t* const zh[] = { L"Microsoft YaHei UI", L"Microsoft YaHei", L"SimHei", L"SimSun", nullptr };
+    static const wchar_t* const ko[] = { L"Malgun Gothic", L"Gulim", L"Dotum", nullptr };
+    const wchar_t* const* list = nullptr;
+    if (lang == LANG_JA) list = serif ? ja_serif : ja_sans;
+    else if (lang == LANG_ZH) list = zh;
+    else if (lang == LANG_KO) list = ko;
+    else if (lang == LANG_AR) return L"Segoe UI";
+    else return serif ? L"Georgia" : L"Segoe UI";
+    for (int i = 0; list[i]; i++) { FontFamily f(list[i]); if (f.IsAvailable()) return list[i]; }
+    return L"Segoe UI";
+}
 const int W = 1120, H = 770, SIDE = 230;
 
 /* ---------------------------------------------------------------- settings */
@@ -78,17 +127,16 @@ struct ResOpt { const wchar_t* name; const char* scale; };
 const ResOpt k_res[] = {
     { L"480p (854x480)", "0.6667" }, { L"Nativa (720p)", "1" }, { L"1080p (1920x1080)", "1.5" },
     { L"1440p (2560x1440)", "2" }, { L"4K (3840x2160)", "3" } };
-const wchar_t* k_modes[] = { L"Em janela", L"Janela sem borda", L"Tela cheia" };
 const char* k_mode_env[] = { "window", "borderless", "fullscreen" };
-const wchar_t* k_aa[] = { L"Desligado", L"FXAA (leve)", L"SMAA (melhor)" };
+std::wstring res_name(int i) { return i == 1 ? T(S_RES_NATIVE) : k_res[i].name; }
+std::wstring mode_name(int i) { return T(S_MODE_WINDOW + i); }
+std::wstring aa_name(int i) { return T(S_AA_OFF + i); }
 
 /* Game patches (projects/code_veronica/patches.json, lifted as switchable
  * sites): id = the runtime flag name. */
-struct PatchOpt { const char* id; const wchar_t* title; const wchar_t* desc; const wchar_t* credit; };
+struct PatchOpt { const char* id; int title, desc, credit; };
 const PatchOpt k_patches[] = {
-    { "cv_door_skip", L"Pular animação das portas",
-      L"Ao passar por uma porta, a próxima sala carrega direto, sem a animação da porta abrindo.",
-      L"\"Remove Door Animations\" por Kapdap, da lista de patches do RPCS3." },
+    { "cv_door_skip", S_PATCH_DOOR_T, S_PATCH_DOOR_D, S_PATCH_DOOR_C },
 };
 const int NPATCHES = sizeof k_patches / sizeof k_patches[0];
 
@@ -105,6 +153,17 @@ const wchar_t* k_pb_name[2][PB_COUNT] = {
       L"Select", L"Start", L"D-pad cima", L"D-pad baixo", L"D-pad esquerda", L"D-pad direita", L"PS", L"Touchpad" },
     { L"A", L"B", L"X", L"Y", L"LB", L"RB", L"LT", L"RT", L"LS", L"RS",
       L"Select", L"Start", L"D-pad cima", L"D-pad baixo", L"D-pad esquerda", L"D-pad direita", L"Guide", L"-" } };
+/* The d-pad's names are translated; the rest are the buttons' own names. */
+std::wstring action_name(int a)
+{
+    return (a >= PA_UP && a <= PA_RIGHT) ? T(S_DPAD_UP + (a - PA_UP)) : k_action_name[a];
+}
+std::wstring pb_name(int layout, int pb)
+{
+    if (pb < 0) return L"-";
+    return (pb >= PB_UP && pb <= PB_RIGHT) ? T(S_DPAD_UP + (pb - PB_UP)) : k_pb_name[layout][pb];
+}
+
 std::wstring ini_path()
 {
     wchar_t exe[MAX_PATH]; GetModuleFileNameW(NULL, exe, MAX_PATH);
@@ -142,6 +201,10 @@ Settings load_settings()
     s.res    = _wtoi(ini_get(L"tela", L"resolucao", L"1").c_str());
     s.aa     = _wtoi(ini_get(L"tela", L"antialias", L"0").c_str());
     s.layout = _wtoi(ini_get(L"controles", L"layout", L"0").c_str());
+    { std::wstring l = ini_get(L"launcher", L"idioma", L"system");
+      int pick = -1;
+      for (int i = 0; i < LANG_COUNT; i++) if (l == widen(k_lang_id[i])) pick = i;
+      set_lang_pick(pick); }
     for (int i = 0; i < NPATCHES; i++)
         s.patch[i] = _wtoi(ini_get(L"patches", widen(k_patches[i].id).c_str(), L"0").c_str()) != 0;
     if (s.mode < 0 || s.mode > 2) s.mode = 0;
@@ -179,6 +242,7 @@ void save_settings(const Settings& s)
     ini_set(L"tela", L"resolucao", std::to_wstring(s.res));
     ini_set(L"tela", L"antialias", std::to_wstring(s.aa));
     ini_set(L"controles", L"layout", std::to_wstring(s.layout));
+    ini_set(L"launcher", L"idioma", g_lang_pick < 0 ? std::wstring(L"system") : widen(k_lang_id[g_lang_pick]));
     for (int i = 0; i < NPATCHES; i++)
         ini_set(L"patches", widen(k_patches[i].id).c_str(), s.patch[i] ? L"1" : L"0");
     ini_set(L"pastas", L"jogo", s.game);
@@ -194,22 +258,21 @@ void save_settings(const Settings& s)
 std::wstring check_game(const std::wstring& g, bool* ok)
 {
     std::error_code ec; *ok = false;
-    if (g.empty()) return L"Escolha a pasta do jogo (" + std::wstring(GAME_CODE) + L").";
-    if (fs::exists(fs::path(g) / L"USRDIR" / L"EBOOT.elf", ec)) { *ok = true; return L"Jogo encontrado."; }
-    if (fs::exists(fs::path(g) / L"USRDIR" / L"EBOOT.BIN", ec))
-        return L"Falta o EBOOT.elf descriptografado em USRDIR (gere pelo RPCS3).";
-    return L"Esta pasta não tem USRDIR/EBOOT.elf.";
+    if (g.empty()) return T(S_CHK_GAME_CHOOSE);
+    if (fs::exists(fs::path(g) / L"USRDIR" / L"EBOOT.elf", ec)) { *ok = true; return T(S_CHK_GAME_OK); }
+    if (fs::exists(fs::path(g) / L"USRDIR" / L"EBOOT.BIN", ec)) return T(S_CHK_GAME_BIN);
+    return T(S_CHK_GAME_BAD);
 }
 std::wstring check_rap(const std::wstring& r, bool* ok)
 {
     std::error_code ec; *ok = !r.empty() && fs::is_regular_file(r, ec);
-    return *ok ? L"Licença encontrada." : L"Escolha o arquivo .rap do jogo.";
+    return T(*ok ? S_CHK_RAP_OK : S_CHK_RAP_BAD);
 }
 std::wstring check_fw(const std::wstring& f, bool* ok)
 {
     std::error_code ec;
     *ok = !f.empty() && fs::exists(fs::path(f) / L"sys" / L"external" / L"flashATRAC.pic", ec);
-    return *ok ? L"Firmware encontrado." : L"Escolha a pasta dev_flash (sem ela o jogo fica sem som).";
+    return T(*ok ? S_CHK_FW_OK : S_CHK_FW_BAD);
 }
 
 /* ---------------------------------------------------------------- keys */
@@ -217,13 +280,13 @@ std::wstring key_name(int vk)
 {
     switch (vk) {
     case 0: return L"-";
-    case VK_SPACE: return L"Espaço"; case VK_RETURN: return L"Enter"; case VK_BACK: return L"Backspace";
+    case VK_SPACE: return T(S_KEY_SPACE); case VK_RETURN: return L"Enter"; case VK_BACK: return L"Backspace";
     case VK_TAB: return L"Tab"; case VK_ESCAPE: return L"Esc";
-    case VK_LSHIFT: return L"Shift esquerdo"; case VK_RSHIFT: return L"Shift direito";
-    case VK_LCONTROL: return L"Ctrl esquerdo"; case VK_RCONTROL: return L"Ctrl direito";
-    case VK_LMENU: return L"Alt esquerdo"; case VK_RMENU: return L"Alt direito";
-    case VK_UP: return L"Seta cima"; case VK_DOWN: return L"Seta baixo";
-    case VK_LEFT: return L"Seta esquerda"; case VK_RIGHT: return L"Seta direita";
+    case VK_LSHIFT: return T(S_KEY_LSHIFT); case VK_RSHIFT: return T(S_KEY_RSHIFT);
+    case VK_LCONTROL: return T(S_KEY_LCTRL); case VK_RCONTROL: return T(S_KEY_RCTRL);
+    case VK_LMENU: return T(S_KEY_LALT); case VK_RMENU: return T(S_KEY_RALT);
+    case VK_UP: return T(S_KEY_UP); case VK_DOWN: return T(S_KEY_DOWN);
+    case VK_LEFT: return T(S_KEY_LEFT); case VK_RIGHT: return T(S_KEY_RIGHT);
     case VK_INSERT: return L"Insert"; case VK_DELETE: return L"Delete"; case VK_HOME: return L"Home";
     case VK_END: return L"End"; case VK_PRIOR: return L"Page Up"; case VK_NEXT: return L"Page Down";
     case VK_CAPITAL: return L"Caps Lock";
@@ -234,7 +297,7 @@ std::wstring key_name(int vk)
     UINT sc = MapVirtualKeyW(vk, MAPVK_VK_TO_VSC);
     wchar_t buf[64];
     if (sc && GetKeyNameTextW((LONG)(sc << 16), buf, 64) > 0) return buf;
-    return L"Tecla " + std::to_wstring(vk);
+    return Tf(S_KEY_N, vk);
 }
 
 /* ---------------------------------------------------------------- images */
@@ -257,7 +320,7 @@ Bitmap* load_png(const char* name)
 }
 
 /* ---------------------------------------------------------------- UI state */
-enum Page { P_INICIO, P_JOGO, P_CONTROLES, P_PATCHES };
+enum Page { P_INICIO, P_JOGO, P_CONTROLES, P_PATCHES, P_AVANCADO, P_COUNT };
 enum Capture { CAP_NONE, CAP_KEY, CAP_BTN };
 
 struct Hit { RectF r; int id; };
@@ -280,17 +343,21 @@ struct UI {
     int applied_mode = -1, applied_res = -1, applied_aa = -1;
     uint32_t combo_prev = 0;
     std::string eboot;
+    std::wstring cache_msg;        /* result of the last "clear shader cache" */
+    int dd_scroll = 0;             /* first visible row of the open dropdown list */
 };
 UI g;
 
 /* ids */
 enum {
     ID_NAV = 100,               /* + page */
-    ID_DD_MODE = 200, ID_DD_RES = 201, ID_DD_AA = 202, ID_DD_ITEM = 300,  /* + item index */
+    ID_DD_MODE = 200, ID_DD_RES = 201, ID_DD_AA = 202, ID_DD_LANG = 203, ID_DD_ITEM = 300,  /* + item index */
+    ID_DD_UP = 390, ID_DD_DOWN = 391,
     ID_PLAY = 400, ID_RESUME, ID_QUIT,
     ID_GAME_BROWSE = 500, ID_GAME_OPEN, ID_RAP_BROWSE, ID_RAP_OPEN, ID_FW_BROWSE, ID_FW_OPEN,
     ID_LAYOUT_PS = 600, ID_LAYOUT_XB,
     ID_KEY = 700, ID_BTN = 800, ID_RESTORE = 900, ID_PATCH = 1000,  /* + index */
+    ID_CACHE_CLEAR = 1100, ID_CACHE_OPEN,
 };
 
 void hit(float x, float y, float w, float h, int id) { g.hits.push_back({ RectF(x, y, w, h), id }); }
@@ -311,6 +378,16 @@ void text(Graphics& gr, const std::wstring& t, float x, float y, const Font& f, 
           StringAlignment h = StringAlignmentNear, float w = 0, float hh = 0)
 {
     SolidBrush b(c);
+    /* Arabic reads right to left: embed each text as a right-to-left run so
+     * mixed text like "(720p)" and the final full stop land where they belong. */
+    if (g_lang == LANG_AR) {
+        const std::wstring rtl = L"\u202B" + t + L"\u202C";
+        StringFormat sf; sf.SetAlignment(h); sf.SetLineAlignment(StringAlignmentCenter);
+        sf.SetTrimming(StringTrimmingEllipsisCharacter); sf.SetFormatFlags(StringFormatFlagsNoWrap);
+        if (w > 0) gr.DrawString(rtl.c_str(), -1, &f, RectF(x, y, w, hh), &sf, &b);
+        else { StringFormat s2; gr.DrawString(rtl.c_str(), -1, &f, PointF(x, y), &s2, &b); }
+        return;
+    }
     StringFormat sf; sf.SetAlignment(h); sf.SetLineAlignment(StringAlignmentCenter);
     sf.SetTrimming(StringTrimmingEllipsisPath);
     sf.SetFormatFlags(StringFormatFlagsNoWrap);
@@ -459,6 +536,10 @@ void button(Graphics& gr, RectF r, const std::wstring& label, int id, const Font
     if (enabled) hit(r.X, r.Y, r.Width, r.Height, id);
 }
 
+RectF g_dd_anchor;   /* where the open dropdown was drawn this frame */
+const int DD_VISIBLE = 9;  /* rows a dropdown list shows before it scrolls */
+const int ID_DD_LIST = 392;   /* the list's background: clicks there do nothing */
+
 void dropdown(Graphics& gr, RectF r, const std::wstring& value, int id, const Font& f, bool enabled = true)
 {
     bool hot = g.hover == id && enabled;
@@ -471,6 +552,7 @@ void dropdown(Graphics& gr, RectF r, const std::wstring& value, int id, const Fo
                       PointF(r.X + r.Width - 13, r.Y + r.Height / 2 + 3) };
     gr.FillPolygon(&ab, tri, 3);
     if (enabled) hit(r.X, r.Y, r.Width, r.Height, id);
+    if (id >= 0 && id == g.open_dd) g_dd_anchor = r;
 }
 
 void section(Graphics& gr, const std::wstring& t, float x, float y, float w, const Font& f)
@@ -480,9 +562,6 @@ void section(Graphics& gr, const std::wstring& t, float x, float y, float w, con
     gr.DrawLine(&pen, x, y + 26, x + w, y + 26);
 }
 
-/* An open dropdown's list, drawn last so it sits on top. */
-struct DDList { int id = -1; RectF anchor; std::vector<std::wstring> items; int sel = 0; };
-DDList g_dd;
 
 /* ---------------------------------------------------------------- pages */
 void draw_sidebar(Graphics& gr, const Font& title, const Font& title2, const Font& nav)
@@ -490,13 +569,12 @@ void draw_sidebar(Graphics& gr, const Font& title, const Font& title2, const Fon
     SolidBrush side(C_SIDE); gr.FillRectangle(&side, 0, 0, SIDE, H);
     text(gr, L"RESIDENT EVIL", 22, 26, title, C_TEXT);
     text(gr, L"CODE:VERONICA X", 22, 56, title2, C_RED);
-    const wchar_t* items[] = { L"Início", L"Jogo", L"Controles", L"Patches" };
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < P_COUNT; i++) {
         float y = 120.0f + i * 46;
         bool act = (int)g.page == i, hot = g.hover == ID_NAV + i;
         if (act || hot) { SolidBrush hb(act ? Color(255, 30, 22, 22) : C_HOVER); gr.FillRectangle(&hb, 0.0f, y, (float)SIDE, 44.0f); }
         if (act) { SolidBrush rb(C_RED); gr.FillRectangle(&rb, 0.0f, y, 3.0f, 44.0f); }
-        text(gr, items[i], 24, y, nav, act ? C_RED_HI : C_TEXT, StringAlignmentNear, SIDE - 30, 44);
+        text(gr, T(S_NAV_HOME + i), 24, y, nav, act ? C_RED_HI : C_TEXT, StringAlignmentNear, SIDE - 30, 44);
         hit(0, y, SIDE, 44, ID_NAV + i);
     }
 }
@@ -505,16 +583,16 @@ void draw_play(Graphics& gr, const Font& big, const Font& fsm)
 {
     RectF r(W - 250.0f, H - 78.0f, 220.0f, 50.0f);
     if (g.running) {
-        button(gr, RectF(W - 300.0f, H - 78.0f, 270.0f, 50.0f), L"VOLTAR AO JOGO", ID_RESUME, big, true, true);
-        button(gr, RectF(W - 450.0f, H - 71.0f, 135.0f, 36.0f), L"Fechar jogo", ID_QUIT, fsm);
-        text(gr, L"No jogo: Insert ou R3+L2 abre este menu.",
+        button(gr, RectF(W - 300.0f, H - 78.0f, 270.0f, 50.0f), T(S_RESUME), ID_RESUME, big, true, true);
+        button(gr, RectF(W - 450.0f, H - 71.0f, 135.0f, 36.0f), T(S_QUIT), ID_QUIT, fsm);
+        text(gr, T(S_MENU_HINT),
              SIDE + 32.0f, H - 78.0f, fsm, C_DIM, StringAlignmentNear, W - SIDE - 500.0f, 50);
         return;
     }
     bool ok_game; check_game(g.s.game, &ok_game);
-    button(gr, r, L"JOGAR", ID_PLAY, big, true, true);
+    button(gr, r, T(S_PLAY), ID_PLAY, big, true, true);
     std::wstring msg = g.play_msg;
-    if (msg.empty() && !ok_game) msg = L"Configure a pasta do jogo na aba Jogo.";
+    if (msg.empty() && !ok_game) msg = T(S_SET_FOLDER_TAB);
     if (!msg.empty()) text(gr, msg, SIDE + 32.0f, H - 78.0f, fsm, C_RED_HI, StringAlignmentNear, W - SIDE - 320.0f, 50);
 }
 
@@ -540,17 +618,17 @@ void draw_inicio(Graphics& gr, const Font& head, const Font& body, const Font& c
     text(gr, std::wstring(GAME_CODE) + L"  ·  Resident Evil Code: Veronica X (PSN)", cx + 32, bh - 46, code, C_RED_HI);
 
     float x = cx + 32, y = bh + 14;
-    section(gr, L"AJUSTES RÁPIDOS", x, y, cw - 64, head);
+    section(gr, T(S_QUICK), x, y, cw - 64, head);
     y += 44;
-    text(gr, L"Modo de exibição", x, y, body, C_TEXT, StringAlignmentNear, 200, 30);
-    dropdown(gr, RectF(x + 210, y, 200, 30), k_modes[g.s.mode], ID_DD_MODE, body);
-    text(gr, L"Limite de quadros", x + 450, y, body, C_TEXT, StringAlignmentNear, 180, 30);
-    dropdown(gr, RectF(x + 630, y, 150, 30), L"30 FPS (original)", -1, body, false);
+    text(gr, T(S_DISPLAY_MODE), x, y, body, C_TEXT, StringAlignmentNear, 200, 30);
+    dropdown(gr, RectF(x + 210, y, 200, 30), mode_name(g.s.mode), ID_DD_MODE, body);
+    text(gr, T(S_FRAME_LIMIT), x + 450, y, body, C_TEXT, StringAlignmentNear, 180, 30);
+    dropdown(gr, RectF(x + 630, y, 150, 30), T(S_FPS_ORIG), -1, body, false);
     y += 44;
-    text(gr, L"Resolução de renderização", x, y, body, C_TEXT, StringAlignmentNear, 205, 30);
-    dropdown(gr, RectF(x + 210, y, 200, 30), k_res[g.s.res].name, ID_DD_RES, body);
-    text(gr, L"Anti-serrilhado", x + 450, y, body, C_TEXT, StringAlignmentNear, 180, 30);
-    dropdown(gr, RectF(x + 630, y, 150, 30), k_aa[g.s.aa], ID_DD_AA, body);
+    text(gr, T(S_RENDER_RES), x, y, body, C_TEXT, StringAlignmentNear, 205, 30);
+    dropdown(gr, RectF(x + 210, y, 200, 30), res_name(g.s.res), ID_DD_RES, body);
+    text(gr, T(S_AA), x + 450, y, body, C_TEXT, StringAlignmentNear, 180, 30);
+    dropdown(gr, RectF(x + 630, y, 150, 30), aa_name(g.s.aa), ID_DD_AA, body);
     y += 54;
     bool o1, o2, o3;
     std::wstring m1 = check_game(g.s.game, &o1), m2 = check_rap(g.s.rap, &o2), m3 = check_fw(g.s.fw, &o3);
@@ -567,10 +645,10 @@ void path_row(Graphics& gr, float x, float y, const std::wstring& label, const s
     text(gr, label, x, y, body, C_TEXT, StringAlignmentNear, 170, 32);
     RectF fr(x + 175, y, 470, 32);
     field(gr, fr, false, false);
-    text(gr, value.empty() ? L"(não configurado)" : value, fr.X + 8, fr.Y, body, value.empty() ? C_DIM : C_TEXT,
+    text(gr, value.empty() ? std::wstring(T(S_NOT_SET)) : value, fr.X + 8, fr.Y, body, value.empty() ? C_DIM : C_TEXT,
          StringAlignmentNear, fr.Width - 14, fr.Height);
-    button(gr, RectF(x + 655, y, 110, 32), L"Procurar...", id_browse, body);
-    button(gr, RectF(x + 773, y, 80, 32), L"Abrir", id_open, body, false, !value.empty());
+    button(gr, RectF(x + 655, y, 110, 32), T(S_BROWSE), id_browse, body);
+    button(gr, RectF(x + 773, y, 80, 32), T(S_OPEN), id_open, body, false, !value.empty());
     text(gr, (ok ? L"✔  " : L"✖  ") + note, x + 175, y + 36, fsm, ok ? C_OK : C_RED_HI,
          StringAlignmentNear, 680, 20);
 }
@@ -578,26 +656,24 @@ void path_row(Graphics& gr, float x, float y, const std::wstring& label, const s
 void draw_jogo(Graphics& gr, const Font& head, const Font& body, const Font& fsm)
 {
     float x = SIDE + 32.0f, y = 34;
-    section(gr, L"PASTAS E ARQUIVOS", x, y, W - SIDE - 64.0f, head);
+    section(gr, T(S_FOLDERS), x, y, W - SIDE - 64.0f, head);
     y += 52;
     bool ok;
     std::wstring n = check_game(g.s.game, &ok);
-    path_row(gr, x, y, L"Pasta do jogo", g.s.game, n, ok, ID_GAME_BROWSE, ID_GAME_OPEN, body, fsm);
-    text(gr, std::wstring(L"Sua cópia de ") + GAME_CODE + L" (com PARAM.SFO e USRDIR). O EBOOT.elf precisa estar "
-         L"descriptografado (o RPCS3 gera).",
+    path_row(gr, x, y, T(S_GAME_FOLDER), g.s.game, n, ok, ID_GAME_BROWSE, ID_GAME_OPEN, body, fsm);
+    text(gr, T(S_GAME_FOLDER_HINT),
          x + 175, y + 58, fsm, C_DIM, StringAlignmentNear, 690, 20);
     y += 110;
     n = check_rap(g.s.rap, &ok);
-    path_row(gr, x, y, L"Licença (.rap)", g.s.rap, n, ok, ID_RAP_BROWSE, ID_RAP_OPEN, body, fsm);
-    text(gr, L"O arquivo .rap da conta que comprou o jogo (no RPCS3: dev_hdd0\\home\\00000001\\exdata).",
+    path_row(gr, x, y, T(S_LICENSE), g.s.rap, n, ok, ID_RAP_BROWSE, ID_RAP_OPEN, body, fsm);
+    text(gr, T(S_LICENSE_HINT),
          x + 175, y + 58, fsm, C_DIM, StringAlignmentNear, 690, 20);
     y += 110;
     n = check_fw(g.s.fw, &ok);
-    path_row(gr, x, y, L"Firmware (dev_flash)", g.s.fw, n, ok, ID_FW_BROWSE, ID_FW_OPEN, body, fsm);
-    text(gr, L"A pasta dev_flash do firmware do PS3 (no RPCS3, ao lado do rpcs3.exe). O jogo usa dela o "
-         L"decodificador de áudio.", x + 175, y + 58, fsm, C_DIM, StringAlignmentNear, 690, 20);
+    path_row(gr, x, y, T(S_FIRMWARE), g.s.fw, n, ok, ID_FW_BROWSE, ID_FW_OPEN, body, fsm);
+    text(gr, T(S_FIRMWARE_HINT), x + 175, y + 58, fsm, C_DIM, StringAlignmentNear, 690, 20);
     if (g.running)
-        text(gr, L"Mudanças nesta aba valem quando o jogo for aberto de novo.", x, y + 110, body, C_RED_HI,
+        text(gr, T(S_PATHS_RESTART), x, y + 110, body, C_RED_HI,
              StringAlignmentNear, 690, 24);
 }
 
@@ -605,8 +681,8 @@ void draw_patches(Graphics& gr, const Font& head, const Font& body, const Font& 
 {
     float x = SIDE + 32.0f, y = 34;
     const float w = W - SIDE - 64.0f;
-    section(gr, L"PATCHES DO JOGO", x, y, w, head);
-    text(gr, L"Mudanças no próprio código do jogo. Valem na hora, mesmo com o jogo aberto.",
+    section(gr, T(S_PATCHES_TITLE), x, y, w, head);
+    text(gr, T(S_PATCHES_HINT),
          x, y + 32, fsm, C_DIM, StringAlignmentNear, w, 20);
     y += 74;
     for (int i = 0; i < NPATCHES; i++) {
@@ -621,9 +697,9 @@ void draw_patches(Graphics& gr, const Font& head, const Font& body, const Font& 
         SolidBrush sb(on ? C_RED : Color(255, 60, 52, 52)); gr.FillPath(&sb, sp); delete sp;
         SolidBrush knob(C_TEXT);
         gr.FillEllipse(&knob, on ? sw.X + sw.Width - 23 : sw.X + 3, sw.Y + 3, 20.0f, 20.0f);
-        text(gr, k_patches[i].title, x + 18, y + 10, body, C_TEXT, StringAlignmentNear, w - 120, 24);
-        text(gr, k_patches[i].desc, x + 18, y + 34, fsm, C_DIM, StringAlignmentNear, w - 120, 20);
-        text(gr, k_patches[i].credit, x + 18, y + 54, fsm, Color(255, 120, 110, 104), StringAlignmentNear, w - 120, 20);
+        text(gr, T(k_patches[i].title), x + 18, y + 10, body, C_TEXT, StringAlignmentNear, w - 120, 24);
+        text(gr, T(k_patches[i].desc), x + 18, y + 34, fsm, C_DIM, StringAlignmentNear, w - 120, 20);
+        text(gr, T(k_patches[i].credit), x + 18, y + 54, fsm, Color(255, 120, 110, 104), StringAlignmentNear, w - 120, 20);
         hit(x, y, w, 84, ID_PATCH + i);
         y += 96;
     }
@@ -747,47 +823,48 @@ void draw_pad_card(Graphics& gr, float x, float y, float w, float h, const Font&
         gr.DrawLine(&slash, gx + 2, gy + 22, gx + 34, gy);
     }
     /* model + hint */
-    std::wstring title = on ? g.pad_status + L" conectado" : L"Nenhum controle conectado";
+    const std::wstring model = g.pad_kind == PAD_KIND_XINPUT ? std::wstring(T(S_PAD_XBOX)) : g.pad_status;
+    std::wstring title = T(S_PAD_NONE);
+    if (on) { title = T(S_PAD_CONNECTED_FMT); title.replace(title.find(L"%s"), 2, model); }
     if (on && g.pad_count > 1) title += L"  (+" + std::to_wstring(g.pad_count - 1) + L")";
     text(gr, title, x + 82, y + h / 2 - 22, body, on ? C_TEXT : C_RED_HI, StringAlignmentNear, w - 200, 22);
-    text(gr, on ? L"O teclado também funciona junto." : L"Conecte por USB ou Bluetooth.",
+    text(gr, T(on ? S_PAD_KB_TOO : S_PAD_PLUG),
          x + 82, y + h / 2, fsm, C_DIM, StringAlignmentNear, w - 200, 20);
     /* status pill */
     RectF pr(x + w - 130, y + h / 2 - 11, 118, 22);
     GraphicsPath* pp = round_rect(pr, 11);
     SolidBrush pb(on ? Color(255, 34, 66, 32) : Color(255, 70, 26, 26)); gr.FillPath(&pb, pp); delete pp;
     SolidBrush dot(accent); gr.FillEllipse(&dot, pr.X + 10, pr.Y + 7, 8.0f, 8.0f);
-    FontFamily ff(L"Segoe UI"); Font pf(&ff, 10.5f, FontStyleBold, UnitPixel);
-    text(gr, on ? L"CONECTADO" : L"DESCONECTADO", pr.X + 22, pr.Y, pf, accent, StringAlignmentNear, pr.Width - 24, pr.Height);
+    FontFamily ff(family(false, g_lang)); Font pf(&ff, 10.5f, FontStyleBold, UnitPixel);
+    text(gr, T(on ? S_CONNECTED : S_DISCONNECTED), pr.X + 22, pr.Y, pf, accent, StringAlignmentNear, pr.Width - 24, pr.Height);
 }
 
 void draw_controles(Graphics& gr, const Font& head, const Font& body, const Font& fsm, const Font& col)
 {
     float x = SIDE + 32.0f, y = 22;
-    section(gr, L"CONTROLES", x, y, W - SIDE - 64.0f, head);
-    text(gr, L"Qual tecla ou botão do controle aciona cada botão do jogo. Clique numa caixa e aperte a "
-         L"tecla ou o botão desejado; salva na hora.", x, y + 32, fsm, C_DIM, StringAlignmentNear, 820, 20);
+    section(gr, T(S_CONTROLS_TITLE), x, y, W - SIDE - 64.0f, head);
+    text(gr, T(S_CONTROLS_HINT), x, y + 32, fsm, C_DIM, StringAlignmentNear, 820, 20);
     y += 72;
-    text(gr, L"Ícones do controle", x, y, body, C_TEXT, StringAlignmentNear, 160, 28);
+    text(gr, T(S_ICONS), x, y, body, C_TEXT, StringAlignmentNear, 160, 28);
     draw_radio(gr, x + 170, y, L"PlayStation", g.s.layout == 0, ID_LAYOUT_PS, body);
     draw_radio(gr, x + 310, y, L"Xbox", g.s.layout == 1, ID_LAYOUT_XB, body);
     draw_pad_card(gr, x + 420, y - 14, W - SIDE - 64.0f - 420, 56, body, fsm);
     y += 54;
     const float c1 = x, c2 = x + 250, c3 = x + 480, rowh = 31;
-    text(gr, L"BOTÃO DO JOGO", c1, y, col, C_RED);
-    text(gr, L"TECLADO", c2, y, col, C_RED);
-    text(gr, L"CONTROLE", c3, y, col, C_RED);
+    text(gr, T(S_COL_GAME), c1, y, col, C_RED);
+    text(gr, T(S_COL_KB), c2, y, col, C_RED);
+    text(gr, T(S_COL_PAD), c3, y, col, C_RED);
     y += 30;
     for (int i = 0; i < NROWS; i++) {
         int a = k_rows[i];
         float ry = y + i * rowh;
         btn_glyph(gr, 0, k_pad_default_btn[a], c1 - 2, ry);
-        text(gr, k_action_name[a], c1 + 38, ry, body, C_TEXT, StringAlignmentNear, 200, 30);
+        text(gr, action_name(a), c1 + 38, ry, body, C_TEXT, StringAlignmentNear, 200, 30);
         /* keyboard cell */
         RectF kr(c2, ry + 1, 200, 28);
         bool kact = g.cap == CAP_KEY && g.cap_action == a;
         field(gr, kr, g.hover == ID_KEY + a, kact);
-        text(gr, kact ? L"Aperte uma tecla..." : key_name(g.s.key[a]), kr.X + 8, kr.Y, body,
+        text(gr, kact ? std::wstring(T(S_PRESS_KEY)) : key_name(g.s.key[a]), kr.X + 8, kr.Y, body,
              kact ? C_RED_HI : C_TEXT, StringAlignmentNear, kr.Width - 12, kr.Height);
         hit(kr.X, kr.Y, kr.Width, kr.Height, ID_KEY + a);
         /* controller cell */
@@ -796,7 +873,7 @@ void draw_controles(Graphics& gr, const Font& head, const Font& body, const Font
         int pb = g.s.btn[a];
         if (!bact && pb >= 0) btn_glyph(gr, g.s.layout, pb, c3 - 2, ry);
         field(gr, br, g.hover == ID_BTN + a, bact);
-        text(gr, bact ? L"Aperte um botão no controle..." : (pb >= 0 ? k_pb_name[g.s.layout][pb] : L"-"),
+        text(gr, bact ? std::wstring(T(S_PRESS_BTN)) : pb_name(g.s.layout, pb),
              br.X + 8, br.Y, body, bact ? C_RED_HI : C_TEXT, StringAlignmentNear, br.Width - 30, br.Height);
         SolidBrush ab(C_DIM);
         PointF tri[3] = { PointF(br.X + br.Width - 18, br.Y + 11), PointF(br.X + br.Width - 8, br.Y + 11),
@@ -805,9 +882,70 @@ void draw_controles(Graphics& gr, const Font& head, const Font& body, const Font
         hit(br.X, br.Y, br.Width, br.Height, ID_BTN + a);
     }
     float by = y + NROWS * rowh + 10;
-    button(gr, RectF(x, by, 160, 32), L"Restaurar padrões", ID_RESTORE, body);
-    text(gr, L"Teclado e controle funcionam juntos. "
-         L"Esc cancela.", x + 175, by, fsm, C_DIM, StringAlignmentNear, W - 280.0f - (x + 175), 32);
+    button(gr, RectF(x, by, 160, 32), T(S_RESTORE), ID_RESTORE, body);
+    text(gr, T(S_CONTROLS_FOOT), x + 175, by, fsm, C_DIM, StringAlignmentNear, W - 280.0f - (x + 175), 32);
+}
+
+/* The shader cache the D3D12 backend keeps under the working directory
+ * (shader_cache/*.cso and pipelines.bin). Only those files are removed. */
+fs::path cache_dir()
+{
+    wchar_t cwd[MAX_PATH]; GetCurrentDirectoryW(MAX_PATH, cwd);
+    return fs::path(cwd) / L"shader_cache";
+}
+bool is_cache_file(const fs::path& p)
+{
+    const std::wstring n = p.filename().wstring();
+    return p.extension() == L".cso" || n == L"pipelines.bin" || n == L"pipelines.bin.tmp";
+}
+void cache_stats(int* n, double* mb)
+{
+    *n = 0; *mb = 0; std::error_code ec;
+    for (auto& e : fs::directory_iterator(cache_dir(), ec))
+        if (e.is_regular_file(ec) && is_cache_file(e.path())) { (*n)++; *mb += (double)e.file_size(ec) / (1024.0 * 1024.0); }
+}
+int cache_clear()
+{
+    int n = 0; std::error_code ec;
+    std::vector<fs::path> files;
+    for (auto& e : fs::directory_iterator(cache_dir(), ec))
+        if (e.is_regular_file(ec) && is_cache_file(e.path())) files.push_back(e.path());
+    for (auto& f : files) if (fs::remove(f, ec)) n++;
+    return n;
+}
+
+std::wstring lang_choice_name()
+{
+    if (g_lang_pick >= 0) return k_lang_name[g_lang_pick];
+    return std::wstring(T(S_LANG_SYSTEM)) + L" (" + k_lang_name[g_lang] + L")";
+}
+
+void draw_avancado(Graphics& gr, const Font& head, const Font& body, const Font& fsm)
+{
+    float x = SIDE + 32.0f, y = 34;
+    const float w = W - SIDE - 64.0f;
+    section(gr, T(S_ADV_LAUNCHER), x, y, w, head);
+    text(gr, T(S_ADV_HINT), x, y + 32, fsm, C_DIM, StringAlignmentNear, w, 20);
+    y += 70;
+    text(gr, T(S_LANG), x, y, body, C_TEXT, StringAlignmentNear, 240, 30);
+    dropdown(gr, RectF(x + 250, y, 260, 30), lang_choice_name(), ID_DD_LANG, body);
+    text(gr, T(S_LANG_HINT), x, y + 28, fsm, C_DIM, StringAlignmentNear, 240, 20);
+    y += 90;
+    section(gr, T(S_ADV_FILES), x, y, w, head);
+    y += 46;
+    button(gr, RectF(x, y, 280, 34), T(S_CLEAR_CACHE), ID_CACHE_CLEAR, body, false, !g.running);
+    button(gr, RectF(x + 292, y, 150, 34), T(S_OPEN_FOLDER), ID_CACHE_OPEN, body);
+    y += 46;
+    std::wstring st = g.cache_msg;
+    if (g.running) st = T(S_CACHE_RUNNING);
+    else if (st.empty()) {
+        int n; double mb; cache_stats(&n, &mb);
+        if (n) { wchar_t b[256]; swprintf(b, 256, T(S_CACHE_SIZE_FMT), n, mb); st = b; }
+        else st = T(S_CACHE_EMPTY);
+    }
+    text(gr, st, x, y, body, g.running ? C_RED_HI : C_TEXT, StringAlignmentNear, w, 24);
+    text(gr, cache_dir().wstring(), x, y + 26, fsm, C_DIM, StringAlignmentNear, w, 20);
+    text(gr, T(S_CACHE_HINT), x, y + 48, fsm, C_DIM, StringAlignmentNear, w, 20);
 }
 
 void paint(HDC hdc)
@@ -820,7 +958,7 @@ void paint(HDC hdc)
     SolidBrush bg(C_BG); gr.FillRectangle(&bg, 0, 0, W, H);
     g.hits.clear();
 
-    FontFamily serif(L"Georgia"), sans(L"Segoe UI");
+    FontFamily serif(family(true, g_lang)), sans(family(false, g_lang));
     Font fTitle(&serif, 22, FontStyleBold, UnitPixel), fTitle2(&serif, 17, FontStyleBold, UnitPixel);
     Font fNav(&sans, 16, FontStyleRegular, UnitPixel), fHead(&serif, 18, FontStyleRegular, UnitPixel);
     Font fBody(&sans, 14, FontStyleRegular, UnitPixel), fSmall(&sans, 12, FontStyleRegular, UnitPixel);
@@ -830,29 +968,61 @@ void paint(HDC hdc)
     if (g.page == P_INICIO) draw_inicio(gr, fHead, fBody, fCode);
     else if (g.page == P_JOGO) draw_jogo(gr, fHead, fBody, fSmall);
     else if (g.page == P_CONTROLES) draw_controles(gr, fHead, fBody, fSmall, fCol);
-    else draw_patches(gr, fHead, fBody, fSmall);
+    else if (g.page == P_PATCHES) draw_patches(gr, fHead, fBody, fSmall);
+    else draw_avancado(gr, fHead, fBody, fSmall);
     draw_sidebar(gr, fTitle, fTitle2, fNav);
     draw_play(gr, fBig, fSmall);
 
     /* open dropdown list on top */
     if (g.open_dd >= 0) {
-        std::vector<std::wstring> items; int sel = 0;
-        float x = SIDE + 32.0f + 210, y = 330 + 14 + 44 + 30, bw = 200;
-        if (g.open_dd == ID_DD_MODE) { for (auto m : k_modes) items.push_back(m); sel = g.s.mode; }
-        else if (g.open_dd == ID_DD_RES) { for (auto& r : k_res) items.push_back(r.name); sel = g.s.res; y += 44; }
-        else { for (auto a : k_aa) items.push_back(a); sel = g.s.aa; x = SIDE + 32.0f + 630; y += 44; bw = 150; }
-        RectF box(x, y, bw, items.size() * 28.0f);
+        std::vector<std::wstring> items; std::vector<int> item_lang; int sel = 0;
+        const float x = g_dd_anchor.X, y = g_dd_anchor.Y + g_dd_anchor.Height, bw = g_dd_anchor.Width;
+        if (g.open_dd == ID_DD_MODE) { for (int i = 0; i < 3; i++) items.push_back(mode_name(i)); sel = g.s.mode; }
+        else if (g.open_dd == ID_DD_RES) { for (int i = 0; i < 5; i++) items.push_back(res_name(i)); sel = g.s.res; }
+        else if (g.open_dd == ID_DD_AA) { for (int i = 0; i < 3; i++) items.push_back(aa_name(i)); sel = g.s.aa; }
+        else {   /* Sistema, then each language in its own name and script */
+            items.push_back(T(S_LANG_SYSTEM)); item_lang.push_back(g_lang);
+            for (int i = 0; i < LANG_COUNT; i++) {
+                items.push_back(k_lang_name[k_lang_order[i]]); item_lang.push_back(k_lang_order[i]);
+                if (k_lang_order[i] == g_lang_pick) sel = i + 1;
+            }
+        }
+        const int n = (int)items.size(), vis = std::min(n, DD_VISIBLE);
+        g.dd_scroll = std::max(0, std::min(g.dd_scroll, n - vis));
+        const bool scroll = n > vis;
+        const float iw = scroll ? bw - 16 : bw;
+        RectF box(x, y, bw, vis * 28.0f);
         SolidBrush lb(Color(255, 34, 28, 28)); gr.FillRectangle(&lb, box);
-        Pen lp(C_RED, 1); gr.DrawRectangle(&lp, box.X, box.Y, box.Width - 1, box.Height - 1);
         /* remove underlying hits so clicks land on the list */
         g.hits.clear();
-        for (size_t i = 0; i < items.size(); i++) {
-            RectF ir(x, y + i * 28.0f, bw, 28);
-            bool hot = g.hover == ID_DD_ITEM + (int)i;
-            if (hot || (int)i == sel) { SolidBrush hb(hot ? Color(255, 70, 24, 24) : Color(255, 46, 30, 30)); gr.FillRectangle(&hb, ir); }
-            text(gr, items[i], ir.X + 8, ir.Y, fBody, C_TEXT, StringAlignmentNear, ir.Width - 12, ir.Height);
-            hit(ir.X, ir.Y, ir.Width, ir.Height, ID_DD_ITEM + (int)i);
+        hit(box.X, box.Y, box.Width, box.Height, ID_DD_LIST);
+        for (int r = 0; r < vis; r++) {
+            const int i = g.dd_scroll + r;
+            RectF ir(x, y + r * 28.0f, iw, 28);
+            bool hot = g.hover == ID_DD_ITEM + i;
+            if (hot || i == sel) { SolidBrush hb(hot ? Color(255, 70, 24, 24) : Color(255, 46, 30, 30)); gr.FillRectangle(&hb, ir); }
+            if (!item_lang.empty()) {
+                FontFamily ff(family(false, item_lang[i])); Font f(&ff, 14, FontStyleRegular, UnitPixel);
+                text(gr, items[i], ir.X + 8, ir.Y, f, C_TEXT, StringAlignmentNear, ir.Width - 12, ir.Height);
+            } else
+                text(gr, items[i], ir.X + 8, ir.Y, fBody, C_TEXT, StringAlignmentNear, ir.Width - 12, ir.Height);
+            hit(ir.X, ir.Y, ir.Width, ir.Height, ID_DD_ITEM + i);
         }
+        if (scroll) {   /* scroll bar: arrows at the ends, a thumb between */
+            const float sx = x + bw - 16, top = y, bot = y + vis * 28.0f;
+            SolidBrush tb(Color(255, 26, 22, 22)); gr.FillRectangle(&tb, sx, top, 16.0f, bot - top);
+            SolidBrush ab(C_DIM), ah(C_TEXT);
+            PointF up[3] = { PointF(sx + 4, top + 11), PointF(sx + 12, top + 11), PointF(sx + 8, top + 5) };
+            PointF dn[3] = { PointF(sx + 4, bot - 11), PointF(sx + 12, bot - 11), PointF(sx + 8, bot - 5) };
+            gr.FillPolygon(g.hover == ID_DD_UP ? &ah : &ab, up, 3);
+            gr.FillPolygon(g.hover == ID_DD_DOWN ? &ah : &ab, dn, 3);
+            hit(sx, top, 16, 16, ID_DD_UP);
+            hit(sx, bot - 16, 16, 16, ID_DD_DOWN);
+            const float track = (bot - top) - 32, th = std::max(20.0f, track * vis / n);
+            const float ty = top + 16 + (track - th) * g.dd_scroll / (float)(n - vis);
+            SolidBrush thumb(Color(255, 90, 80, 78)); gr.FillRectangle(&thumb, sx + 4, ty, 8.0f, th);
+        }
+        Pen lp(C_RED, 1); gr.DrawRectangle(&lp, box.X, box.Y, box.Width - 1, box.Height - 1);
     }
 
     Graphics screen(hdc);
@@ -873,7 +1043,7 @@ std::wstring pick(bool folder, const std::wstring& start, const wchar_t* filter_
     if (FAILED(CoCreateInstance(CLSID_FileOpenDialog, NULL, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dlg)))) return out;
     DWORD opts = 0; dlg->GetOptions(&opts);
     dlg->SetOptions(opts | FOS_FORCEFILESYSTEM | (folder ? FOS_PICKFOLDERS : FOS_FILEMUSTEXIST));
-    if (!folder && filter) { COMDLG_FILTERSPEC fs_[2] = { { filter_name, filter }, { L"Todos", L"*.*" } }; dlg->SetFileTypes(2, fs_); }
+    if (!folder && filter) { COMDLG_FILTERSPEC fs_[2] = { { filter_name, filter }, { T(S_ALL_FILES), L"*.*" } }; dlg->SetFileTypes(2, fs_); }
     if (!start.empty()) {
         IShellItem* si = nullptr;
         std::wstring d = folder ? start : fs::path(start).parent_path().wstring();
@@ -950,21 +1120,31 @@ void changed() { save_settings(g.s); g.play_msg.clear(); apply_live(); Invalidat
 void click(int id)
 {
     if (g.open_dd >= 0) {
-        if (id >= ID_DD_ITEM && id < ID_DD_ITEM + 10) {
+        if (id == ID_DD_UP || id == ID_DD_DOWN) { g.dd_scroll += id == ID_DD_UP ? -1 : 1; InvalidateRect(g.hwnd, NULL, FALSE); return; }
+        if (id == ID_DD_LIST) return;
+        if (id >= ID_DD_ITEM && id < ID_DD_ITEM + 64) {
             int i = id - ID_DD_ITEM;
             if (g.open_dd == ID_DD_MODE) g.s.mode = i;
             else if (g.open_dd == ID_DD_RES) g.s.res = i;
-            else g.s.aa = i;
+            else if (g.open_dd == ID_DD_AA) g.s.aa = i;
+            else set_lang_pick(i == 0 ? -1 : k_lang_order[i - 1]);
             g.open_dd = -1; changed(); return;
         }
         g.open_dd = -1; InvalidateRect(g.hwnd, NULL, FALSE); return;
     }
     if (g.cap != CAP_NONE) { g.cap = CAP_NONE; g.cap_action = -1; }
-    if (id >= ID_NAV && id < ID_NAV + 4) { g.page = (Page)(id - ID_NAV); }
+    if (id >= ID_NAV && id < ID_NAV + P_COUNT) { g.page = (Page)(id - ID_NAV); g.cache_msg.clear(); }
     else if (id >= ID_PATCH && id < ID_PATCH + NPATCHES) { g.s.patch[id - ID_PATCH] ^= true; changed(); }
-    else if (id == ID_DD_MODE || id == ID_DD_RES || id == ID_DD_AA) { g.open_dd = id; }
+    else if (id == ID_DD_MODE || id == ID_DD_RES || id == ID_DD_AA || id == ID_DD_LANG) {
+        g.open_dd = id; g.dd_scroll = 0;
+        if (id == ID_DD_LANG && g_lang_pick >= 0)   /* open with the chosen language in view */
+            for (int i = 0; i < LANG_COUNT; i++)
+                if (k_lang_order[i] == g_lang_pick) g.dd_scroll = std::max(0, i + 1 - DD_VISIBLE / 2);
+    }
+    else if (id == ID_CACHE_CLEAR && !g.running) g.cache_msg = Tf(S_CACHE_CLEARED_FMT, cache_clear());
+    else if (id == ID_CACHE_OPEN) { std::error_code ec; fs::create_directories(cache_dir(), ec); open_in_explorer(cache_dir().wstring()); }
     else if (id == ID_GAME_BROWSE) { auto p = pick(true, g.s.game, nullptr, nullptr); if (!p.empty()) { g.s.game = p; changed(); } }
-    else if (id == ID_RAP_BROWSE) { auto p = pick(false, g.s.rap, L"Licença PS3 (*.rap)", L"*.rap"); if (!p.empty()) { g.s.rap = p; changed(); } }
+    else if (id == ID_RAP_BROWSE) { auto p = pick(false, g.s.rap, T(S_RAP_FILTER), L"*.rap"); if (!p.empty()) { g.s.rap = p; changed(); } }
     else if (id == ID_FW_BROWSE) { auto p = pick(true, g.s.fw, nullptr, nullptr); if (!p.empty()) { g.s.fw = p; changed(); } }
     else if (id == ID_GAME_OPEN) open_in_explorer(g.s.game);
     else if (id == ID_RAP_OPEN) open_in_explorer(g.s.rap);
@@ -982,7 +1162,7 @@ void click(int id)
     }
     else if (id == ID_PLAY) {
         bool ok; check_game(g.s.game, &ok);
-        if (!ok) { g.page = P_JOGO; g.play_msg = L"Configure a pasta do jogo antes de jogar."; }
+        if (!ok) { g.page = P_JOGO; g.play_msg = T(S_SET_FOLDER_FIRST); }
         else { save_settings(g.s); start_game(); }
     }
     else if (id == ID_RESUME) { hide_menu(); return; }
@@ -1012,6 +1192,12 @@ LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp)
         SetCursor(LoadCursor(NULL, id >= 0 ? IDC_HAND : IDC_ARROW));
         TRACKMOUSEEVENT t = { sizeof t, TME_LEAVE, h, 0 }; TrackMouseEvent(&t);
         return 0; }
+    case WM_MOUSEWHEEL:
+        if (g.open_dd >= 0) {
+            g.dd_scroll += GET_WHEEL_DELTA_WPARAM(wp) > 0 ? -1 : 1;
+            InvalidateRect(h, NULL, FALSE);
+        }
+        return 0;
     case WM_MOUSELEAVE: g.hover = -1; InvalidateRect(h, NULL, FALSE); return 0;
     case WM_SETCURSOR: if (LOWORD(lp) == HTCLIENT) return TRUE; break;
     case WM_LBUTTONDOWN: click(hit_at(GET_X_LPARAM(lp), GET_Y_LPARAM(lp))); return 0;
@@ -1058,14 +1244,14 @@ LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp)
         for (int i = 0; i < PAD_PHYS_MAX; i++) {
             PadPhys p; if (!pad_phys_poll(i, &p)) continue;
             if (cnt++ == 0)
-                st = (p.kind == PAD_KIND_XINPUT) ? L"Controle Xbox"
+                st = (p.kind == PAD_KIND_XINPUT) ? L"Xbox"
                    : (p.kind == PAD_KIND_DS4) ? L"DualShock 4" : L"DualSense";
         }
         int kind = 0;
         for (int i = 0; i < PAD_PHYS_MAX && !kind; i++) { PadPhys p; if (pad_phys_poll(i, &p)) kind = p.kind; }
         if (const char* pv = getenv("CV_PAD_PREVIEW")) {   /* show a model without that controller (1..3) */
             kind = atoi(pv); cnt = kind ? 1 : 0;
-            st = kind == PAD_KIND_XINPUT ? L"Controle Xbox" : kind == PAD_KIND_DS4 ? L"DualShock 4" : kind ? L"DualSense" : L"";
+            st = kind == PAD_KIND_XINPUT ? L"Xbox" : kind == PAD_KIND_DS4 ? L"DualShock 4" : kind ? L"DualSense" : L"";
         }
         bool redraw = st != g.pad_status || cnt != g.pad_count || kind != g.pad_kind;
         g.pad_status = st; g.pad_count = cnt; g.pad_kind = kind;

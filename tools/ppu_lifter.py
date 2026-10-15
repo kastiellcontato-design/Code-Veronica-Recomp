@@ -4049,6 +4049,28 @@ def discover_jump_tables(all_insns, read_u32, toc, text_lo, text_hi, func_starts
 _WORKER_STATE: dict = {}
 
 
+def _sfo_title_id(path: str):
+    """TITLE_ID from a PARAM.SFO, or None."""
+    try:
+        with open(path, "rb") as f:
+            d = f.read()
+    except OSError:
+        return None
+    if d[:4] != b"\0PSF":
+        return None
+    key_tab = int.from_bytes(d[8:12], "little")
+    data_tab = int.from_bytes(d[12:16], "little")
+    for i in range(int.from_bytes(d[16:20], "little")):
+        e = 20 + i * 16
+        ko = int.from_bytes(d[e:e + 2], "little")
+        ln = int.from_bytes(d[e + 4:e + 8], "little")
+        do = int.from_bytes(d[e + 12:e + 16], "little")
+        key = d[key_tab + ko:d.index(b"\0", key_tab + ko)].decode("ascii", "replace")
+        if key == "TITLE_ID":
+            return d[data_tab + do:data_tab + do + ln].split(b"\0")[0].decode("ascii", "replace")
+    return None
+
+
 def _worker_init(segs, big_endian, name_map, prefix, hle_stub_nids=None,
                  function_entries=None, code_lo=0, code_hi=None, jump_tables=None,
                  toc_base=0, patches=None):
@@ -4188,21 +4210,22 @@ def main() -> None:
                              "split out as its own 0x20-byte function so direct "
                              "calls to it dispatch to the HLE handler.")
     parser.add_argument("--patches", metavar="FILE", default=None,
-                        help="JSON list of switchable instruction patches: "
-                             "[{\"name\": ..., \"addr\": \"0x...\", \"word\": \"0x...\"}]. "
-                             "Each site is lifted as both its original and the "
-                             "replacement word; the runtime flag of that name "
-                             "(PS3_PATCHES env, ps3_patch_set) picks one.")
+                        help="JSON switchable instruction patches: {\"patches\": [{\"name\": ..., "
+                             "\"sites\": [{\"title_id\": ..., \"addr\": \"0x...\", \"word\": \"0x...\", "
+                             "\"expect\": \"0x...\" | \"expect_op\": \"bl\"}]}]}. Each site whose title "
+                             "matches the input and whose current word passes the check is "
+                             "lifted as both its original and the replacement; the runtime "
+                             "flag of that name (PS3_PATCHES env, ps3_patch_set) picks one.")
+    parser.add_argument("--title-id", default=None,
+                        help="Title ID of the input (e.g. NPEB00553), for --patches. "
+                             "Default: read from the PARAM.SFO two directories up "
+                             "(<root>/PARAM.SFO for <root>/USRDIR/EBOOT.elf).")
     args = parser.parse_args()
 
-    patches: dict[int, tuple[str, int]] = {}
+    patch_defs: list = []
     if args.patches:
         with open(args.patches, encoding="utf-8") as _pf:
-            for _e in json.load(_pf).get("patches", []):
-                for _site in _e["sites"]:
-                    patches[int(str(_site["addr"]), 0)] = (
-                        _e["name"], int(str(_site["word"]), 0) & 0xFFFFFFFF)
-        print(f"  {len(patches)} patch site(s) from {args.patches}")
+            patch_defs = json.load(_pf).get("patches", [])
 
     # Load firmware-import stubs (addr -> NID) up front; applied to func_bounds
     # and the lifter below.
@@ -4246,6 +4269,41 @@ def main() -> None:
             print(f"Warning: ELF parse failed ({exc}), treating as raw", file=sys.stderr)
             all_insns = disassemble_bytes(file_data, base_addr, big_endian)
             seg_blobs = [(base_addr, file_data)]
+
+    # Switchable patches: keep the sites for this title whose current word is
+    # the one the patch was written against. A patch list carries every
+    # version of a game (RPCS3 lists one entry per region), and an address
+    # from another version would land on an unrelated instruction here.
+    patches: dict[int, tuple[str, int]] = {}
+    if patch_defs:
+        title_id = args.title_id or _sfo_title_id(
+            os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(args.input))), "PARAM.SFO"))
+        print(f"  patches: title {title_id or 'unknown'}")
+
+        def _word_at(a: int):
+            for va, d in seg_blobs:
+                if va <= a and a + 4 <= va + len(d):
+                    return int.from_bytes(d[a - va:a - va + 4], "big" if big_endian else "little")
+            return None
+
+        for _e in patch_defs:
+            for _s in _e["sites"]:
+                if _s.get("title_id") and _s["title_id"] != title_id:
+                    continue
+                _a = int(str(_s["addr"]), 0)
+                _w = _word_at(_a)
+                _why = None
+                if _w is None:
+                    _why = "address outside the code"
+                elif "expect" in _s and _w != int(str(_s["expect"]), 0):
+                    _why = f"word 0x{_w:08X}, expected {_s['expect']}"
+                elif _s.get("expect_op") == "bl" and (_w & 0xFC000003) != 0x48000001:
+                    _why = f"word 0x{_w:08X} is not a bl"
+                if _why:
+                    print(f"  patch {_e['name']} @0x{_a:08X} SKIPPED: {_why}", file=sys.stderr)
+                    continue
+                patches[_a] = (_e["name"], int(str(_s["word"]), 0) & 0xFFFFFFFF)
+                print(f"  patch {_e['name']} @0x{_a:08X}: 0x{_w:08X} -> {_s['word']}")
 
     # Get function boundaries
     if args.functions:

@@ -1,19 +1,29 @@
 {
   "_comment": [
-    "Switchable instruction patches for NPEB00553 01.00 (EBOOT.elf sha256 dd6628ec...).",
-    "Lift with: python tools/ppu_lifter.py JOGO/NPEB00553/USRDIR/EBOOT.elf --functions out/EBOOT.functions.json",
+    "Switchable instruction patches for Resident Evil CODE: Veronica X / BIOHAZARD CODE: Veronica Kanzenban.",
+    "The lifter keeps the sites of the version it lifts (title_id, from PARAM.SFO or --title-id) whose",
+    "current word passes the check, so one file serves every version and the launcher switch is the same.",
+    "Lift with: python tools/ppu_lifter.py JOGO/<TITLE>/USRDIR/EBOOT.elf --functions out/EBOOT.functions.json",
     "           --hle-stubs out/EBOOT.imports.json --patches projects/code_veronica/patches.json -o src/recomp",
-    "A patch is on when PS3_PATCHES lists its name; the launcher also switches it live."
+    "A patch is on when PS3_PATCHES lists its name; the launcher also switches it live.",
+    "Sites from RPCS3's patches/patch.yml; the EU one is checked against our EBOOT (sha256 dd6628ec...)."
   ],
   "patches": [
     {
       "name": "cv_door_skip",
       "title": "Remove Door Animations",
       "author": "Kapdap",
-      "source": "RPCS3 patch.yml, PPU-df822d7d47de09c5672201db8cc633009037f54f (EU NPEB00553 01.00)",
-      "notes": "The room-transition state waits on func_0003BC10 (door animation still running?); li r3,0 answers no, so the next room loads at once.",
+      "notes": "The room-transition state waits on a 'door animation still running?' call; li r3,0 answers no, so the next room loads at once.",
       "sites": [
-        { "addr": "0x001AFCCC", "word": "0x38600000" }
+        { "title_id": "NPEB00553", "version": "01.00", "region": "EU",
+          "rpcs3": "PPU-df822d7d47de09c5672201db8cc633009037f54f",
+          "addr": "0x001AFCCC", "word": "0x38600000", "expect": "0x4BE8BF45" },
+        { "title_id": "NPUB30467", "version": "01.00", "region": "US",
+          "rpcs3": "PPU-b4b1ebe7a069782537a13d5bdbc15d6e900ceb25",
+          "addr": "0x001AE25C", "word": "0x38600000", "expect_op": "bl" },
+        { "title_id": "NPJB00135", "version": "01.00", "region": "JP",
+          "rpcs3": "PPU-5b1fe8f0b8eab817078b6db007de327653bc65dc, PPU-37f854495138eeb5afdc2db9d4cf6a2d4918beb6",
+          "addr": "0x001AE304", "word": "0x38600000", "expect_op": "bl" }
       ]
     }
   ]
