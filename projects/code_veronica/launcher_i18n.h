@@ -45,6 +45,7 @@ enum StrId {
     S_OV_TITLE, S_OV_SHOW, S_OV_DESC, S_OV_FRAMETIME,
     S_PATCH_FOLDER, S_PATCH_FOLDER_HINT, S_PATCH_FOUND_FMT, S_PATCH_NONE, S_PATCH_CODE, S_PATCH_TYPE_FMT,
     S_PATCH_FROM_FMT,
+    S_PATCH_LOGO_T, S_PATCH_LOGO_D, S_PATCH_LOGO_C,
     S_COUNT
 };
 
@@ -102,6 +103,9 @@ static const wchar_t* const k_str_pt[] = {
     L"Muda o código do jogo, e essa troca não vem compilada nesta versão: não dá para ligar.",
     L"Usa um tipo de patch que este jogo não suporta (%s).",
     L"por %s  ·  %s",
+    L"Pular logos e introdução",
+    L"Ao abrir o jogo, os logos CAPCOM e MT FRAMEWORK e o vídeo de introdução são pulados: o jogo abre direto na tela de título.",
+    L"Feito para este port.",
 };
 static_assert(sizeof k_str_pt / sizeof k_str_pt[0] == S_COUNT, "k_str_pt: one text per StrId");
 
@@ -159,6 +163,9 @@ static const wchar_t* const k_str_en[] = {
     L"Changes the game's code, and that change is not compiled into this build: it cannot be turned on.",
     L"Uses a kind of patch this game does not support (%s).",
     L"by %s  ·  %s",
+    L"Skip logos and intro",
+    L"When the game starts, the CAPCOM and MT FRAMEWORK logos and the intro movie are skipped: it opens straight on the title screen.",
+    L"Made for this port.",
 };
 static_assert(sizeof k_str_en / sizeof k_str_en[0] == S_COUNT, "k_str_en: one text per StrId");
 
@@ -216,6 +223,9 @@ static const wchar_t* const k_str_es[] = {
     L"Cambia el código del juego, y ese cambio no viene compilado en esta versión: no se puede activar.",
     L"Usa un tipo de parche que este juego no admite (%s).",
     L"por %s  ·  %s",
+    L"Saltar logos e introducción",
+    L"Al abrir el juego, se saltan los logos de CAPCOM y MT FRAMEWORK y el vídeo de introducción: abre directo en la pantalla de título.",
+    L"Hecho para este port.",
 };
 static_assert(sizeof k_str_es / sizeof k_str_es[0] == S_COUNT, "k_str_es: one text per StrId");
 
@@ -273,6 +283,9 @@ static const wchar_t* const k_str_ja[] = {
     L"ゲームのコードを変更するもので、この変更はこのビルドに組み込まれていないため有効にできません。",
     L"このゲームが対応していない種類のパッチを使っています (%s)。",
     L"作者: %s  ·  %s",
+    L"ロゴとオープニングをスキップ",
+    L"ゲーム起動時の CAPCOM と MT FRAMEWORK のロゴとオープニングムービーを飛ばし、タイトル画面から始まります。",
+    L"この移植版のために作成。",
 };
 static_assert(sizeof k_str_ja / sizeof k_str_ja[0] == S_COUNT, "k_str_ja: one text per StrId");
 
@@ -384,6 +397,9 @@ static const wchar_t* const k_str_fr[] = {
     L"Modifie le code du jeu, et ce changement n'est pas compilé dans cette version : impossible de l'activer.",
     L"Utilise un type de patch que ce jeu ne prend pas en charge (%s).",
     L"par %s  ·  %s",
+    L"Passer les logos et l'introduction",
+    L"Au lancement, les logos CAPCOM et MT FRAMEWORK et la vidéo d'introduction sont passés : le jeu s'ouvre directement sur l'écran titre.",
+    L"Créé pour ce portage.",
 };
 static_assert(sizeof k_str_fr / sizeof k_str_fr[0] == S_COUNT, "k_str_fr: one text per StrId");
 
@@ -495,6 +511,9 @@ static const wchar_t* const k_str_de[] = {
     L"Ändert den Code des Spiels, und diese Änderung ist in diesem Build nicht einkompiliert: nicht aktivierbar.",
     L"Nutzt eine Patch-Art, die dieses Spiel nicht unterstützt (%s).",
     L"von %s  ·  %s",
+    L"Logos und Intro überspringen",
+    L"Beim Start werden die Logos von CAPCOM und MT FRAMEWORK und das Intro-Video übersprungen: das Spiel beginnt direkt im Titelbildschirm.",
+    L"Für diese Portierung erstellt.",
 };
 static_assert(sizeof k_str_de / sizeof k_str_de[0] == S_COUNT, "k_str_de: one text per StrId");
 
@@ -606,6 +625,9 @@ static const wchar_t* const k_str_it[] = {
     L"Modifica il codice del gioco, e questa modifica non è compilata in questa versione: non si può attivare.",
     L"Usa un tipo di patch che questo gioco non supporta (%s).",
     L"di %s  ·  %s",
+    L"Salta loghi e introduzione",
+    L"All'avvio i loghi CAPCOM e MT FRAMEWORK e il filmato introduttivo vengono saltati: il gioco si apre direttamente sulla schermata del titolo.",
+    L"Creato per questo port.",
 };
 static_assert(sizeof k_str_it / sizeof k_str_it[0] == S_COUNT, "k_str_it: one text per StrId");
 
@@ -717,6 +739,9 @@ static const wchar_t* const k_str_pl[] = {
     L"Zmienia kod gry, a ta zmiana nie jest wkompilowana w tę wersję: nie można jej włączyć.",
     L"Używa rodzaju łatki, którego ta gra nie obsługuje (%s).",
     L"autor: %s  ·  %s",
+    L"Pomiń logo i intro",
+    L"Po uruchomieniu gry logo CAPCOM i MT FRAMEWORK oraz filmik wprowadzający są pomijane: gra startuje od razu na ekranie tytułowym.",
+    L"Stworzone dla tego portu.",
 };
 static_assert(sizeof k_str_pl / sizeof k_str_pl[0] == S_COUNT, "k_str_pl: one text per StrId");
 
@@ -828,6 +853,9 @@ static const wchar_t* const k_str_tr[] = {
     L"Oyunun kodunu değiştirir ve bu değişiklik bu sürüme derlenmemiştir: açılamaz.",
     L"Bu oyunun desteklemediği bir yama türü kullanıyor (%s).",
     L"%s  ·  %s",
+    L"Logoları ve girişi atla",
+    L"Oyun açılırken CAPCOM ve MT FRAMEWORK logoları ile giriş videosu atlanır: oyun doğrudan başlık ekranında açılır.",
+    L"Bu port için yapıldı.",
 };
 static_assert(sizeof k_str_tr / sizeof k_str_tr[0] == S_COUNT, "k_str_tr: one text per StrId");
 
@@ -939,6 +967,9 @@ static const wchar_t* const k_str_ar[] = {
     L"يغيّر شيفرة اللعبة، وهذا التغيير غير مُضمَّن في هذا الإصدار: لا يمكن تفعيله.",
     L"يستخدم نوع تصحيح لا تدعمه هذه اللعبة (%s).",
     L"بواسطة %s  ·  %s",
+    L"تخطي الشعارات والمقدمة",
+    L"عند تشغيل اللعبة تُتخطّى شعارات CAPCOM وMT FRAMEWORK وفيديو المقدمة، فتبدأ مباشرة من شاشة العنوان.",
+    L"صُنع لهذا المنفذ.",
 };
 static_assert(sizeof k_str_ar / sizeof k_str_ar[0] == S_COUNT, "k_str_ar: one text per StrId");
 
@@ -1050,6 +1081,9 @@ static const wchar_t* const k_str_zh[] = {
     L"此补丁修改游戏代码，而此版本未编译该修改：无法启用。",
     L"使用了此游戏不支持的补丁类型 (%s)。",
     L"作者 %s  ·  %s",
+    L"跳过标志和开场动画",
+    L"启动游戏时跳过 CAPCOM 和 MT FRAMEWORK 标志以及开场动画，直接进入标题画面。",
+    L"为本移植版制作。",
 };
 static_assert(sizeof k_str_zh / sizeof k_str_zh[0] == S_COUNT, "k_str_zh: one text per StrId");
 
@@ -1161,6 +1195,9 @@ static const wchar_t* const k_str_ko[] = {
     L"게임 코드를 바꾸는 패치이며, 이 변경은 이 빌드에 컴파일되어 있지 않아 켤 수 없습니다.",
     L"이 게임이 지원하지 않는 패치 종류를 사용합니다 (%s).",
     L"제작: %s  ·  %s",
+    L"로고와 인트로 건너뛰기",
+    L"게임을 시작하면 CAPCOM과 MT FRAMEWORK 로고와 인트로 영상을 건너뛰고 바로 타이틀 화면으로 갑니다.",
+    L"이 포트를 위해 제작.",
 };
 static_assert(sizeof k_str_ko / sizeof k_str_ko[0] == S_COUNT, "k_str_ko: one text per StrId");
 
@@ -1272,6 +1309,9 @@ static const wchar_t* const k_str_ru[] = {
     L"Меняет код игры, а это изменение не скомпилировано в эту версию: включить нельзя.",
     L"Использует тип патча, который эта игра не поддерживает (%s).",
     L"автор: %s  ·  %s",
+    L"Пропускать логотипы и вступление",
+    L"При запуске пропускаются логотипы CAPCOM и MT FRAMEWORK и вступительный ролик: игра сразу открывается на титульном экране.",
+    L"Сделано для этого порта.",
 };
 static_assert(sizeof k_str_ru / sizeof k_str_ru[0] == S_COUNT, "k_str_ru: one text per StrId");
 

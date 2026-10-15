@@ -1,8 +1,11 @@
-"""Create a build-local lift with named native-menu wrappers; leave generated sources intact."""
+"""Create a build-local lift with named wrappers (native menu, boot skip); leave generated sources intact."""
 import argparse
 from pathlib import Path
 
-HOOKS = ("0002A468", "0002F3D0", "001BD060")
+# 0002A468, 0002F3D0, 001BD060: the OPTION menu (native_pc_menu.cpp);
+# 0020140C: the opening logos' end check, 0002B35C: the title sequence that
+# plays the intro movie (boot_skip.cpp).
+HOOKS = ("0002A468", "0002F3D0", "001BD060", "0020140C", "0002B35C")
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)

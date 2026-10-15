@@ -157,6 +157,7 @@ std::wstring aa_name(int i) { return T(S_AA_OFF + i); }
 struct PatchOpt { const char* id; int title, desc, credit; };
 const PatchOpt k_patches[] = {
     { "cv_door_skip", S_PATCH_DOOR_T, S_PATCH_DOOR_D, S_PATCH_DOOR_C },
+    { "cv_skip_logos", S_PATCH_LOGO_T, S_PATCH_LOGO_D, S_PATCH_LOGO_C },   /* boot_skip.cpp */
 };
 const int NPATCHES = sizeof k_patches / sizeof k_patches[0];
 
