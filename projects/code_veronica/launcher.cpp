@@ -35,6 +35,10 @@
 #include "pad_map.h"
 #include "launcher_i18n.h"
 
+/* button_icons.cpp: the keycaps' short labels and font, shared with the game. */
+std::wstring cv_key_cap_label(int vk);
+const wchar_t* cv_key_cap_font(void);
+
 #pragma comment(lib, "gdiplus.lib")
 #pragma comment(lib, "dwmapi.lib")
 #pragma comment(lib, "shell32.lib")
@@ -48,6 +52,8 @@ extern "C" {
 void  rsx_d3d12_set_window_mode(int mode);
 void  rsx_d3d12_set_res_scale(float f);
 void  rsx_d3d12_set_aa(int mode);
+void  rsx_d3d12_set_color_adjust(int brightness, int contrast);
+void  rsx_d3d12_set_saturation(int saturation);
 void  rsx_d3d12_close(void);
 void* rsx_d3d12_window(void);
 extern void (*g_rsx_menu_hook)(void);
@@ -117,8 +123,11 @@ struct Settings {
     int mode = 0;          /* 0 janela, 1 sem borda, 2 tela cheia */
     int res = 1;           /* index into k_res */
     int aa = 0;            /* anti-aliasing: 0 off, 1 FXAA, 2 SMAA */
+    int brightness = 0;   /* -80..80, zero leaves the image unchanged */
+    int contrast = 100;   /* 50..180 percent */
+    int saturation = 100; /* 0..200 percent */
     bool patch[8] = {};    /* k_patches on/off */
-    int layout = 2;        /* button icons: 0 PlayStation, 1 Xbox, 2 follow the controller */
+    int layout = 2;        /* button icons: 0 PlayStation, 1 Xbox, 2 automatic, 3 keyboard */
     std::wstring game, rap, fw;
     int key[PA_COUNT];
     int btn[PA_COUNT];
@@ -200,6 +209,9 @@ Settings load_settings()
     s.mode   = _wtoi(ini_get(L"tela", L"modo", L"0").c_str());
     s.res    = _wtoi(ini_get(L"tela", L"resolucao", L"1").c_str());
     s.aa     = _wtoi(ini_get(L"tela", L"antialias", L"0").c_str());
+    s.brightness = _wtoi(ini_get(L"tela", L"brilho", L"0").c_str());
+    s.contrast = _wtoi(ini_get(L"tela", L"contraste", L"100").c_str());
+    s.saturation = _wtoi(ini_get(L"tela", L"saturacao", L"100").c_str());
     s.layout = _wtoi(ini_get(L"controles", L"layout", L"2").c_str());
     { std::wstring l = ini_get(L"launcher", L"idioma", L"system");
       int pick = -1;
@@ -210,7 +222,10 @@ Settings load_settings()
     if (s.mode < 0 || s.mode > 2) s.mode = 0;
     if (s.res < 0 || s.res > 4) s.res = 1;
     if (s.aa < 0 || s.aa > 2) s.aa = 0;
-    if (s.layout < 0 || s.layout > 2) s.layout = 2;
+    s.brightness = std::clamp(s.brightness, -80, 80);
+    s.contrast = std::clamp(s.contrast, 50, 180);
+    s.saturation = std::clamp(s.saturation, 0, 200);
+    if (s.layout < 0 || s.layout > 3) s.layout = 2;
     /* First run: take the paths the old launcher script set, if any. */
     std::wstring def_game = env_w("PS3_VFS_ROOT");
     if (def_game.empty()) {
@@ -244,6 +259,9 @@ void save_settings(const Settings& s)
     ini_set(L"tela", L"modo", std::to_wstring(s.mode));
     ini_set(L"tela", L"resolucao", std::to_wstring(s.res));
     ini_set(L"tela", L"antialias", std::to_wstring(s.aa));
+    ini_set(L"tela", L"brilho", std::to_wstring(s.brightness));
+    ini_set(L"tela", L"contraste", std::to_wstring(s.contrast));
+    ini_set(L"tela", L"saturacao", std::to_wstring(s.saturation));
     ini_set(L"controles", L"layout", std::to_wstring(s.layout));
     ini_set(L"launcher", L"idioma", g_lang_pick < 0 ? std::wstring(L"system") : widen(k_lang_id[g_lang_pick]));
     for (int i = 0; i < NPATCHES; i++)
@@ -391,7 +409,7 @@ enum {
     ID_DD_UP = 390, ID_DD_DOWN = 391,
     ID_PLAY = 400, ID_RESUME, ID_QUIT,
     ID_GAME_BROWSE = 500, ID_GAME_OPEN, ID_RAP_BROWSE, ID_RAP_OPEN,
-    ID_LAYOUT_PS = 600, ID_LAYOUT_XB, ID_LAYOUT_AUTO,
+    ID_LAYOUT_PS = 600, ID_LAYOUT_XB, ID_LAYOUT_AUTO, ID_LAYOUT_KB,
     ID_KEY = 700, ID_BTN = 800, ID_RESTORE = 900, ID_PATCH = 1000,  /* + index */
     ID_CACHE_CLEAR = 1100, ID_CACHE_OPEN,
 };
@@ -453,6 +471,36 @@ void g_label(Graphics& gr, const wchar_t* t, RectF r, float px, const Color& c)
     SolidBrush b(c);
     gr.FillPath(&b, &p);
 }
+/* A keycap like the ones the game shows in keyboard mode (button_icons.cpp):
+ * light grey-blue, dark border, the key's short label. */
+void key_glyph(Graphics& gr, int vk, float x, float y, float s)
+{
+    const float r = 3.0f, in = 1.5f, w = s - 2 * in, h = s - 2 * in;
+    GraphicsPath p;
+    p.AddArc(x + in, y + in, 2 * r, 2 * r, 180, 90);
+    p.AddArc(x + in + w - 2 * r, y + in, 2 * r, 2 * r, 270, 90);
+    p.AddArc(x + in + w - 2 * r, y + in + h - 2 * r, 2 * r, 2 * r, 0, 90);
+    p.AddArc(x + in, y + in + h - 2 * r, 2 * r, 2 * r, 90, 90);
+    p.CloseFigure();
+    SolidBrush fill(Color(255, 205, 211, 223)); gr.FillPath(&fill, &p);
+    Pen border(Color(255, 90, 94, 104), 1.2f); gr.DrawPath(&border, &p);
+    if (vk <= 0) return;
+    const std::wstring t = cv_key_cap_label(vk);
+    FontFamily ff(cv_key_cap_font());
+    StringFormat sf(StringFormat::GenericTypographic());
+    sf.SetAlignment(StringAlignmentCenter); sf.SetLineAlignment(StringAlignmentCenter);
+    sf.SetFormatFlags(StringFormatFlagsNoWrap | StringFormatFlagsNoClip);
+    for (float px = s * 0.6f; ; px -= 0.5f) {
+        Font f(&ff, px, FontStyleRegular, UnitPixel);
+        RectF m; gr.MeasureString(t.c_str(), -1, &f, PointF(0, 0), &sf, &m);
+        if (m.Width <= w - 3 || px <= 6) {
+            SolidBrush ink(Color(255, 20, 22, 28));
+            gr.DrawString(t.c_str(), -1, &f, RectF(x + in, y + in, w, h), &sf, &ink);
+            return;
+        }
+    }
+}
+
 void btn_glyph(Graphics& gr, int layout, int pb, float x, float y, float s = 30.0f)
 {
     const float cx = x + s / 2, cy = y + s / 2, k = s / 26.0f;
@@ -869,7 +917,8 @@ void draw_pad_card(Graphics& gr, float x, float y, float w, float h, const Font&
 }
 
 /* The icon set in use: the chosen one, or the connected controller's. */
-int icon_layout() { return g.s.layout == 2 ? (g.pad_kind == PAD_KIND_XINPUT ? 1 : 0) : g.s.layout; }
+/* (Automatic and keyboard name the controller's own buttons in this table.) */
+int icon_layout() { return g.s.layout >= 2 ? (g.pad_kind == PAD_KIND_XINPUT ? 1 : 0) : g.s.layout; }
 
 /* The Xbox button that plays a PS3 role. Xbox icons come with the Xbox 360
  * layout (pad_phys_360_layout, set from set_icon_env): the L1/R1 roles sit on
@@ -892,26 +941,48 @@ void draw_controles(Graphics& gr, const Font& head, const Font& body, const Font
     text(gr, T(S_CONTROLS_HINT), x, y + 32, fsm, C_DIM, StringAlignmentNear, 820, 20);
     y += 72;
     text(gr, T(S_ICONS), x, y, body, C_TEXT, StringAlignmentNear, 160, 28);
-    draw_radio(gr, x + 170, y, T(S_ICONS_AUTO), g.s.layout == 2, ID_LAYOUT_AUTO, body);
-    draw_radio(gr, x + 300, y, L"PlayStation", g.s.layout == 0, ID_LAYOUT_PS, body);
-    draw_radio(gr, x + 430, y, L"Xbox", g.s.layout == 1, ID_LAYOUT_XB, body);
-    draw_pad_card(gr, x + 520, y - 14, W - SIDE - 64.0f - 520, 56, body, fsm);
+    float card_x = 0;
+    /* Each choice takes its label's measured width, so four fit beside the
+     * controller card in every language. */
+    {
+        const struct { std::wstring t; int layout, id; } opts[] = {
+            { T(S_ICONS_AUTO), 2, ID_LAYOUT_AUTO }, { L"PlayStation", 0, ID_LAYOUT_PS },
+            { L"Xbox", 1, ID_LAYOUT_XB }, { T(S_ICONS_KB), 3, ID_LAYOUT_KB } };
+        StringFormat sf(StringFormat::GenericTypographic());
+        float rx = x + 160;
+        for (const auto& o : opts) {
+            RectF m; gr.MeasureString(o.t.c_str(), -1, &body, PointF(0, 0), &sf, &m);
+            draw_radio(gr, rx, y, o.t, g.s.layout == o.layout, o.id, body);
+            rx += 24 + m.Width + 16;
+        }
+        draw_pad_card(gr, rx, y - 14, x + W - SIDE - 64.0f - rx, 56, body, fsm);
+        card_x = rx;
+    }
+    /* What the choice does, in one short line under it. */
+    text(gr, T(S_ICONS_HINT), x, y + 24, fsm, C_DIM, StringAlignmentNear, card_x - x - 12, 18);
     y += 54;
     /* 28 px rows: with 16 of them the Restore row ends above the bottom bar
      * (Jogar / Voltar ao jogo at H - 78); 31 px ran the two into each other. */
     const float c1 = x, c2 = x + 250, c3 = x + 480, rowh = 28;
+    /* The column whose icons the game shows is marked (red, underlined);
+     * the other is dimmed. Automatic marks both. */
+    const bool kb_on = g.s.layout >= 2, pad_on = g.s.layout != 3;
     text(gr, T(S_COL_GAME), c1, y, col, C_RED);
-    text(gr, T(S_COL_KB), c2, y, col, C_RED);
-    text(gr, T(S_COL_PAD), c3, y, col, C_RED);
+    text(gr, T(S_COL_KB), c2, y, col, kb_on ? C_RED : C_DIM);
+    text(gr, T(S_COL_PAD), c3, y, col, pad_on ? C_RED : C_DIM);
+    { SolidBrush ul(C_RED);
+      if (kb_on)  gr.FillRectangle(&ul, c2, y + 24, 220.0f, 2.0f);
+      if (pad_on) gr.FillRectangle(&ul, c3, y + 24, 262.0f, 2.0f); }
     y += 30;
     for (int i = 0; i < NROWS; i++) {
         int a = k_rows[i];
         float ry = y + i * rowh;
         btn_glyph(gr, 0, k_pad_default_btn[a], c1, ry + 1, 26.0f);
         text(gr, action_name(a), c1 + 38, ry, body, C_TEXT, StringAlignmentNear, 200, 28);
-        /* keyboard cell */
-        RectF kr(c2, ry + 1, 200, 25);
+        /* keyboard cell: the keycap the game shows, then the key's name */
+        RectF kr(c2 + 34, ry + 1, 186, 25);
         bool kact = g.cap == CAP_KEY && g.cap_action == a;
+        if (!kact) key_glyph(gr, g.s.key[a], c2, ry + 1, 26.0f);
         field(gr, kr, g.hover == ID_KEY + a, kact);
         text(gr, kact ? std::wstring(T(S_PRESS_KEY)) : key_name(g.s.key[a]), kr.X + 8, kr.Y, body,
              kact ? C_RED_HI : C_TEXT, StringAlignmentNear, kr.Width - 12, kr.Height);
@@ -1119,13 +1190,15 @@ void open_in_explorer(const std::wstring& p)
 }
 
 /* While the game runs: display mode, resolution and controls apply at once. */
-void apply_live()
+void set_map_env();
+
+void apply_live(bool restore_menu = true)
 {
     if (!g.running) return;
     if (g.s.mode != g.applied_mode) {
         g.applied_mode = g.s.mode;
         rsx_d3d12_set_window_mode(g.s.mode);
-        SetTimer(g.hwnd, 2, 200, NULL);   /* then put the menu back on top */
+        if (restore_menu) SetTimer(g.hwnd, 2, 200, NULL);   /* then put the menu back on top */
     }
     if (g.s.res != g.applied_res) {
         g.applied_res = g.s.res;
@@ -1135,7 +1208,10 @@ void apply_live()
         g.applied_aa = g.s.aa;
         rsx_d3d12_set_aa(g.s.aa);
     }
+    rsx_d3d12_set_color_adjust(g.s.brightness, g.s.contrast);
+    rsx_d3d12_set_saturation(g.s.saturation);
     cellpad_set_map(g.s.btn, g.s.key);
+    set_map_env();
     for (int i = 0; i < NPATCHES; i++) ps3_patch_set(k_patches[i].id, g.s.patch[i]);
 }
 
@@ -1156,6 +1232,9 @@ void hide_menu()
 }
 void toggle_menu() { if (GetForegroundWindow() == g.hwnd) hide_menu(); else show_menu(); }
 const UINT WM_TOGGLE_MENU = WM_APP + 1;
+const UINT WM_PC_SETTINGS_READ = WM_APP + 2;
+const UINT WM_PC_SETTINGS_CHANGE = WM_APP + 3;
+const UINT WM_PC_SETTINGS_READ_SATURATION = WM_APP + 4;
 void menu_hook() { PostMessageW(g.hwnd, WM_TOGGLE_MENU, 0, 0); }   /* game window thread */
 void quit_game()
 {
@@ -1198,8 +1277,8 @@ void click(int id)
     else if (id == ID_RAP_BROWSE) { auto p = pick(false, g.s.rap, T(S_RAP_FILTER), L"*.rap"); if (!p.empty()) { g.s.rap = p; changed(); } }
     else if (id == ID_GAME_OPEN) open_in_explorer(g.s.game);
     else if (id == ID_RAP_OPEN) open_in_explorer(g.s.rap);
-    else if (id == ID_LAYOUT_PS || id == ID_LAYOUT_XB || id == ID_LAYOUT_AUTO) {
-        g.s.layout = id == ID_LAYOUT_AUTO ? 2 : id - ID_LAYOUT_PS;
+    else if (id == ID_LAYOUT_PS || id == ID_LAYOUT_XB || id == ID_LAYOUT_AUTO || id == ID_LAYOUT_KB) {
+        g.s.layout = id == ID_LAYOUT_AUTO ? 2 : id == ID_LAYOUT_KB ? 3 : id - ID_LAYOUT_PS;
         set_icon_env();   /* the game reads it when it next loads a screen with icons */
         changed();
     }
@@ -1238,6 +1317,18 @@ int vk_from_msg(WPARAM wp, LPARAM lp)
 LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp)
 {
     switch (m) {
+    case WM_PC_SETTINGS_READ: return g.s.mode | (g.s.res << 4) | (g.s.aa << 8) | ((g.s.brightness + 80) << 10) | ((g.s.contrast - 50) << 18);
+    case WM_PC_SETTINGS_READ_SATURATION: return g.s.saturation;
+    case WM_PC_SETTINGS_CHANGE:
+        if (wp == 0 && lp >= 0 && lp <= 4) g.s.res = int(lp);
+        else if (wp == 1 && lp >= 0 && lp <= 2) g.s.aa = int(lp);
+        else if (wp == 2 && lp >= 0 && lp <= 2) g.s.mode = int(lp);
+        else if (wp == 3 && lp >= 0 && lp <= 160) g.s.brightness = -80 + int(lp);
+        else if (wp == 4 && lp >= 0 && lp <= 130) g.s.contrast = 50 + int(lp);
+        else if (wp == 5 && lp >= 0 && lp <= 200) g.s.saturation = int(lp);
+        else return 0;
+        save_settings(g.s); KillTimer(h, 2); apply_live(false);
+        InvalidateRect(h, NULL, FALSE); return 1;
     case WM_ERASEBKGND: return 1;
     case WM_PAINT: { PAINTSTRUCT ps; HDC dc = BeginPaint(h, &ps); paint(dc); EndPaint(h, &ps); return 0; }
     case WM_MOUSEMOVE: {
@@ -1332,13 +1423,26 @@ void set_env(const char* k, const std::string& v) { _putenv_s(k, v.c_str()); }
 /* In-game icons (button_icons.cpp): auto follows the first controller. */
 void set_icon_env()
 {
-    const char* v = g.s.layout == 2 ? "auto" : g.s.layout == 1 ? "xbox" : "ps";
+    const char* v = g.s.layout == 3 ? "keyboard" : g.s.layout == 2 ? "auto" : g.s.layout == 1 ? "xbox" : "ps";
     set_env("CV_BUTTON_ICONS", v);
     /* The controls follow the icons, so the 360 manual shown is what the pad
      * does: Xbox icons, 360 layout (on any controller); auto, Xbox pads only. */
-    set_env("PAD_360_LAYOUT", g.s.layout == 2 ? "auto" : g.s.layout == 1 ? "on" : "off");
+    set_env("PAD_360_LAYOUT", g.s.layout >= 2 ? "auto" : g.s.layout == 1 ? "on" : "off");
 }
 void set_env_default(const char* k, const char* v) { if (!getenv(k)) _putenv_s(k, v); }
+
+/* PAD_BTNMAP / PAD_KEYMAP from the settings: read by the pad at start, and by
+ * the button icons whenever they change (the keys drawn in the game). */
+void set_map_env()
+{
+    std::string bm, km;
+    for (int a = 0; a < PA_COUNT; a++) {
+        bm += std::string(k_pad_action_id[a]) + "=" + pad_phys_id(g.s.btn[a]) + (a + 1 < PA_COUNT ? "," : "");
+        km += std::string(k_pad_action_id[a]) + "=" + std::to_string(g.s.key[a]) + (a + 1 < PA_COUNT ? "," : "");
+    }
+    set_env("PAD_BTNMAP", bm);
+    set_env("PAD_KEYMAP", km);
+}
 std::string narrow(const std::wstring& w)
 {
     int n = WideCharToMultiByte(CP_ACP, 0, w.c_str(), -1, NULL, 0, NULL, NULL);
@@ -1398,18 +1502,17 @@ void start_game()
     set_env("RES_SCALE", k_res[s.res].scale);
     set_env("WINDOW_MODE", k_mode_env[s.mode]);
     set_env("AA_MODE", std::to_string(s.aa));
+    set_env("CV_BRIGHTNESS", std::to_string(s.brightness));
+    set_env("CV_CONTRAST", std::to_string(s.contrast));
+    set_env("CV_SATURATION", std::to_string(s.saturation));
+    rsx_d3d12_set_color_adjust(s.brightness, s.contrast);
+    rsx_d3d12_set_saturation(s.saturation);
     set_icon_env();
     std::string pl;
     for (int i = 0; i < NPATCHES; i++)
         if (s.patch[i]) pl += (pl.empty() ? "" : ",") + std::string(k_patches[i].id);
     set_env("PS3_PATCHES", pl);
-    std::string bm, km;
-    for (int a = 0; a < PA_COUNT; a++) {
-        bm += std::string(k_pad_action_id[a]) + "=" + pad_phys_id(s.btn[a]) + (a + 1 < PA_COUNT ? "," : "");
-        km += std::string(k_pad_action_id[a]) + "=" + std::to_string(s.key[a]) + (a + 1 < PA_COUNT ? "," : "");
-    }
-    set_env("PAD_BTNMAP", bm);
-    set_env("PAD_KEYMAP", km);
+    set_map_env();
     /* Sound effects decode through the runtime's own ATRAC3 plug-in, so no
      * PS3 firmware is needed even when a dev_flash path is configured. */
     set_env_default("PS3_ATRAC_STANDIN", "1");
@@ -1465,6 +1568,74 @@ DWORD WINAPI launcher_thread(void*)
 }
 
 }  /* namespace */
+
+/* Settings bridge used only by the native in-game PC SETTINGS row. */
+static int cv_pc_fallback_settings = -1;
+extern "C" int cv_pc_settings_read(void)
+{
+    if (g.hwnd && IsWindow(g.hwnd)) return int(SendMessageW(g.hwnd, WM_PC_SETTINGS_READ, 0, 0));
+    if (cv_pc_fallback_settings < 0) {
+        int mode=0, res=1, aa=0;
+        if (const char* v=getenv("WINDOW_MODE")) {
+            if (!_stricmp(v,"borderless") || !strcmp(v,"1")) mode=1;
+            else if (!_stricmp(v,"fullscreen") || !strcmp(v,"2")) mode=2;
+        }
+        if (const char* v=getenv("RES_SCALE")) {
+            const float scale=float(atof(v)); const float scales[]={.6667f,1.f,1.5f,2.f,3.f};
+            float best=100.f;
+            for(int i=0;i<5;i++) { const float delta=scale>scales[i]?scale-scales[i]:scales[i]-scale;
+                if(delta<best) {best=delta;res=i;} }
+        }
+        if (const char* v=getenv("AA_MODE")) aa=std::clamp(atoi(v),0,2);
+        int bri=0,con=100;
+        if (const char* v=getenv("CV_BRIGHTNESS")) bri=std::clamp(atoi(v),-80,80);
+        if (const char* v=getenv("CV_CONTRAST")) con=std::clamp(atoi(v),50,180);
+        cv_pc_fallback_settings=mode|(res<<4)|(aa<<8)|((bri+80)<<10)|((con-50)<<18);
+    }
+    return cv_pc_fallback_settings;
+}
+static int cv_pc_fallback_saturation = -1;
+extern "C" int cv_pc_settings_saturation_read(void)
+{
+    if (g.hwnd && IsWindow(g.hwnd)) return int(SendMessageW(g.hwnd, WM_PC_SETTINGS_READ_SATURATION, 0, 0));
+    if (cv_pc_fallback_saturation < 0) {
+        const char* value=getenv("CV_SATURATION");
+        cv_pc_fallback_saturation=std::clamp(value?atoi(value):_wtoi(ini_get(L"tela",L"saturacao",L"100").c_str()),0,200);
+    }
+    return cv_pc_fallback_saturation;
+}
+extern "C" void cv_pc_settings_change(int which,int value)
+{
+    if (which<0 || which>5 || value<0 || value>(which==0?4:which<=2?2:which==3?160:which==4?130:200)) return;
+    if (g.hwnd && IsWindow(g.hwnd)) { SendMessageW(g.hwnd,WM_PC_SETTINGS_CHANGE,WPARAM(which),LPARAM(value)); return; }
+    int packed=cv_pc_settings_read();
+    if(which==0) {
+        packed=(packed&~0x70)|(value<<4);
+        ini_set(L"tela",L"resolucao",std::to_wstring(value));
+        rsx_d3d12_set_res_scale(float(atof(k_res[value].scale)));
+    } else if(which==1) {
+        packed=(packed&~0x300)|(value<<8);
+        ini_set(L"tela",L"antialias",std::to_wstring(value)); rsx_d3d12_set_aa(value);
+    } else if(which==2) {
+        packed=(packed&~3)|value;
+        ini_set(L"tela",L"modo",std::to_wstring(value)); rsx_d3d12_set_window_mode(value);
+    } else if(which==3) {
+        const int brightness=-80+value;
+        packed=(packed&~(255<<10))|(value<<10);
+        ini_set(L"tela",L"brilho",std::to_wstring(brightness));
+        rsx_d3d12_set_color_adjust(brightness,50+((packed>>18)&255));
+    } else if(which==4) {
+        const int contrast=50+value;
+        packed=(packed&~(255<<18))|(value<<18);
+        ini_set(L"tela",L"contraste",std::to_wstring(contrast));
+        rsx_d3d12_set_color_adjust(-80+((packed>>10)&255),contrast);
+    } else {
+        ini_set(L"tela",L"saturacao",std::to_wstring(value));
+        cv_pc_fallback_saturation=value;
+        rsx_d3d12_set_saturation(value);
+    }
+    cv_pc_fallback_settings=packed;
+}
 
 /* Opens the launcher on its own thread and returns 1 with the EBOOT.elf path
  * once the player pressed Jogar, or 0 if the window was closed first. After

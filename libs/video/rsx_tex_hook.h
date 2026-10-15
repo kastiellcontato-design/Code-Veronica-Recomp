@@ -21,6 +21,16 @@ typedef void (*rsx_tex_source_fn)(uint8_t* data, uint32_t nbytes, uint32_t off);
 
 extern rsx_tex_source_fn g_rsx_tex_source_hook;
 
+/* The backend notices a changed texture by a sparse checksum, which can miss a
+ * small edit (one icon in a large page). A title that rewrites a texture's
+ * bytes outside the hook calls this with its guest offset (as the hook was
+ * given it) so the next bind uploads it again. */
+void rsx_tex_mark_dirty(uint32_t off);
+
+/* Backend side: 1 (and forgets it) if `off` was marked since. Cheap when
+ * nothing is marked. */
+int rsx_tex_take_dirty(uint32_t off);
+
 #ifdef __cplusplus
 }
 #endif

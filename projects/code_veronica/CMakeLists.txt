@@ -188,6 +188,30 @@ if(PORT_ENABLE_SPU)
     endif()
 endif()
 
+# Guest OPTION menu hooks: create a build-local copy of only the affected
+# lifted units. Direct and indirect guest calls keep their original names;
+# the renamed bodies remain available to native_pc_menu.cpp as originals.
+if(WIN32)
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    set(CV_MENU_HOOK_SCRIPT "${PS3RECOMP_DIR}/tools/cv_native_menu_hooks.py")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CV_MENU_HOOK_SCRIPT}")
+    execute_process(COMMAND "${Python3_EXECUTABLE}" "${CV_MENU_HOOK_SCRIPT}" --discover "${RECOMP_DIR}"
+        RESULT_VARIABLE CV_MENU_DISCOVERY_RESULT OUTPUT_VARIABLE CV_MENU_UNITS
+        ERROR_VARIABLE CV_MENU_DISCOVERY_ERROR OUTPUT_STRIP_TRAILING_WHITESPACE)
+    if(NOT CV_MENU_DISCOVERY_RESULT EQUAL 0)
+        message(FATAL_ERROR "Cannot locate native menu hooks: ${CV_MENU_DISCOVERY_ERROR}")
+    endif()
+    foreach(CV_MENU_UNIT IN LISTS CV_MENU_UNITS)
+        get_filename_component(CV_MENU_UNIT_NAME "${CV_MENU_UNIT}" NAME)
+        set(CV_MENU_PATCHED "${CMAKE_CURRENT_BINARY_DIR}/native_menu_lift/${CV_MENU_UNIT_NAME}")
+        add_custom_command(OUTPUT "${CV_MENU_PATCHED}"
+            COMMAND "${Python3_EXECUTABLE}" "${CV_MENU_HOOK_SCRIPT}"
+                    --input "${CV_MENU_UNIT}" --output "${CV_MENU_PATCHED}"
+            DEPENDS "${CV_MENU_UNIT}" "${CV_MENU_HOOK_SCRIPT}" VERBATIM)
+        list(REMOVE_ITEM RECOMP_SOURCES "${CV_MENU_UNIT}")
+        list(APPEND RECOMP_SOURCES "${CV_MENU_PATCHED}")
+    endforeach()
+endif()
 add_executable(${PROJECT_NAME}
     main.cpp
     launcher.cpp
@@ -226,6 +250,7 @@ endif()
 # title's own artwork and are not in the repository; without them the launcher
 # draws a plain banner and the exe keeps the default icon.
 if(WIN32)
+    target_sources(${PROJECT_NAME} PRIVATE native_pc_menu.cpp)
     file(GLOB LAUNCHER_ART CONFIGURE_DEPENDS
          "${CMAKE_CURRENT_SOURCE_DIR}/launcher_art/*.png"
          "${CMAKE_CURRENT_SOURCE_DIR}/launcher_art/*.jpg")

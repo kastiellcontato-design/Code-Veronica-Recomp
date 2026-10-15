@@ -20,6 +20,7 @@
 #include "rsx_d3d12_backend.h"
 #include "rsx_primitives.h"
 #include "rsx_vertex_fetch.h"
+#include "rsx_ui_batch.h"
 #include "rsx_texture_layout.h"
 #include "rsx_tex_hook.h"
 #include <stdio.h>
@@ -320,6 +321,7 @@ typedef struct {
     ID3D12PipelineState*  pipeline_state;         /* triangle class — default */
     ID3D12PipelineState*  pipeline_state_lines;   /* line class */
     ID3D12PipelineState*  pipeline_state_points;  /* point class */
+    ID3D12PipelineState*  pipeline_state_ui;      /* alpha UI batch, no depth */
 
     /* Depth/stencil */
     ID3D12DescriptorHeap* dsv_heap;
@@ -428,6 +430,89 @@ static D3D12State s_d3d;
  * Unset or 1: nothing changes. */
 static float s_rs = 1.0f;
 static u32 rs_dim(u32 v, float sc) { return sc == 1.0f ? v : (u32)((float)v * sc + 0.5f); }
+/* Submitted by the game thread; consumed only on the render thread. */
+#define UI_MAX_QUADS 131072u
+static SRWLOCK s_ui_lock = SRWLOCK_INIT;
+static rsx_ui_quad s_ui_quads[UI_MAX_QUADS];
+static u32 s_ui_count;
+static ULONGLONG s_ui_updated;
+static ID3D12Resource* s_ui_vb[FRAME_COUNT];
+static void* s_ui_mapped[FRAME_COUNT];
+static u32 s_ui_vb_quads[FRAME_COUNT];
+typedef struct UiVertex { float x,y,z,r,g,b,a,u,v; } UiVertex;
+void rsx_d3d12_set_ui_quads(const rsx_ui_quad* quads,u32 count)
+{
+    if (!quads || count > UI_MAX_QUADS) count=0;
+    AcquireSRWLockExclusive(&s_ui_lock);
+    if(count) memcpy(s_ui_quads,quads,(size_t)count*sizeof(*quads));
+    s_ui_count=count;s_ui_updated=GetTickCount64();
+    ReleaseSRWLockExclusive(&s_ui_lock);
+}
+static void ui_batch_draw(u32 fi)
+{
+    ID3D12GraphicsCommandList* cl=s_d3d.cmd_list;
+    if(!s_d3d.pipeline_state_ui || fi>=FRAME_COUNT)return;
+    AcquireSRWLockShared(&s_ui_lock);
+    u32 count=s_ui_count;
+    if(!count || GetTickCount64()-s_ui_updated>250) {
+        ReleaseSRWLockShared(&s_ui_lock);return;
+    }
+    if(!s_ui_vb[fi] || s_ui_vb_quads[fi] < count) {
+        u32 capacity=s_ui_vb_quads[fi] ? s_ui_vb_quads[fi] : 1024u;
+        while(capacity<count && capacity<UI_MAX_QUADS)capacity*=2;
+        if(capacity>UI_MAX_QUADS)capacity=UI_MAX_QUADS;
+        D3D12_HEAP_PROPERTIES hp={0};hp.Type=D3D12_HEAP_TYPE_UPLOAD;
+        D3D12_RESOURCE_DESC rd={0};rd.Dimension=D3D12_RESOURCE_DIMENSION_BUFFER;
+        rd.Width=(u64)capacity*6*sizeof(UiVertex);rd.Height=1;
+        rd.DepthOrArraySize=1;rd.MipLevels=1;rd.SampleDesc.Count=1;
+        rd.Layout=D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+        ID3D12Resource* grown=NULL;
+        HRESULT hr=s_d3d.device->lpVtbl->CreateCommittedResource(s_d3d.device,&hp,
+            D3D12_HEAP_FLAG_NONE,&rd,D3D12_RESOURCE_STATE_GENERIC_READ,NULL,
+            &IID_ID3D12Resource,(void**)&grown);
+        D3D12_RANGE no_read={0,0};
+        void* grown_mapped=NULL;
+        if(SUCCEEDED(hr))hr=grown->lpVtbl->Map(grown,0,&no_read,&grown_mapped);
+        if(FAILED(hr)) {
+            if(grown)grown->lpVtbl->Release(grown);
+            ReleaseSRWLockShared(&s_ui_lock);return;
+        }
+        if(s_ui_vb[fi])s_ui_vb[fi]->lpVtbl->Release(s_ui_vb[fi]);
+        s_ui_vb[fi]=grown;s_ui_mapped[fi]=grown_mapped;s_ui_vb_quads[fi]=capacity;
+    }
+    UiVertex* dst=(UiVertex*)s_ui_mapped[fi];
+    const unsigned corners[6]={0,1,2,2,1,3};
+    for(u32 q=0;q<count;q++) {
+        const rsx_ui_quad* r=&s_ui_quads[q];
+        for(unsigned k=0;k<6;k++) {
+            unsigned c=corners[k];
+            UiVertex v={r->x+((c&2)?r->w:0),r->y+((c&1)?r->h:0),0,
+                ((r->argb>>16)&255)/255.f,((r->argb>>8)&255)/255.f,
+                (r->argb&255)/255.f,(r->argb>>24)/255.f,0,0};
+            dst[q*6+k]=v;
+        }
+    }
+    ReleaseSRWLockShared(&s_ui_lock);
+    u32 w=rs_dim(s_d3d.width,s_rs),h=rs_dim(s_d3d.height,s_rs);
+    float mvp[16]={0};
+    mvp[0]=2.f*(float)h/(480.f*(float)w);mvp[5]=-2.f/480.f;
+    mvp[10]=mvp[15]=1;mvp[12]=-640.f*(float)h/(480.f*(float)w);mvp[13]=1;
+    D3D12_CPU_DESCRIPTOR_HANDLE rtv;
+    s_d3d.rtv_heap->lpVtbl->GetCPUDescriptorHandleForHeapStart(s_d3d.rtv_heap,&rtv);
+    rtv.ptr+=(u64)fi*s_d3d.rtv_descriptor_size;
+    cl->lpVtbl->OMSetRenderTargets(cl,1,&rtv,FALSE,NULL);
+    D3D12_VIEWPORT vp={0,0,(float)w,(float)h,0,1};
+    D3D12_RECT sc={0,0,(LONG)w,(LONG)h};
+    cl->lpVtbl->RSSetViewports(cl,1,&vp);cl->lpVtbl->RSSetScissorRects(cl,1,&sc);
+    cl->lpVtbl->SetGraphicsRootSignature(cl,s_d3d.root_signature);
+    cl->lpVtbl->SetPipelineState(cl,s_d3d.pipeline_state_ui);
+    cl->lpVtbl->SetGraphicsRoot32BitConstants(cl,0,16,mvp,0);
+    D3D12_VERTEX_BUFFER_VIEW vb={s_ui_vb[fi]->lpVtbl->GetGPUVirtualAddress(s_ui_vb[fi]),
+        count*6*sizeof(UiVertex),sizeof(UiVertex)};
+    cl->lpVtbl->IASetVertexBuffers(cl,0,1,&vb);
+    cl->lpVtbl->IASetPrimitiveTopology(cl,D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    cl->lpVtbl->DrawInstanced(cl,count*6,1,0,0);
+}
 static float rs_for(u32 w, u32 h) { return (s_rs != 1.0f && (u64)w * h > 16384u) ? s_rs : 1.0f; }
 static void rs_set_vp(float sc, const D3D12_VIEWPORT* vp, const D3D12_RECT* rc)
 {
@@ -1282,6 +1367,22 @@ static int init_d3d12(u32 width, u32 height)
             if (SUCCEEDED(hr)) printf("[D3D12] Pipeline state created (point class)\n");
             else printf("[D3D12] PSO POINT creation failed (0x%08lX)\n", hr);
 
+            /* Flat UI geometry uses the same shader with alpha and no depth. */
+            pso_desc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+            pso_desc.DepthStencilState.DepthEnable = FALSE;
+            pso_desc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+            pso_desc.DSVFormat = DXGI_FORMAT_UNKNOWN;
+            pso_desc.BlendState.RenderTarget[0].BlendEnable = TRUE;
+            pso_desc.BlendState.RenderTarget[0].SrcBlend = D3D12_BLEND_SRC_ALPHA;
+            pso_desc.BlendState.RenderTarget[0].DestBlend = D3D12_BLEND_INV_SRC_ALPHA;
+            pso_desc.BlendState.RenderTarget[0].BlendOp = D3D12_BLEND_OP_ADD;
+            pso_desc.BlendState.RenderTarget[0].SrcBlendAlpha = D3D12_BLEND_ONE;
+            pso_desc.BlendState.RenderTarget[0].DestBlendAlpha = D3D12_BLEND_INV_SRC_ALPHA;
+            pso_desc.BlendState.RenderTarget[0].BlendOpAlpha = D3D12_BLEND_OP_ADD;
+            hr = s_d3d.device->lpVtbl->CreateGraphicsPipelineState(
+                s_d3d.device, &pso_desc, &IID_ID3D12PipelineState,
+                (void**)&s_d3d.pipeline_state_ui);
+            if (FAILED(hr)) fprintf(stderr,"[ui-batch] PSO failed: 0x%08lX\n",hr);
             vs_blob->lpVtbl->Release(vs_blob);
             ps_blob->lpVtbl->Release(ps_blob);
         }
@@ -4174,7 +4275,7 @@ static int vp_upload_tex_slot_impl(u32 off, u32 w, u32 h, u32 fmt, int cube, u32
              * every one of them every frame was ~70% of the frame's CPU time. */
             u32 nb = dxt ? (blkrow * blkrows) : (w * h * bpp);
             u32 cs = TEX_CSUM(vm_base + c->off, nb);
-            if (cs == c->csum) { c->used = 1; return i; }
+            if (cs == c->csum && !rsx_tex_take_dirty(c->off)) { c->used = 1; return i; }
             s_tex_why = 1;
             slot = i; break;                      /* stale: fall through and redo */
         }
@@ -5950,9 +6051,47 @@ void rsx_d3d12_composite_from_offscreen(u32 raw_off) { s_composite_src = raw_off
 
 static volatile int s_aa_mode = -1;          /* -1: read AA_MODE once */
 void rsx_d3d12_set_aa(int mode) { s_aa_mode = (mode >= 0 && mode <= 2) ? mode : 0; }
+static volatile int s_color_brightness;
+static volatile int s_color_contrast = 100;
+static volatile int s_color_saturation = 100;
+static volatile int s_color_env_loaded;
+void rsx_d3d12_set_color_adjust(int brightness, int contrast)
+{
+    if (brightness < -80) brightness = -80;
+    if (brightness > 80) brightness = 80;
+    if (contrast < 50) contrast = 50;
+    if (contrast > 180) contrast = 180;
+    s_color_brightness = brightness;
+    s_color_contrast = contrast;
+    s_color_env_loaded = 1;
+}
+void rsx_d3d12_set_saturation(int saturation)
+{
+    if (saturation < 0) saturation = 0;
+    if (saturation > 200) saturation = 200;
+    s_color_saturation = saturation;
+    s_color_env_loaded = 1;
+}
+static void color_adjust_load_env(void)
+{
+    if (s_color_env_loaded) return;
+    const char* b = getenv("CV_BRIGHTNESS");
+    const char* c = getenv("CV_CONTRAST");
+    const char* s = getenv("CV_SATURATION");
+    if (b) s_color_brightness = atoi(b);
+    if (c) s_color_contrast = atoi(c);
+    if (s_color_brightness < -80) s_color_brightness = -80;
+    if (s_color_brightness > 80) s_color_brightness = 80;
+    if (s_color_contrast < 50) s_color_contrast = 50;
+    if (s_color_contrast > 180) s_color_contrast = 180;
+    if (s) s_color_saturation = atoi(s);
+    if (s_color_saturation < 0) s_color_saturation = 0;
+    if (s_color_saturation > 200) s_color_saturation = 200;
+    s_color_env_loaded = 1;
+}
 
 static ID3D12RootSignature* s_aa_rs;
-static ID3D12PipelineState *s_aa_fxaa, *s_aa_edge, *s_aa_weight, *s_aa_blend, *s_aa_show;
+static ID3D12PipelineState *s_aa_fxaa, *s_aa_edge, *s_aa_weight, *s_aa_blend, *s_aa_show, *s_aa_adjust;
 static int s_aa_failed[3];
 static ID3D12DescriptorHeap* s_aa_rtv;       /* 0 = edges, 1 = blend weights */
 static ID3D12Resource *s_aa_color, *s_aa_edges, *s_aa_weights;
@@ -5961,7 +6100,7 @@ static u32 s_aa_w, s_aa_h;
 static int s_aa_luts_ready;
 
 static const char k_aa_common[] =
-    "cbuffer C : register(b0) { float4 rt; };\n"     /* 1/w, 1/h, w, h */
+    "cbuffer C : register(b0) { float4 rt; float4 colorAdjust; float4 colorExtra; };\n" /* rt, brightness, contrast, saturation */
     "SamplerState LinearSampler : register(s0);\n"
     "SamplerState PointSampler : register(s1);\n"
     "Texture2D colorTex  : register(t0);\n"
@@ -5969,6 +6108,7 @@ static const char k_aa_common[] =
     "Texture2D areaTex   : register(t2);\n"
     "Texture2D searchTex : register(t3);\n"
     "Texture2D blendTex  : register(t4);\n"
+    "float3 adjust_color(float3 c) { c=saturate((c-0.5)*colorAdjust.y+0.5+colorAdjust.x); float y=dot(c,float3(0.299,0.587,0.114)); return saturate(y+(c-y)*colorExtra.x); }\n"
     "void fs_tri(uint id, out float4 p, out float2 uv) {\n"
     "    uv = float2((id << 1) & 2, id & 2);\n"
     "    p = float4(uv * float2(2, -2) + float2(-1, 1), 0, 1); }\n";
@@ -5991,7 +6131,7 @@ static const char k_aa_fxaa[] =
     "    float rangeMax = max(max(lumaN, lumaW), max(lumaE, max(lumaS, lumaM)));\n"
     "    float rangeMin = min(min(lumaN, lumaW), min(lumaE, min(lumaS, lumaM)));\n"
     "    float range = rangeMax - rangeMin;\n"
-    "    if (range < max(edgeThMin, rangeMax * edgeTh)) return float4(rgbM.rgb, 1);\n"
+    "    if (range < max(edgeThMin, rangeMax * edgeTh)) return float4(adjust_color(rgbM.rgb), 1);\n"
     "    float lumaNW = LO(posM, int2(-1, -1)), lumaSE = LO(posM, int2(1, 1));\n"
     "    float lumaNE = LO(posM, int2(1, -1)), lumaSW = LO(posM, int2(-1, 1));\n"
     "    float lumaNS = lumaN + lumaS, lumaWE = lumaW + lumaE;\n"
@@ -6053,7 +6193,12 @@ static const char k_aa_fxaa[] =
     "    float subpixH = subpixG * subpix;\n"
     "    float pixelOffsetSubpix = max(goodSpan ? pixelOffset : 0.0, subpixH);\n"
     "    if (!horzSpan) posM.x += pixelOffsetSubpix * lengthSign; else posM.y += pixelOffsetSubpix * lengthSign;\n"
-    "    return float4(colorTex.SampleLevel(LinearSampler, posM, 0).rgb, 1); }\n";
+    "    return float4(adjust_color(colorTex.SampleLevel(LinearSampler, posM, 0).rgb), 1); }\n";
+
+static const char k_aa_adjust[] =
+    "struct V { float4 p : SV_Position; float2 uv : TEXCOORD0; };\n"
+    "V vs(uint id : SV_VertexID) { V o; fs_tri(id, o.p, o.uv); return o; }\n"
+    "float4 ps(V i) : SV_Target { float4 c=colorTex.SampleLevel(LinearSampler,i.uv,0); return float4(adjust_color(c.rgb),c.a); }\n";
 
 /* SMAA: the library compiled with our own sampler and texture bindings
  * (SMAA_CUSTOM_SL), then the three passes. */
@@ -6087,7 +6232,7 @@ static const char k_aa_smaa_post[] =
     "VE vs_blend(uint id : SV_VertexID) { VE o = (VE)0; fs_tri(id, o.p, o.uv);\n"
     "    SMAANeighborhoodBlendingVS(o.uv, o.o0); return o; }\n"
     "float4 ps_blend(VE i) : SV_Target {\n"
-    "    return float4(SMAANeighborhoodBlendingPS(i.uv, i.o0, colorTex, blendTex).rgb, 1); }\n"
+    "    return float4(adjust_color(SMAANeighborhoodBlendingPS(i.uv, i.o0, colorTex, blendTex).rgb), 1); }\n"
     /* AA_SHOW=1: edges in red/green, blend weights in blue (diagnostics) */
     "float4 ps_show(VE i) : SV_Target { float2 e = edgesTex.SampleLevel(PointSampler, i.uv, 0).rg;\n"
     "    float4 w = blendTex.SampleLevel(PointSampler, i.uv, 0);\n"
@@ -6102,7 +6247,7 @@ static int aa_init_rs(void)
     range.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
     D3D12_ROOT_PARAMETER rp[2] = {0};
     rp[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
-    rp[0].Constants.Num32BitValues = 4;
+    rp[0].Constants.Num32BitValues = 12;
     rp[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
     rp[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
     rp[1].DescriptorTable.NumDescriptorRanges = 1;
@@ -6199,6 +6344,21 @@ static int aa_ready(int mode)
     return 1;
 }
 
+static int aa_adjust_ready(void)
+{
+    if (s_aa_adjust) return 1;
+    if (!aa_init_rs()) return 0;
+    const size_t n = sizeof k_aa_common + sizeof k_aa_adjust;
+    char* src = (char*)malloc(n);
+    if (!src) return 0;
+    snprintf(src, n, "%s%s", k_aa_common, k_aa_adjust);
+    s_aa_adjust = aa_pso(src, strlen(src), "vs", "ps");
+    free(src);
+    if (!s_aa_adjust) return 0;
+    printf("[PC_SETTINGS] color adjustment ready\n");
+    return 1;
+}
+
 static ID3D12Resource* aa_tex(u32 w, u32 h, DXGI_FORMAT fmt, int rt, D3D12_RESOURCE_STATES st)
 {
     D3D12_HEAP_PROPERTIES hp = {0}; hp.Type = D3D12_HEAP_TYPE_DEFAULT;
@@ -6271,20 +6431,26 @@ static void aa_upload_luts(void)
 }
 
 /* Frame-sized targets, recreated when the render size changes. */
-static int aa_targets(u32 w, u32 h)
+static int aa_targets(u32 w, u32 h, int with_smaa)
 {
-    if (s_aa_color && s_aa_w == w && s_aa_h == h) return 1;
-    defer_release(s_aa_color); defer_release(s_aa_edges); defer_release(s_aa_weights);
-    s_aa_color   = aa_tex(w, h, DXGI_FORMAT_R8G8B8A8_UNORM, 0, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-    s_aa_edges   = aa_tex(w, h, DXGI_FORMAT_R8G8B8A8_UNORM, 1, D3D12_RESOURCE_STATE_RENDER_TARGET);
-    s_aa_weights = aa_tex(w, h, DXGI_FORMAT_R8G8B8A8_UNORM, 1, D3D12_RESOURCE_STATE_RENDER_TARGET);
-    if (!s_aa_color || !s_aa_edges || !s_aa_weights) {
+    if (s_aa_color && s_aa_w == w && s_aa_h == h) {
+        if (!with_smaa || (s_aa_edges && s_aa_weights)) return 1;
+    } else {
         defer_release(s_aa_color); defer_release(s_aa_edges); defer_release(s_aa_weights);
-        s_aa_color = s_aa_edges = s_aa_weights = NULL; s_aa_w = s_aa_h = 0;
+        s_aa_color = aa_tex(w, h, DXGI_FORMAT_R8G8B8A8_UNORM, 0, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        s_aa_edges = s_aa_weights = NULL;
+        if (!s_aa_color) { s_aa_w = s_aa_h = 0; return 0; }
+        s_aa_w = w; s_aa_h = h;
+        srv_write(AA_SRV_BASE + 0, s_aa_color, DXGI_FORMAT_R8G8B8A8_UNORM, D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING);
+    }
+    if (!with_smaa) return 1;
+    s_aa_edges = aa_tex(w, h, DXGI_FORMAT_R8G8B8A8_UNORM, 1, D3D12_RESOURCE_STATE_RENDER_TARGET);
+    s_aa_weights = aa_tex(w, h, DXGI_FORMAT_R8G8B8A8_UNORM, 1, D3D12_RESOURCE_STATE_RENDER_TARGET);
+    if (!s_aa_edges || !s_aa_weights) {
+        defer_release(s_aa_edges); defer_release(s_aa_weights);
+        s_aa_edges = s_aa_weights = NULL;
         return 0;
     }
-    s_aa_w = w; s_aa_h = h;
-    srv_write(AA_SRV_BASE + 0, s_aa_color,   DXGI_FORMAT_R8G8B8A8_UNORM, D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING);
     srv_write(AA_SRV_BASE + 1, s_aa_edges,   DXGI_FORMAT_R8G8B8A8_UNORM, D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING);
     srv_write(AA_SRV_BASE + 4, s_aa_weights, DXGI_FORMAT_R8G8B8A8_UNORM, D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING);
     D3D12_CPU_DESCRIPTOR_HANDLE h0;
@@ -6313,10 +6479,17 @@ static void aa_apply(u32 fi)
         s_aa_mode = !e ? 0 : (!_stricmp(e, "fxaa") || !strcmp(e, "1")) ? 1
                   : (!_stricmp(e, "smaa") || !strcmp(e, "2")) ? 2 : 0;
     }
-    const int mode = s_aa_mode;
-    if (mode <= 0 || !aa_ready(mode)) return;
+    color_adjust_load_env();
+    int mode = s_aa_mode;
+    const int adjust = s_color_brightness != 0 || s_color_contrast != 100 || s_color_saturation != 100;
+    if (mode <= 0 && !adjust) return;
+    if (mode > 0 && !aa_ready(mode)) {
+        if (!adjust) return;
+        mode = 0;
+    }
+    if (mode == 0 && !aa_adjust_ready()) return;
     const u32 w = rs_dim(s_d3d.width, s_rs), h = rs_dim(s_d3d.height, s_rs);
-    if (!aa_targets(w, h)) return;
+    if (!aa_targets(w, h, mode == 2)) return;
     if (mode == 2) { aa_upload_luts(); if (!s_aa_luts_ready) return; }
     ID3D12GraphicsCommandList* cl = s_d3d.cmd_list;
     ID3D12Resource* bb = s_d3d.render_targets[fi];
@@ -6330,8 +6503,12 @@ static void aa_apply(u32 fi)
 
     cl->lpVtbl->SetDescriptorHeaps(cl, 1, &s_d3d.srv_heap);
     cl->lpVtbl->SetGraphicsRootSignature(cl, s_aa_rs);
-    const float metrics[4] = { 1.0f / (float)w, 1.0f / (float)h, (float)w, (float)h };
-    cl->lpVtbl->SetGraphicsRoot32BitConstants(cl, 0, 4, metrics, 0);
+    /* HLSL cbuffer packs three float4s: rt[0..3], colorAdjust[4..7],
+       colorExtra[8..11]. Saturation belongs at constant 8 (colorExtra.x). */
+    const float metrics[12] = { 1.0f / (float)w, 1.0f / (float)h, (float)w, (float)h,
+        (float)s_color_brightness / 200.0f, (float)s_color_contrast / 100.0f,
+        0.0f, 0.0f, (float)s_color_saturation / 100.0f, 0.0f, 0.0f, 0.0f };
+    cl->lpVtbl->SetGraphicsRoot32BitConstants(cl, 0, 12, metrics, 0);
     D3D12_GPU_DESCRIPTOR_HANDLE gh;
     s_d3d.srv_heap->lpVtbl->GetGPUDescriptorHandleForHeapStart(s_d3d.srv_heap, &gh);
     gh.ptr += (u64)AA_SRV_BASE * s_d3d.srv_inc;
@@ -6348,6 +6525,10 @@ static void aa_apply(u32 fi)
     D3D12_CPU_DESCRIPTOR_HANDLE bb_rtv;
     s_d3d.rtv_heap->lpVtbl->GetCPUDescriptorHandleForHeapStart(s_d3d.rtv_heap, &bb_rtv);
     bb_rtv.ptr += (u64)fi * s_d3d.rtv_descriptor_size;
+    if (mode == 0) {
+        aa_draw(s_aa_adjust, bb_rtv, 0);
+        return;
+    }
     if (mode == 1) {
         aa_draw(s_aa_fxaa, bb_rtv, 0);
         return;
@@ -7953,6 +8134,7 @@ static void render_frame_impl(void)
 skip_dump_consider: ;
     guest_fb_present(fi);
     composite_present(fi);
+    if (s_rb.present) ui_batch_draw(fi);
     if (s_rb.present) aa_apply(fi);   /* anti-aliasing on the finished frame */
     int dumping = (s_d3d.dump_frames_left > 0 && s_d3d.readback_buf
                    && s_d3d.dump_skip_left == 0);
@@ -10153,6 +10335,8 @@ void rsx_d3d12_backend_shutdown(void)
     if (s_d3d.pipeline_state)        s_d3d.pipeline_state->lpVtbl->Release(s_d3d.pipeline_state);
     if (s_d3d.pipeline_state_lines)  s_d3d.pipeline_state_lines->lpVtbl->Release(s_d3d.pipeline_state_lines);
     if (s_d3d.pipeline_state_points) s_d3d.pipeline_state_points->lpVtbl->Release(s_d3d.pipeline_state_points);
+    if (s_d3d.pipeline_state_ui) s_d3d.pipeline_state_ui->lpVtbl->Release(s_d3d.pipeline_state_ui);
+    for(u32 i=0;i<FRAME_COUNT;i++)if(s_ui_vb[i])s_ui_vb[i]->lpVtbl->Release(s_ui_vb[i]);
     if (s_d3d.depth_buffer) s_d3d.depth_buffer->lpVtbl->Release(s_d3d.depth_buffer);
     if (s_d3d.dsv_heap)     s_d3d.dsv_heap->lpVtbl->Release(s_d3d.dsv_heap);
     if (s_d3d.root_signature) s_d3d.root_signature->lpVtbl->Release(s_d3d.root_signature);

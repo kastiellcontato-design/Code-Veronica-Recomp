@@ -146,6 +146,11 @@ static int pad_host_window_focused(void)
  * each PS3 action. Defaults in pad_map.h; a launcher overrides them through
  * PAD_BTNMAP / PAD_KEYMAP. */
 static int s_map_btn[PA_COUNT], s_map_key[PA_COUNT];
+
+/* The device the player touched last (pad_phys.h, pad_last_input): a
+ * controller's PAD_KIND_*, or PAD_INPUT_KEYBOARD. Button icons follow it. */
+static volatile int s_last_input = PAD_KIND_NONE;
+int pad_last_input(void) { return s_last_input; }
 static volatile int s_map_live;   /* set by cellpad_set_map: ignore the env */
 static void pad_map_load(void)
 {
@@ -233,6 +238,7 @@ static void pad_poll_keyboard(void)
         hs->connected = 1;
     }
     hs->buttons |= btns;
+    if (btns) s_last_input = PAD_INPUT_KEYBOARD;
     if (btns & (CELL_PAD_CTRL_UP | CELL_PAD_CTRL_DOWN | CELL_PAD_CTRL_LEFT | CELL_PAD_CTRL_RIGHT)) {
         /* a controller's stick at rest never reads exactly 128 */
         if (abs((int)hs->analog_lx - 128) < 40 && abs((int)hs->analog_ly - 128) < 40) {
@@ -269,6 +275,9 @@ static void pad_poll_xinput(void)
         u16 btns = 0;
         for (int a = 0; a < PA_COUNT; a++)
             if (s_map_btn[a] >= 0 && (p.buttons & (1u << s_map_btn[a]))) btns |= k_action_bit[a];
+        if (p.buttons || abs((int)p.lx - 128) > 64 || abs((int)p.ly - 128) > 64 ||
+            abs((int)p.rx - 128) > 64 || abs((int)p.ry - 128) > 64)
+            s_last_input = p.kind;
         hs->buttons = btns;
         /* PS3 Y axis: up = 0 -- pad_phys already reports it that way. */
         hs->analog_lx = p.lx; hs->analog_ly = p.ly;

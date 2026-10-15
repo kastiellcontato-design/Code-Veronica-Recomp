@@ -30,6 +30,12 @@ enum {
 
 enum { PAD_KIND_NONE = 0, PAD_KIND_XINPUT = 1, PAD_KIND_DS4 = 2, PAD_KIND_DUALSENSE = 3 };
 
+/* The device the player used last, as the guest's pad sees it (cellPad):
+ * a PAD_KIND_* controller, PAD_INPUT_KEYBOARD, or PAD_KIND_NONE before any
+ * input. Pressing a mapped key or a button, or pushing a stick, counts. */
+#define PAD_INPUT_KEYBOARD 100
+int pad_last_input(void);
+
 typedef struct {
     int      connected;
     int      kind;               /* PAD_KIND_* */
