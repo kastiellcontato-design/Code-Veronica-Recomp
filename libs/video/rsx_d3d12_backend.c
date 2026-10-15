@@ -1669,8 +1669,17 @@ static void defer_release(ID3D12Resource* r)
     s_defer[fi][s_defer_n[fi]++] = r;
 }
 
+/* Set when resources are actually released: a texture window cached by
+ * pointer could otherwise match a new resource that reused a freed one's
+ * address and keep the old views (srv_commit). */
+static int s_srv_cache_stale;
+/* Bumped when the shared depth buffer is recreated (apply_res_scale), so the
+ * views written once against it are written again. */
+static u32 s_depth_gen;
+
 static void release_deferred(u32 fi)
 {
+    if (s_defer_n[fi]) s_srv_cache_stale = 1;
     for (u32 i = 0; i < s_defer_n[fi]; i++)
         s_defer[fi][i]->lpVtbl->Release(s_defer[fi][i]);
     s_defer_n[fi] = 0;
@@ -1775,7 +1784,9 @@ static void apply_res_scale(void)
         D3D12_CPU_DESCRIPTOR_HANDLE dh;
         s_d3d.dsv_heap->lpVtbl->GetCPUDescriptorHandleForHeapStart(s_d3d.dsv_heap, &dh);
         s_d3d.device->lpVtbl->CreateDepthStencilView(s_d3d.device, nd, &dsv, dh);
+        s_depth_gen++;
     }
+    s_srv_cache_stale = 1;
     printf("[D3D12] RES_SCALE now %.2f: rendering %ux%u\n", s_rs,
            rs_dim(s_d3d.width, s_rs), rs_dim(s_d3d.height, s_rs));
 }
@@ -5306,6 +5317,7 @@ static void srv_commit(u32 d, const SrvReq* rq, int own_window)
 {
     static int off = -1;
     if (off < 0) off = getenv("SRV_NOREUSE") ? 1 : 0;
+    if (s_srv_cache_stale) { s_srv_last_win = -1; s_srv_cache_stale = 0; }
     if (!off && !own_window && s_srv_last_win >= 0 &&
         memcmp(rq, s_srv_last, sizeof s_srv_last) == 0) {
         s_srv_win[d] = (u32)s_srv_last_win;
@@ -5701,7 +5713,7 @@ static int zconv_init(void)
         s_d3d.device, &pd, &IID_ID3D12PipelineState, (void**)&s_zconv_pso);
     vb->lpVtbl->Release(vb); pb->lpVtbl->Release(pb);
     if (FAILED(hr)) { printf("[ZCONV] PSO FAIL (0x%08lX)\n", hr); s_zconv_failed = 1; return 0; }
-    /* The depth buffer never changes, so its SRV is written once. */
+    /* Written here and again whenever the depth buffer is recreated (zconv_run). */
     srv_write(ZCONV_SRV, s_d3d.depth_buffer, DXGI_FORMAT_R24_UNORM_X8_TYPELESS,
               D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING);
     for (u32 i = 1; i < FP_TEX_UNITS; i++)
@@ -5753,6 +5765,12 @@ static void zconv_plan(void)
 static void zconv_run(D3D12_GPU_DESCRIPTOR_HANDLE gh_base)
 {
     if (s_zview_slot < 0 || !s_zconv_pso) return;
+    { static u32 seen;   /* the depth buffer was recreated: refresh its view */
+      if (seen != s_depth_gen) {
+          srv_write(ZCONV_SRV, s_d3d.depth_buffer, DXGI_FORMAT_R24_UNORM_X8_TYPELESS,
+                    D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING);
+          seen = s_depth_gen;
+      } }
     OffRT* r = &s_d3d.off_rt[s_zview_slot];
     D3D12_RESOURCE_BARRIER b = {0};
     b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
