@@ -134,8 +134,14 @@ u32 rsx_fp_read_word(const u8* p)
 
 u32 rsx_fp_program_size(const u8* ucode, u32 max_bytes)
 {
+    return rsx_fp_program_info(ucode, max_bytes, NULL);
+}
+
+u32 rsx_fp_program_info(const u8* ucode, u32 max_bytes, u32* constant_count)
+{
+    if (constant_count) *constant_count = 0;
     if (!ucode) return 0;
-    u32 off = 0;
+    u32 off = 0, constants = 0;
     while (off + 16 <= max_bytes) {
         u32 w0 = rsx_fp_read_word(ucode + off + 0);
         u32 w1 = rsx_fp_read_word(ucode + off + 4);
@@ -146,9 +152,14 @@ u32 rsx_fp_program_size(const u8* ucode, u32 max_bytes)
         if (((w1 & FP_REG_TYPE_MASK) >> FP_REG_TYPE_SHIFT) == FP_REG_TYPE_CONST ||
             ((w2 & FP_REG_TYPE_MASK) >> FP_REG_TYPE_SHIFT) == FP_REG_TYPE_CONST ||
             ((w3 & FP_REG_TYPE_MASK) >> FP_REG_TYPE_SHIFT) == FP_REG_TYPE_CONST) {
-            if (off + 16 <= max_bytes) off += 16;
+            if (off + 16 > max_bytes) return 0;
+            off += 16;
+            constants++;
         }
-        if (w0 & FP_END) return off;
+        if (w0 & FP_END) {
+            if (constant_count) *constant_count = constants;
+            return off;
+        }
     }
     return 0;
 }
@@ -481,6 +492,11 @@ static int rsx_fp_decompile_internal(
     int buffered, char* out, u32 out_size, u32* out_constant_count)
 {
     if (!ucode || !out || out_size == 0) return -1;
+    /* A bounded prefix is not a complete program. In particular, the old
+     * backend's 4 KiB limit stopped room-lighting shaders before the final
+     * export: the literal fallback then returned black or a scratch value.
+     * Both buffered and literal paths must require a real END instruction. */
+    if (!rsx_fp_program_size(ucode, max_bytes)) return -1;
 
     u32 buffered_constant_count = 0;
     if (buffered) {
@@ -1024,8 +1040,9 @@ static int rsx_fp_decompile_internal(
                      "PSOutput main(PSInput input) {\n");
     }
 
-    if (!o.ok || !p.ok) return -1;
-    if (o.len + p.len + 1 > out_size) return -1;
+    if (!p.ok) return -1;
+    if (!o.ok || o.len + p.len + 1 > out_size)
+        return RSX_FP_OUTPUT_TOO_SMALL;
     memmove(out + p.len, out, o.len + 1);
     memcpy(out, preamble, p.len);
     return count;
@@ -1036,6 +1053,33 @@ int rsx_fp_decompile_ex(const u8* ucode, u32 max_bytes, u32 ctrl,
 {
     return rsx_fp_decompile_internal(
         ucode, max_bytes, ctrl, tex_cube_mask, 0, out, out_size, NULL);
+}
+
+int rsx_fp_decompile_alloc(const u8* ucode, u32 bytes, u32 ctrl,
+    u32 cube_mask, int buffered, char** out, u32* capacity,
+    u32* constant_count)
+{
+    if (constant_count) *constant_count = 0;
+    if (!out || !capacity || !ucode || !bytes ||
+        bytes > RSX_FP_PROGRAM_LIMIT || *capacity > RSX_FP_HLSL_LIMIT ||
+        (!*out && *capacity)) return -1;
+    u32 cap = *capacity;
+    for (;;) {
+        if (!cap) cap = 16u * 1024u;
+        if (cap != *capacity || !*out) {
+            char* grown = (char*)realloc(*out, cap);
+            if (!grown) return -1;
+            *out = grown;
+            *capacity = cap;
+        }
+        int n = rsx_fp_decompile_internal(ucode, bytes, ctrl, cube_mask,
+            buffered, *out, cap, constant_count);
+        if (n >= 0) return n;
+        (*out)[0] = '\0'; /* never expose a partial translation */
+        if (n != RSX_FP_OUTPUT_TOO_SMALL || cap == RSX_FP_HLSL_LIMIT)
+            return n;
+        cap = cap > RSX_FP_HLSL_LIMIT / 2 ? RSX_FP_HLSL_LIMIT : cap * 2;
+    }
 }
 
 int rsx_fp_decompile_buffered_ex(

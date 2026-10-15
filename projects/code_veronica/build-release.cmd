@@ -21,4 +21,9 @@ if not exist build-release\CMakeCache.txt (
   -DCMAKE_RUNTIME_OUTPUT_DIRECTORY=D:/ps3recomp/projects/code_veronica/build-release/bin || exit /b 1
 )
 rem The lifted PPU units are ~45 MB each; cap parallel jobs to bound memory.
-cmake --build build-release -j 6
+cmake --build build-release -j 6 || exit /b 1
+rem Optional focused shader regression tests; the normal game build is unchanged.
+if "%CV_FP_TESTS%"=="1" (
+ cmake --build build-release --target code_veronica_fp_tests -j 6 || exit /b 1
+ build-release\bin\code_veronica_fp_tests.exe || exit /b 1
+)

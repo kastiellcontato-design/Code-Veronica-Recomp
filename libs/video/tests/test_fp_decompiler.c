@@ -14,6 +14,7 @@
 
 #include "../rsx_fp_decompiler.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static int g_pass = 0, g_fail = 0;
@@ -298,6 +299,64 @@ int main(void)
                                 ife < then && then < els && els < alt && alt < lif);
         check_absent("ife_not_skipped", hlsl, "flow-control op skipped");
         check_absent("lif_handled", hlsl, "unhandled FP opcode");
+    }
+
+    /* A shader beyond the old 16 KiB cutoff must preserve its final export,
+     * grow HLSL past the old 128 KiB buffer, and reuse that allocation. */
+    {
+        const u32 bytes = 4096u * 16u;
+        u8* prog = (u8*)calloc(1, bytes);
+        char* dynamic = NULL;
+        u32 capacity = 0, constants = 99;
+        check_true("long_program_allocation", prog != NULL);
+        if (prog) {
+            for (u32 off = 0; off < bytes; off += 16) {
+                put_word(prog + off, OPC(0x01) | OUTMASK_ALL | INSRC(1) |
+                         (off + 16 == bytes ? END : 0));
+                put_word(prog + off + 4, T_INPUT | SWZ_IDENT | EXEC_ALWAYS);
+            }
+            check_true("long_program_size", rsx_fp_program_info(prog, bytes, &constants) == bytes && constants == 0);
+            check_true("old_16k_prefix_rejected", rsx_fp_program_size(prog, 16u * 1024u) == 0);
+            int n = rsx_fp_decompile_alloc(prog, bytes, CTRL_32BIT, 0, 1,
+                                           &dynamic, &capacity, &constants);
+            check_true("long_program_complete", n == 4096 && constants == 0);
+            check_true("hlsl_grew_past_128k", capacity > 128u * 1024u && capacity <= RSX_FP_HLSL_LIMIT);
+            if (n > 0) check("long_program_export", dynamic, "float4 _o = r[0];");
+            u32 previous = capacity;
+            n = rsx_fp_decompile_alloc(prog, bytes, CTRL_32BIT, 0, 1,
+                                       &dynamic, &capacity, NULL);
+            check_true("hlsl_capacity_reused", n == 4096 && capacity == previous);
+            put_word(prog + bytes - 16, OPC(0x01) | OUTMASK_ALL | INSRC(1));
+            n = rsx_fp_decompile_alloc(prog, bytes, CTRL_32BIT, 0, 1,
+                                       &dynamic, &capacity, NULL);
+            check_true("missing_end_rejected_without_growth", n == -1 && capacity == previous && dynamic[0] == '\0');
+            n = rsx_fp_decompile_alloc(prog, RSX_FP_PROGRAM_LIMIT + 16u, CTRL_32BIT,
+                                       0, 1, &dynamic, &capacity, NULL);
+            check_true("program_safety_ceiling", n == -1 && capacity == previous);
+            free(prog);
+        }
+        free(dynamic);
+    }
+
+    /* END cannot legitimize a missing constant payload; callers need a
+     * separate overflow result to retry only an undersized output buffer. */
+    {
+        u8 prog[32] = {0};
+        put_word(prog, OPC(0x01) | OUTMASK_ALL | END);
+        put_word(prog + 4, T_CONST | SWZ_IDENT | EXEC_ALWAYS);
+        put_float(prog + 16, 0.5f);
+        check_true("end_constant_payload_required", rsx_fp_program_size(prog, 16) == 0);
+        check_true("end_constant_payload_rejected", rsx_fp_decompile(prog, 16, CTRL_32BIT, hlsl, sizeof hlsl) == -1);
+        u32 count = 0;
+        check_true("end_constant_payload_counted", rsx_fp_program_info(prog, 32, &count) == 32 && count == 1);
+        char tiny[8];
+        check_true("output_overflow_distinguished", rsx_fp_decompile(prog, 32, CTRL_32BIT, tiny, sizeof tiny) == RSX_FP_OUTPUT_TOO_SMALL);
+        char* dynamic = NULL; u32 capacity = 0;
+        int n = rsx_fp_decompile_alloc(prog, 32, CTRL_32BIT, 0, 0, &dynamic, &capacity, NULL);
+        rsx_fp_decompile(prog, 32, CTRL_32BIT, hlsl, sizeof hlsl);
+        check_true("small_shader_identical", n == 1 && dynamic && strcmp(dynamic, hlsl) == 0);
+        check_true("small_shader_small_buffer", capacity == 16u * 1024u);
+        free(dynamic);
     }
 
     printf("\n===========================================\n");

@@ -24,6 +24,7 @@
 #include "rsx_texture_layout.h"
 #include "rsx_tex_hook.h"
 #include "rsx_perf_overlay.h"
+#include "rsx_fp_decompiler.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -81,6 +82,8 @@ static int s_vsync = 0, s_tearing = 0;   /* present mode, see the swap chain set
  * room for only 64 they fell back to literals baked from the FIRST frame
  * that used them, and the colour-grading curve never followed the scene. */
 #define FP_MAX_K          128
+/* Programs are sized through END and copied at that exact length. The
+ * decompiler owns the shared safety ceiling; no 16 KiB per-program cutoff. */
 /* Fragment texture units recorded and bound per draw (t0..t7). RSX has 16;
  * Code Veronica's lighter flame samples unit 4. b1 starts with one float4
  * per unit (rsx_texaddr), then rsx_alpha_k, then fp_k[] -- 137 float4. */
@@ -183,8 +186,10 @@ typedef struct {
     /* Copy of the fragment program's ucode taken when the draw was recorded:
      * offset + 1 into s_fp_arena (0 = none, read guest memory). */
     u32 fp_snap;
+    u32 fp_bytes;              /* exact complete bytecode length, 0 = invalid */
 } D3D12DrawRecord;
 static const u8* fp_snap_ptr(const D3D12DrawRecord* dr);
+static u32 fp_guest_program_size(const u8* src, u32* constants);
 
 /* Offscreen render target (render-to-texture). Persistent across frames --
  * pass N's output is sampled by pass N+1 and possibly by later frames. */
@@ -2182,6 +2187,8 @@ static void rsx_capture_frame(u32 fi, u32 ndraws, u32 capidx)
     if (mf) {
         fprintf(mf, "frame_count=%llu draws=%u backbuffer=%ux%u\n",
                 (unsigned long long)s_d3d.frame_count, ndraws, s_d3d.width, s_d3d.height);
+        fprintf(mf, "buffer_bank=%u step_count=%d step_phase=before_op\n",
+                (u32)s_rb.parity, s_cap_nsteps);
         for (int i = 0; i < MAX_OFF_RTS; i++)
             if (s_d3d.off_rt[i].res && s_d3d.off_rt[i].used)
                 fprintf(mf, "offrt[%d] off=0x%08X %ux%u dxgi=%u\n", i, s_d3d.off_rt[i].off,
@@ -2204,6 +2211,13 @@ static void rsx_capture_frame(u32 fi, u32 ndraws, u32 capidx)
                         r->tex[0].raw, r->tex[1].raw, r->tex[2].raw, r->tex[3].raw,
                         r->zeta_off, r->dtest, r->dfunc, (r->cull >> 9) & 1u,
                         (r->tex[0].addr >> 20) & 0xFu, (r->tex[1].addr >> 20) & 0xFu);
+                const u8* fp_ucode = fp_snap_ptr(r);
+                if (fp_ucode) {
+                    u32 fp_hdr[4];
+                    memcpy(fp_hdr, fp_ucode - 16, sizeof fp_hdr);
+                    fprintf(mf, "      fp_snapshot bytes=%u code=%08X source=fp_%08X_%08X.hlsl\n",
+                            fp_hdr[2], fp_hdr[1], r->fp_addr, fp_hdr[1]);
+                }
                 fprintf(mf, "      surf tgt=0x%X offA=0x%08X offB=0x%08X clip=%ux%u%c",
                         r->s_tgt, r->s_offa, r->s_offb, r->s_clipw, r->s_cliph, 10);
                 for (int u = 0; u < 4; u++)
@@ -2215,13 +2229,20 @@ static void rsx_capture_frame(u32 fi, u32 ndraws, u32 capidx)
                                 r->tex[u].w, r->tex[u].h, r->tex[u].ctrl1 & 0xFFFF);
             }
         }
+        fprintf(mf, "--- step snapshots (state before the indicated op) ---\n");
+        for (int i = 0; i < s_cap_nsteps; i++) {
+            const CapStep* c = &s_cap_steps[i];
+            fprintf(mf, "step_op%04u_%08X.bmp before_op=%u rt=0x%08X %ux%u\n",
+                    c->op, c->off, c->op, c->off, c->w, c->h);
+        }
         /* Per-draw VP constant banks for the first few offscreen-RT geometry
          * draws: c[0..3] is the projection row-major for most CG VPs; also scan
          * for the largest non-zero slot so a mis-placed MVP is obvious. Records
-         * live at slot==draw-index; parity is post-^1 here (capture is after the
-         * frame's vp_parity flip), so read the other half. */
+         * live in the frozen render batch's bank, exactly as bound by the GPU.
+         * Only the recording bank (s_d3d.vp_parity) flips on submission;
+         * s_rb.parity already names the frame being captured. */
         if (s_d3d.vp_cb_mapped) {
-            u32 par = (u32)(s_rb.parity ^ 1);
+            u32 par = (u32)s_rb.parity;
             fprintf(mf, "--- vp constants (first offscreen geometry draws) ---\n");
             int shown = 0;
             for (u32 d = 0; d < ndraws && d < MAX_DRAWS && shown < 4; d++) {
@@ -2253,7 +2274,7 @@ static void rsx_capture_frame(u32 fi, u32 ndraws, u32 capidx)
          * with), up to the last non-zero slot. Paired with the fp_*.hlsl
          * files below, a pass can be evaluated by hand from the capture. */
         if (s_d3d.vp_fpcb_mapped) {
-            u32 par = (u32)(s_rb.parity ^ 1);
+            u32 par = (u32)s_rb.parity;
             fprintf(mf, "--- fp constants per draw (fp_k[i] = x y z w) ---\n");
             for (u32 d = 0; d < ndraws && d < MAX_DRAWS; d++) {
                 const D3D12DrawRecord* r = &s_rb.draws[d];
@@ -2273,7 +2294,7 @@ static void rsx_capture_frame(u32 fi, u32 ndraws, u32 capidx)
          * mesh decoded from an unsupported format shows up here as NaN/huge
          * values long before anyone can see why it is missing on screen. */
         if (s_d3d.vp_vb_mapped) {
-            u32 par = (u32)(s_rb.parity ^ 1);
+            u32 par = (u32)s_rb.parity;
             fprintf(mf, "--- first vertices per vertex program (attrs with any non-zero lane) ---\n");
             int seen_vs[64]; int nvs = 0;
             for (u32 d = 0; d < ndraws && d < MAX_DRAWS; d++) {
@@ -2317,37 +2338,41 @@ static void rsx_capture_frame(u32 fi, u32 ndraws, u32 capidx)
         fclose(mf);
     }
 
-    /* Every distinct fragment program of the frame, decompiled as the backend
-     * compiles it, so a capture can be read without re-running the title. */
+    /* Every distinct (address, code) pair: the game can reuse one address for
+     * a shadow filter and later a room material within the same frame. */
     {
         extern uint8_t* vm_base;
         extern u32 cellGcmResolveLocated(int local, u32 offset);
         extern int rsx_fp_decompile_buffered_ex(const u8*, u32, u32, u32, char*, u32, u32*);
-        static char fph[32768];
-        u32 seen[256]; int ns = 0;
+        extern u32 rsx_fp_code_hash(const u8*, u32);
+        char* fph = NULL;
+        u32 fph_cap = 0;
+        struct { u32 addr, code; } seen[512]; int ns = 0;
         for (u32 d = 0; d < ndraws && d < MAX_DRAWS && vm_base; d++) {
             const D3D12DrawRecord* r = &s_rb.draws[d];
             if (r->is_clear || r->is_copy || !r->fp_addr) continue;
-            int dup = 0;
-            for (int i = 0; i < ns; i++) if (seen[i] == r->fp_addr) dup = 1;
-            if (dup || ns >= 256) continue;
-            seen[ns++] = r->fp_addr;
             u32 off = cellGcmResolveLocated((r->fp_addr & 3u) == 1, r->fp_addr & ~3u);
             if (off == 0xFFFFFFFFu) continue;
             const u8* ucode = fp_snap_ptr(r) ? fp_snap_ptr(r) : vm_base + off;
+            const u32 bytes = r->fp_bytes ? r->fp_bytes : fp_guest_program_size(ucode, NULL);
+            if (!bytes) continue;
+            const u32 code = rsx_fp_code_hash(ucode, bytes);
+            int dup = 0;
+            for (int i = 0; i < ns; i++)
+                if (seen[i].addr == r->fp_addr && seen[i].code == code) dup = 1;
+            if (dup || ns >= 512) continue;
+            seen[ns].addr = r->fp_addr; seen[ns++].code = code;
             u32 nk = 0;
-            if (rsx_fp_decompile_buffered_ex(ucode, 4096, r->fp_exp32 ? 0x40u : 0u, 0u,
-                                             fph, sizeof fph, &nk) <= 0) continue;
-            snprintf(path, sizeof path, "%s/fp_%08X.hlsl", dir, r->fp_addr);
+            if (rsx_fp_decompile_alloc(ucode, bytes, r->fp_exp32 ? 0x40u : 0u, 0u,
+                                       1, &fph, &fph_cap, &nk) <= 0) continue;
+            snprintf(path, sizeof path, "%s/fp_%08X_%08X.hlsl", dir, r->fp_addr, code);
             FILE* f = fopen(path, "w");
             if (f) { fprintf(f, "/* first op%03u, %u constants (fp_constants[i] == fp_k[i]) */\n%s",
                              d, nk, fph);
                      /* Raw ucode, 16 bytes (one instruction or constant) per line. */
                      const u8* uc = ucode;
                      fprintf(f, "/* raw ucode:\n");
-                     extern u32 rsx_fp_program_size(const u8*, u32);
-                     u32 rawlen = rsx_fp_program_size(uc, 4096);
-                     if (!rawlen || rawlen > 4096) rawlen = 512;
+                     u32 rawlen = bytes;
                      for (u32 _b = 0; _b < rawlen; _b += 16) {
                          for (int _k = 0; _k < 16; _k++) fprintf(f, "%02X", uc[_b + _k]);
                          fprintf(f, "%c", 10);
@@ -2355,6 +2380,7 @@ static void rsx_capture_frame(u32 fi, u32 ndraws, u32 capidx)
                      fprintf(f, "*/\n");
                      fclose(f); }
         }
+        free(fph);
     }
 
     /* Diagnostic-only snapshots of the actual guest video planes. */
@@ -2364,7 +2390,7 @@ static void rsx_capture_frame(u32 fi, u32 ndraws, u32 capidx)
             const D3D12DrawRecord* r=&s_rb.draws[d];
             if(r->is_clear || r->is_copy) continue;
             if(s_d3d.vp_cb_mapped && s_d3d.vp_vb_mapped && r->is_vp) {
-                u32 par=(u32)(s_rb.parity^1);
+                u32 par=(u32)s_rb.parity;
                 snprintf(path,sizeof path,"%s/op%03u_cb.bin",dir,d);FILE* f=fopen(path,"wb");
                 if(f){fwrite((char*)s_d3d.vp_cb_mapped+((u64)par*MAX_DRAWS+r->vcb_slot)*VP_CB_STRIDE,1,VP_CB_STRIDE,f);fclose(f);}
                 snprintf(path,sizeof path,"%s/op%03u_vb.bin",dir,d);f=fopen(path,"wb");
@@ -2699,24 +2725,62 @@ static u32 vtex_mask_of(const rsx_state* st)
 static u8*  s_fp_arena = NULL;
 static u32  s_fp_arena_used = 0;
 #define FP_ARENA_CAP  (8u << 20)
-#define FP_ARENA_PAD  4096u      /* decompiler may scan up to 4096 bytes */
+#define FP_ARENA_PAD  16u
 #define FP_SNAP_MAGIC 0x50534E46u   /* "FNSP": header before each snapshot */
 typedef struct { u32 addr, len, snap; } FPSnap;
 static FPSnap s_fp_snaps[64];
 static u32 s_fp_nsnap = 0;
+
+/* The first guest page is already readable for a resolved shader address.
+ * Small programs finish there without a host query. Before extending the
+ * scan, verify each additional readable committed region and never cross the
+ * guest address space or the common safety ceiling. */
+static u32 fp_guest_program_size(const u8* src, u32* constants)
+{
+    extern uint8_t* vm_base;
+    if (constants) *constants = 0;
+    if (!src || !vm_base || (uintptr_t)src < (uintptr_t)vm_base) return 0;
+    const u64 ea = (u64)((uintptr_t)src - (uintptr_t)vm_base);
+    if (ea >= 0x100000000ull) return 0;
+    const u64 remaining = 0x100000000ull - ea;
+    const u32 limit = remaining < RSX_FP_PROGRAM_LIMIT ? (u32)remaining : RSX_FP_PROGRAM_LIMIT;
+    u32 bound = 4096u - ((u32)ea & 4095u);
+    if (bound > limit) bound = limit;
+    for (;;) {
+        u32 len = rsx_fp_program_info(src, bound, constants);
+        if (len) return len;
+        if (bound == limit) break;
+        MEMORY_BASIC_INFORMATION mb;
+        const u8* next = src + bound;
+        if (!VirtualQuery(next, &mb, sizeof mb) || mb.State != MEM_COMMIT ||
+            (mb.Protect & (PAGE_NOACCESS | PAGE_GUARD)) ||
+            !(mb.Protect & (PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY |
+                            PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY))) break;
+        const size_t readable = (const u8*)mb.BaseAddress + mb.RegionSize - next;
+        if (!readable) break;
+        bound += readable > limit - bound ? limit - bound : (u32)readable;
+    }
+    { static int warnings = 0; if (warnings++ < 16)
+        fprintf(stderr, "[FP] incomplete program at guest 0x%08X (readable scan %u, safety limit %u bytes); rejected%c",
+                (u32)ea, bound, RSX_FP_PROGRAM_LIMIT, 10); }
+    return 0;
+}
 
 static void fp_snapshot(D3D12DrawRecord* dr)
 {
     extern uint8_t* vm_base;
     extern u32 cellGcmResolveLocated(int local, u32 offset);
     dr->fp_snap = 0;
-    { static int off = -1; if (off < 0) off = getenv("FP_NOSNAP") ? 1 : 0; if (off) return; }
+    dr->fp_bytes = 0;
     if (!dr->fp_addr || !vm_base) return;
     u32 ea = cellGcmResolveLocated((dr->fp_addr & 0x3u) == 1, dr->fp_addr & ~0x3u);
     if (ea == 0xFFFFFFFFu) return;
     const u8* src = vm_base + ea;
-    u32 len = rsx_fp_program_size(src, 4096);
-    if (len == 0) len = 4096;
+    u32 constants = 0;
+    u32 len = fp_guest_program_size(src, &constants);
+    if (!len) return;
+    dr->fp_bytes = len;
+    { static int off = -1; if (off < 0) off = getenv("FP_NOSNAP") ? 1 : 0; if (off) return; }
     for (u32 i = 0; i < s_fp_nsnap; i++) {
         const FPSnap* q = &s_fp_snaps[i];
         if (q->addr == dr->fp_addr && q->len == len &&
@@ -2737,7 +2801,7 @@ static void fp_snapshot(D3D12DrawRecord* dr)
     u32 at = s_fp_arena_used + 16;
     memcpy(s_fp_arena + at, src, len);
     memset(s_fp_arena + at + len, 0, 16);   /* stop marker room */
-    { u32 hdr[4] = { FP_SNAP_MAGIC, rsx_fp_code_hash(s_fp_arena + at, 4096), len, 0 };
+    { u32 hdr[4] = { FP_SNAP_MAGIC, rsx_fp_code_hash(s_fp_arena + at, len), len, constants };
       memcpy(s_fp_arena + at - 16, hdr, 16); }
     s_fp_arena_used = (at + len + 16 + 15u) & ~15u;
     dr->fp_snap = at + 1;
@@ -3323,7 +3387,6 @@ static HRESULT pso_create_cached(const D3D12_GRAPHICS_PIPELINE_STATE_DESC* pd, I
  * shaders), and worker threads do the work. FP_ASYNC=0 builds inline;
  * FP_ASYNC_THREADS=<n> sets the worker count (default 2).
  * -------------------------------------------------------------------------*/
-#define FP_HLSL_CAP 32768
 enum { FPB_OK = 0, FPB_FAIL = 1, FPB_SKIP = 2 };
 typedef struct FpJob {
     struct FpJob* next;
@@ -3332,9 +3395,19 @@ typedef struct FpJob {
     u32 off;
     int status;
     ID3D12PipelineState* pso;   /* result */
-    u8 ucode[4096];             /* the draw's program; its arena is recycled */
-    char hlsl[FP_HLSL_CAP];
+    u8* ucode;                 /* exact program copy; arena is recycled */
+    u32 ucode_bytes;
+    char* hlsl;                /* grows only while this pipeline is built */
+    u32 hlsl_cap;
 } FpJob;
+
+static void fp_job_free(FpJob* j)
+{
+    if (j->vsb) j->vsb->lpVtbl->Release(j->vsb);
+    free(j->ucode);
+    free(j->hlsl);
+    free(j);
+}
 
 static volatile LONG s_fp_async_skips = 0, s_fp_async_built = 0;
 static volatile LONG s_fp_inflight = 0;                /* submitted, not yet built */
@@ -3454,8 +3527,7 @@ static void fp_async_drain(void)
         } else if (j->pso) {
             j->pso->lpVtbl->Release(j->pso);   /* evicted while building */
         }
-        j->vsb->lpVtbl->Release(j->vsb);
-        free(j);
+        fp_job_free(j);
         j = nx;
     }
 }
@@ -3472,7 +3544,6 @@ static int fp_build_pso(FpJob* j)
     const u32 cull = j->key.cull; const u32 cube_mask = j->key.cube_mask;
     const u8* ucode = j->ucode; const u32 off = j->off; ID3DBlob* vsb = j->vsb;
     (void)off; (void)uhash; (void)vs_idx;
-    char* hlsl = j->hlsl;
     /* fp_exp32 snapshots SET_SHADER_CONTROL bit 6 for this draw. Convert
      * the boolean back to the control bit expected by the decompiler.
      * AUTO mistakes fp32 temporaries for exports when final color is h0. */
@@ -3522,9 +3593,35 @@ static int fp_build_pso(FpJob* j)
      * light parameters into one program per object, and every object was lit
      * with the first one's (zero) lights -- the whole scene rendered black. */
     u32 nk = 0;
-    int n = rsx_fp_decompile_buffered_ex(ucode, 4096, exp32 ? 0x40u : 0u, 0u,
-                                         hlsl + k_pre, FP_HLSL_CAP - k_pre, &nk);
-    if (n > 0 && nk <= FP_MAX_K) {
+    int n = rsx_fp_decompile_alloc(ucode, j->ucode_bytes, exp32 ? 0x40u : 0u, 0u,
+                                  1, &j->hlsl, &j->hlsl_cap, &nk);
+    const int buffered = n > 0 && nk <= FP_MAX_K;
+    if (!buffered)
+        n = rsx_fp_decompile_alloc(ucode, j->ucode_bytes, exp32 ? 0x40u : 0u, 0u,
+                                   0, &j->hlsl, &j->hlsl_cap, NULL);
+    if (n <= 0) { static int _e=0; if(_e++<16)
+        fprintf(stderr, "[FP] decompile fail (fp=0x%08X, program=%u bytes, HLSL capacity=%u, result=%d)%c",
+                fp_addr, j->ucode_bytes, j->hlsl_cap, n, 10); return FPB_FAIL; }
+    /* Reserve the prelude and room for post-translation edits. WPOS is the
+     * only normal edit that can expand at every instruction; count its
+     * occurrences rather than assuming a fixed amount of slack suffices. */
+    size_t needed = strlen(j->hlsl) + k_pre + 8192u;
+    const char* wpos = "float4(input.position.xyz, 1.0 / input.position.w)";
+    if (s_rs != 1.0f)
+        for (const char* p = j->hlsl; (p = strstr(p, wpos)) != NULL; p += strlen(wpos))
+            needed += 128u;
+    if (needed > RSX_FP_HLSL_LIMIT) return FPB_FAIL;
+    u32 cap = j->hlsl_cap;
+    while (cap < needed) cap = cap > RSX_FP_HLSL_LIMIT / 2 ? RSX_FP_HLSL_LIMIT : cap * 2;
+    if (cap != j->hlsl_cap) {
+        char* grown = (char*)realloc(j->hlsl, cap);
+        if (!grown) return FPB_FAIL;
+        j->hlsl = grown; j->hlsl_cap = cap;
+    }
+    char* hlsl = j->hlsl;
+    const u32 hlsl_cap = j->hlsl_cap;
+    memmove(hlsl + k_pre, hlsl, strlen(hlsl) + 1);
+    if (buffered) {
         char* body = hlsl + k_pre;
         char* cb = strstr(body, "cbuffer PSConstants");
         char* cbe = cb ? strstr(cb, "};\n") : NULL;
@@ -3536,10 +3633,7 @@ static int fp_build_pso(FpJob* j)
             else *w++ = *r++;
         }
         *w = '\0';
-    } else {
-        n = rsx_fp_decompile(ucode, 4096, exp32 ? 0x40u : 0u, hlsl + k_pre, FP_HLSL_CAP - k_pre);
     }
-    if (n <= 0) { static int _e=0; if(_e++<16) printf("[FP] decompile fail (fp=0x%08X)\n", fp_addr); return FPB_FAIL; }
     /* An opcode the decompiler does not know produces a program that writes
      * nothing and exports zero. Code Veronica's full-screen grade pass
      * (draw ~1465, rewrites the scene RT in place) came out that way and
@@ -3551,7 +3645,7 @@ static int fp_build_pso(FpJob* j)
         if (_w++ < 16) {
             const u8* uc = ucode;
             fprintf(stderr, "[FP] UNHANDLED opcode in fp=0x%08X instrs=%d (draw skipped) raw:", fp_addr, n);
-            for (int _b = 0; _b < 128; _b++) fprintf(stderr, "%s%02X", (_b & 15) ? "" : " ", uc[_b]);
+            for (u32 _b = 0; _b < 128 && _b < j->ucode_bytes; _b++) fprintf(stderr, "%s%02X", (_b & 15) ? "" : " ", uc[_b]);
             fprintf(stderr, "%c", 10);
             const char* t = strstr(hlsl + k_pre, "/* TODO");
             if (t) { const char* e = strchr(t, 10); fprintf(stderr, "[FP]   %.*s%c", e ? (int)(e - t) : 60, t, 10); }
@@ -3568,9 +3662,9 @@ static int fp_build_pso(FpJob* j)
      * (mean 5.4 -> 0.4) and the LUT that follows turned it into a negative. */
 #define RSX_SRGB_FN "float3 rsx_srgb(float3 c) { c = saturate(c); return c <= 0.0031308 ? c * 12.92 : 1.055 * pow(c, 1.0 / 2.4) - 0.055; } "
     if ((cull & 0x200u) && strstr(hlsl, "float4 main(PSInput input) : SV_TARGET")) {
-        hlsl_replace_all(hlsl, FP_HLSL_CAP, "float4 main(PSInput input) : SV_TARGET",
+        hlsl_replace_all(hlsl, hlsl_cap, "float4 main(PSInput input) : SV_TARGET",
             RSX_SRGB_FN "float4 main(PSInput input) : SV_TARGET");
-        hlsl_replace_all(hlsl, FP_HLSL_CAP, "return (_o == _o) ? _o : (float4)0;",
+        hlsl_replace_all(hlsl, hlsl_cap, "return (_o == _o) ? _o : (float4)0;",
             "_o = (_o == _o) ? _o : (float4)0; _o.rgb = rsx_srgb(_o.rgb); return _o;");
     } else if ((cull & 0x200u) && strstr(hlsl, "PSOutput main(PSInput input)")) {
         char enc[256] = "";
@@ -3582,9 +3676,9 @@ static int fp_build_pso(FpJob* j)
             strncat(enc, line, sizeof enc - strlen(enc) - 1);
         }
         strncat(enc, "return _out;", sizeof enc - strlen(enc) - 1);
-        hlsl_replace_all(hlsl, FP_HLSL_CAP, "PSOutput main(PSInput input)",
+        hlsl_replace_all(hlsl, hlsl_cap, "PSOutput main(PSInput input)",
             RSX_SRGB_FN "PSOutput main(PSInput input)");
-        hlsl_replace_all(hlsl, FP_HLSL_CAP, "return _out;", enc);
+        hlsl_replace_all(hlsl, hlsl_cap, "return _out;", enc);
     }
 #undef RSX_SRGB_FN
     if (getenv("CV_VIDEO_CAPTURE")) { char pn[100];snprintf(pn,sizeof pn,"ps_%08X_%08X.hlsl",fp_addr,uhash);FILE* f=fopen(pn,"w");if(f){fprintf(f,"/* vs_idx=%d exports32=%d */\n%s",vs_idx,exp32,hlsl);fclose(f);} }
@@ -3593,7 +3687,7 @@ static int fp_build_pso(FpJob* j)
         char* ret = strstr(hlsl, "return (_o == _o) ? _o : (float4)0;");
         if (ret) {
             const char* mode=getenv("CV_COMPOSITE_PROBE");
-            snprintf(ret,FP_HLSL_CAP-(size_t)(ret-hlsl),
+            snprintf(ret,hlsl_cap-(size_t)(ret-hlsl),
                 "%s\n}\n",atoi(mode)==1 ?
                 "return float4(input.tc0.xyz,1.0);" :
                 "return float4(rsx_tex[0].Sample(rsx_samp[0],input.tc1.xy).rgb,1.0);");
@@ -3610,7 +3704,7 @@ static int fp_build_pso(FpJob* j)
         if (f) {
             const u8* uc = ucode;
             fprintf(f, "/* fp_addr=0x%08X vmoff=0x%08X raw:", fp_addr, off);
-            for (int _b = 0; _b < 32; _b++) fprintf(f, " %02X", uc[_b]);
+            for (u32 _b = 0; _b < 32 && _b < j->ucode_bytes; _b++) fprintf(f, " %02X", uc[_b]);
             fprintf(f, " */\n%s\n", hlsl); fclose(f);
         } } }
 
@@ -3645,7 +3739,7 @@ static int fp_build_pso(FpJob* j)
                   static const char rep[] = "_po.c0 = (1.0).xxxx";
                   size_t oldlen = (size_t)(semi - rp), newlen = sizeof(rep) - 1;
                   size_t tail = strlen(semi) + 1;
-                  if ((rp - hlsl) + newlen + tail < FP_HLSL_CAP) {
+                  if ((rp - hlsl) + newlen + tail < hlsl_cap) {
                       memmove(rp + newlen, semi, tail);
                       memcpy(rp, rep, newlen);
                   }
@@ -3670,7 +3764,7 @@ static int fp_build_pso(FpJob* j)
           if (rp) {
               const char* ins = "discard; ";
               size_t nl = strlen(ins), tail = strlen(rp) + 1;
-              if ((size_t)(rp - hlsl) + nl + tail < FP_HLSL_CAP) {
+              if ((size_t)(rp - hlsl) + nl + tail < hlsl_cap) {
                   memmove(rp + nl, rp, tail);
                   memcpy(rp, ins, nl);
                   fprintf(stderr, "[FPKILL] fp=0x%X discards%c", fp_addr, 10);
@@ -3686,7 +3780,7 @@ static int fp_build_pso(FpJob* j)
                 char rep[256];
                 snprintf(rep, sizeof rep, "_po.c0 = float4((%s).xyz, 1.0)", sh);
                 size_t newlen = strlen(rep), tail = strlen(semi) + 1;
-                if ((size_t)(rp - hlsl) + newlen + tail < FP_HLSL_CAP) {
+                if ((size_t)(rp - hlsl) + newlen + tail < hlsl_cap) {
                     memmove(rp + newlen, semi, tail);
                     memcpy(rp, rep, newlen);
                     fprintf(stderr, "[FPSHOW] fp=0x%X output replaced with %s%c",
@@ -3696,7 +3790,7 @@ static int fp_build_pso(FpJob* j)
       } }
     /* RES_SCALE: SV_Position is in host pixels; WPOS must stay in guest ones. */
     if (s_rs != 1.0f)
-        hlsl_replace_all(hlsl, FP_HLSL_CAP,
+        hlsl_replace_all(hlsl, hlsl_cap,
             "float4(input.position.xyz, 1.0 / input.position.w)",
             "float4(input.position.xy * (rsx_alpha_k.w > 0.0 ? rsx_alpha_k.w : 1.0), input.position.z, 1.0 / input.position.w)");
     /* Retarget the samplers the guest bound as CUBE textures. The decompiler
@@ -3709,13 +3803,13 @@ static int fp_build_pso(FpJob* j)
             char f1[64], r1[64], f2[64], r2[64];
             snprintf(f1, sizeof f1, "Texture2D    rsx_tex%d", _u);
             snprintf(r1, sizeof r1, "TextureCube  rsx_tex%d", _u);
-            hlsl_replace_all(hlsl, FP_HLSL_CAP, f1, r1);
+            hlsl_replace_all(hlsl, hlsl_cap, f1, r1);
             snprintf(f1, sizeof f1, "Texture2D rsx_tex%d", _u);
             snprintf(r1, sizeof r1, "TextureCube rsx_tex%d", _u);
-            hlsl_replace_all(hlsl, FP_HLSL_CAP, f1, r1);
+            hlsl_replace_all(hlsl, hlsl_cap, f1, r1);
             snprintf(f2, sizeof f2, ".xy * rsx_texscale[%d].xy", _u);
             snprintf(r2, sizeof r2, ".xyz");
-            hlsl_replace_all(hlsl, FP_HLSL_CAP, f2, r2);
+            hlsl_replace_all(hlsl, hlsl_cap, f2, r2);
         }
         { static int _n = 0; if (_n++ < 4)
             fprintf(stderr, "[CUBE] fp=0x%X compiled with cube units mask 0x%X%c",
@@ -3745,7 +3839,7 @@ static int fp_build_pso(FpJob* j)
                 char rep[128];
                 snprintf(rep, sizeof rep, "_po.c0 = float4(%.3f,%.3f,%.3f,1.0)", cr, cg, cb);
                 size_t newlen = strlen(rep), tail = strlen(semi) + 1;
-                if ((size_t)(rp - hlsl) + newlen + tail < FP_HLSL_CAP) {
+                if ((size_t)(rp - hlsl) + newlen + tail < hlsl_cap) {
                     memmove(rp + newlen, semi, tail);
                     memcpy(rp, rep, newlen);
                     fprintf(stderr, "[FPID] fp=0x%X -> rgb(%.0f,%.0f,%.0f)%c",
@@ -3797,7 +3891,7 @@ static int fp_build_pso(FpJob* j)
                 size_t newlen = strlen(rep), tail = strlen(semi) + 1;
                 fprintf(stderr, "[FP_TEX] program 0x%X rewritten to sample unit %d%c",
                         fp_addr, _un, 10);
-                if ((size_t)(rp - hlsl) + newlen + tail < FP_HLSL_CAP) {
+                if ((size_t)(rp - hlsl) + newlen + tail < hlsl_cap) {
                     memmove(rp + newlen, semi, tail);
                     memcpy(rp, rep, newlen);
                 }
@@ -3821,7 +3915,7 @@ static int fp_build_pso(FpJob* j)
                     ? "return float4(1.0, 0.0, 1.0, 1.0)"
                     : "_po.c0 = float4(1.0, 0.0, 1.0, 1.0)";
                 size_t newlen = strlen(rep), tail = strlen(semi) + 1;
-                if ((size_t)(rp - hlsl) + newlen + tail < FP_HLSL_CAP) {
+                if ((size_t)(rp - hlsl) + newlen + tail < hlsl_cap) {
                     memmove(rp + newlen, semi, tail);
                     memcpy(rp, rep, newlen);
                     fprintf(stderr, "[FPSOLID] program 0x%X output forced magenta%c",
@@ -4009,19 +4103,30 @@ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, in
     u32 uhash;
     u32 snap_hdr[4] = { 0 };
     if (snap) memcpy(snap_hdr, snap - 16, 16);
+    u32 constants = 0;
+    const u32 ucode_bytes = snap && snap_hdr[0] == FP_SNAP_MAGIC
+        ? (constants = snap_hdr[3], snap_hdr[2]) : fp_guest_program_size(ucode, &constants);
+    if (!ucode_bytes || ucode_bytes > RSX_FP_PROGRAM_LIMIT) {
+        s_fp_skip_draw = 1;
+        return NULL;
+    }
+    /* Programs exceeding b1's existing constant capacity use literals. Their
+     * cache identity must include the values, or a larger program would reuse
+     * the first draw's lights. Buffered programs retain the fast code hash. */
+    const int literal_key = constants > FP_MAX_K ||
+        (getenv("FP_CONSTBUF") && getenv("FP_CONSTBUF")[0] == '0');
     if (snap && snap_hdr[0] == FP_SNAP_MAGIC &&
-        !(getenv("FP_CONSTBUF") && getenv("FP_CONSTBUF")[0] == '0')) {
+        !literal_key) {
         uhash = snap_hdr[1];            /* hashed once, when the draw was recorded */
     } else {
-        u32 usz = rsx_fp_program_size(ucode, 4096);
-        if (usz == 0) usz = 64;
+        u32 usz = ucode_bytes;
         s_perf_pso_hashbytes += (int)usz;
-        if (getenv("FP_CONSTBUF") && getenv("FP_CONSTBUF")[0] == '0') {
+        if (literal_key) {
             uhash = 2166136261u;
             const u8* up = ucode;
             for (u32 i = 0; i < usz; i++) { uhash ^= up[i]; uhash *= 16777619u; }
         } else {
-            uhash = rsx_fp_code_hash(ucode, 4096);
+            uhash = rsx_fp_code_hash(ucode, ucode_bytes);
         }
     }
 
@@ -4117,14 +4222,14 @@ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, in
     key.fp_addr = fp_addr; key.vs_idx = vs_idx; key.vs_hash = vs_hash; key.gen = s_d3d.vp_gen;
     key.blend = blend; key.nrt = nrt; key.rtfmt = (u32)rtfmt; key.exp32 = exp32;
     key.ucode_hash = uhash; key.cmask = cmask; key.cull = cull; key.cube_mask = cube_mask;
-    FpJob* j = (FpJob*)malloc(sizeof *j);
+    FpJob* j = (FpJob*)calloc(1, sizeof *j);
     if (!j) return NULL;
     j->next = NULL; j->key = key; j->off = off; j->pso = NULL;
     /* Only the program itself: the snapshot arena may end right after it. */
-    { u32 psz = rsx_fp_program_size(ucode, 4096);
-      if (psz == 0 || psz > 4096) psz = 4096;
-      memcpy(j->ucode, ucode, psz);
-      memset(j->ucode + psz, 0, 4096 - psz); }
+    j->ucode = (u8*)malloc(ucode_bytes);
+    if (!j->ucode) { fp_job_free(j); return NULL; }
+    j->ucode_bytes = ucode_bytes;
+    memcpy(j->ucode, ucode, ucode_bytes);
     j->vsb = vsb; vsb->lpVtbl->AddRef(vsb);
     /* Background build: mark the key pending, skip this draw, and let a
      * worker build it. The finished pipeline is picked up by fp_async_drain
@@ -4138,7 +4243,7 @@ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, in
     }
     int st = fp_build_pso(j);
     ID3D12PipelineState* pso = j->pso;
-    j->vsb->lpVtbl->Release(j->vsb); free(j);
+    fp_job_free(j);
     fp_cache_insert(&key, pso, 0, st == FPB_SKIP);
     if (st == FPB_SKIP) s_fp_skip_draw = 1;
     return pso;
@@ -4935,7 +5040,7 @@ static void vp_record_cb(u32 slot, int vs_idx, const D3D12DrawRecord* dr)
             u32 foff = cellGcmResolveLocated((dr->fp_addr & 0x3u) == 1,
                                              dr->fp_addr & ~0x3u);
             if (vm_base && foff != 0xFFFFFFFFu)
-                rsx_fp_extract_consts(vm_base + foff, 4096, &ts[FP_K_BASE], FP_MAX_K);   /* fp_k[] */
+                rsx_fp_extract_consts(vm_base + foff, dr->fp_bytes, &ts[FP_K_BASE], FP_MAX_K);   /* fp_k[] */
             /* FPK_DBG=1: the fragment constants as the shader will see them.
              * A program whose only output is fp_k[0].xxxx renders black if
              * those constants never arrive, which looks identical from the
@@ -7154,7 +7259,10 @@ static void render_frame_impl(void)
                   u32 fo = cellGcmResolveLocated((dr->fp_addr & 3u) == 1, dr->fp_addr & ~3u);
                   if (fo != 0xFFFFFFFFu) uc = vm_base + fo;
               }
-              if (uc) _used = rsx_fp_tex_used_mask(uc, 4096);
+              if (uc) {
+                  u32 bytes = dr->fp_bytes ? dr->fp_bytes : fp_guest_program_size(uc, NULL);
+                  if (bytes) _used = rsx_fp_tex_used_mask(uc, bytes);
+              }
           } }
         for (int _u = 0; _u < FP_TEX_UNITS; _u++) {
             dr->tex_rt[_u] = -1;
@@ -7675,6 +7783,15 @@ static void render_frame_impl(void)
                  * photograph it before each of the last 40 ops. */
                 if (s_cap_steps_on && cur_rt >= 0 && d + 40 >= s_rb.count &&
                     s_d3d.off_rt[cur_rt].w >= 640)
+                    cap_step_snapshot(cur_rt, d);
+                /* F12 also samples full-scene colour draws automatically.
+                 * Shadow atlas viewports and depth-only/channel-mask passes
+                 * are excluded, leaving room for the post-chain snapshots.
+                 * This follows variable draw counts without a launch-time
+                 * RSXCAP_STEP_RANGE and does no work outside capture frames. */
+                if (s_cap_steps_on && cur_rt >= 0 && d + 40 < s_rb.count &&
+                    !dr->is_clear && (dr->cmask & 7u) == 7u &&
+                    dr->vp_w >= 640 && dr->vp_h >= 360 && (d & 31u) == 0)
                     cap_step_snapshot(cur_rt, d);
                 /* RSXCAP_STEP_RANGE=<lo>,<hi>,<stride>: also photograph the
                  * bound target every <stride> ops in [lo, hi] -- finds the op

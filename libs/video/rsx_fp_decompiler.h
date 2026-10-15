@@ -20,6 +20,11 @@ extern "C" {
 
 #define RSX_FP_BUFFERED_CONSTANTS_API 1
 #define RSX_FP_MAX_INLINE_CONSTANTS 2048u
+/* Host safety limits, not claimed RSX hardware limits. Storage grows only
+ * when needed; malformed programs must never cause unbounded allocation. */
+#define RSX_FP_PROGRAM_LIMIT (256u * 1024u)
+#define RSX_FP_HLSL_LIMIT (8u * 1024u * 1024u)
+#define RSX_FP_OUTPUT_TOO_SMALL (-2)
 
 /* Runtime payload for a structurally decompiled fragment program. Values are
  * retained as host-order IEEE-754 bit patterns so signed zero, infinities,
@@ -49,7 +54,10 @@ extern unsigned long long g_rsx_fp_nonfinite_constants;
  *   out_size  : size of `out` in bytes.
  *
  * Returns the number of instructions decoded (>=0) on success, or -1 on
- * error (null args, output overflow). The emitted entry point is
+ * error (null args, missing PROGRAM_END within max_bytes); output overflow
+ * returns RSX_FP_OUTPUT_TOO_SMALL so an allocating caller can grow and retry.
+ * An incomplete prefix is rejected instead of exporting a scratch value.
+ * The emitted entry point is
  * `float4 main(PSInput input) : SV_TARGET`, matching the backend's
  * placeholder PSInput { float4 position : SV_POSITION; float4 col : COLOR; }.
  *
@@ -160,6 +168,18 @@ const char* rsx_fp_opcode_name(u32 opcode);
  * walk logic so callers (e.g. a shader cache hashing the bytecode) agree with
  * the decompiler on where a program ends. */
 u32 rsx_fp_program_size(const u8* ucode, u32 max_bytes);
+
+/* Same walk, optionally returning the number of inline constant slots. A
+ * terminating instruction whose constant payload is truncated is invalid. */
+u32 rsx_fp_program_info(const u8* ucode, u32 max_bytes, u32* constant_count);
+
+/* Reusable, heap-backed HLSL buffer. Grows geometrically up to HLSL_LIMIT;
+ * does not retry malformed input. Caller initializes {*out,*capacity} to
+ * {NULL,0}, retains ownership on success or failure, and eventually free()s
+ * *out. `buffered` selects the buffered-constant translator. */
+int rsx_fp_decompile_alloc(const u8* ucode, u32 bytes, u32 ctrl,
+    u32 cube_mask, int buffered, char** out, u32* capacity,
+    u32* constant_count);
 
 /* Mask of texture units the program samples (0xFFFF if its end is not found). */
 u32 rsx_fp_tex_used_mask(const u8* ucode, u32 max_bytes);
