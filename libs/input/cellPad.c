@@ -18,6 +18,8 @@
 #include <math.h>
 #include "../../runtime/platform/win32_compat.h"   /* GetTickCount64 on POSIX */
 #include "../../runtime/ppu/ppu_memory.h"   /* GUEST_PTR, vm_write*: guest EA -> host */
+#include "pad_phys.h"
+#include "pad_map.h"
 
 /* ---------------------------------------------------------------------------
  * Backend selection
@@ -140,115 +142,131 @@ static int pad_host_window_focused(void)
     return pid == GetCurrentProcessId();
 }
 
+/* Pad mapping: which controller button (by position) and which key drive
+ * each PS3 action. Defaults in pad_map.h; a launcher overrides them through
+ * PAD_BTNMAP / PAD_KEYMAP. */
+static int s_map_btn[PA_COUNT], s_map_key[PA_COUNT];
+static void pad_map_load(void)
+{
+    static int done = 0;
+    if (done) return;
+    done = 1;
+    memcpy(s_map_btn, k_pad_default_btn, sizeof s_map_btn);
+    memcpy(s_map_key, k_pad_default_key, sizeof s_map_key);
+    const char* envs[2] = { getenv("PAD_BTNMAP"), getenv("PAD_KEYMAP") };
+    for (int which = 0; which < 2; which++) {
+        const char* e = envs[which];
+        while (e && *e) {
+            char name[24] = {0}, val[24] = {0};
+            int n = 0;
+            if (sscanf(e, "%23[^=]=%23[^,]%n", name, val, &n) < 2) break;
+            for (int a = 0; a < PA_COUNT; a++) {
+                if (_stricmp(name, k_pad_action_id[a])) continue;
+                if (which == 0) { int pb = pad_phys_from_id(val); s_map_btn[a] = pb; }
+                else            { s_map_key[a] = (int)strtol(val, NULL, 0); }
+            }
+            e += n;
+            if (*e == ',') e++;
+        }
+    }
+}
+
+static const u16 k_action_bit[PA_COUNT] = {
+    CELL_PAD_CTRL_CROSS, CELL_PAD_CTRL_CIRCLE, CELL_PAD_CTRL_SQUARE, CELL_PAD_CTRL_TRIANGLE,
+    CELL_PAD_CTRL_L1, CELL_PAD_CTRL_R1, CELL_PAD_CTRL_L2, CELL_PAD_CTRL_R2,
+    CELL_PAD_CTRL_L3, CELL_PAD_CTRL_R3, CELL_PAD_CTRL_SELECT, CELL_PAD_CTRL_START,
+    CELL_PAD_CTRL_UP, CELL_PAD_CTRL_DOWN, CELL_PAD_CTRL_LEFT, CELL_PAD_CTRL_RIGHT
+};
+
+static void pad_set_pressures(PadHostState* hs)
+{
+    u16 b = hs->buttons;
+    hs->press_up       = (b & CELL_PAD_CTRL_UP)       ? 255 : 0;
+    hs->press_down     = (b & CELL_PAD_CTRL_DOWN)     ? 255 : 0;
+    hs->press_left     = (b & CELL_PAD_CTRL_LEFT)     ? 255 : 0;
+    hs->press_right    = (b & CELL_PAD_CTRL_RIGHT)    ? 255 : 0;
+    hs->press_triangle = (b & CELL_PAD_CTRL_TRIANGLE) ? 255 : 0;
+    hs->press_circle   = (b & CELL_PAD_CTRL_CIRCLE)   ? 255 : 0;
+    hs->press_cross    = (b & CELL_PAD_CTRL_CROSS)    ? 255 : 0;
+    hs->press_square   = (b & CELL_PAD_CTRL_SQUARE)   ? 255 : 0;
+    hs->press_l1       = (b & CELL_PAD_CTRL_L1)       ? 255 : 0;
+    hs->press_r1       = (b & CELL_PAD_CTRL_R1)       ? 255 : 0;
+}
+
+/* Keyboard on port 0, alongside any controller (both drive the game at once).
+ * Keys are read only while a window of THIS process is in the foreground.
+ * PAD_NO_KEYBOARD=1 disables it. The left stick follows the d-pad keys when
+ * the controller's own stick is at rest, for titles that read the stick. */
 static void pad_poll_keyboard(void)
 {
     static int off = -1;
     if (off < 0) off = getenv("PAD_NO_KEYBOARD") ? 1 : 0;
     if (off) return;
-
     PadHostState* hs = &s_host_state[0];
     if (!pad_host_window_focused()) {
-        /* Release everything on focus loss, or a key held while alt-tabbing
-         * would stay down forever. */
-        hs->buttons = 0;
-        hs->analog_lx = hs->analog_ly = 128;
-        hs->analog_rx = hs->analog_ry = 128;
-        hs->connected = 1;
+        if (!hs->connected) {
+            hs->buttons = 0;
+            hs->analog_lx = hs->analog_ly = hs->analog_rx = hs->analog_ry = 128;
+            hs->trigger_l2 = hs->trigger_r2 = 0;
+            hs->connected = 1;
+        }
         return;
     }
-
-    static const struct { int vk; u16 btn; } map[] = {
-        { VK_UP,     CELL_PAD_CTRL_UP },      { VK_DOWN,  CELL_PAD_CTRL_DOWN },
-        { VK_LEFT,   CELL_PAD_CTRL_LEFT },    { VK_RIGHT, CELL_PAD_CTRL_RIGHT },
-        { 'X',       CELL_PAD_CTRL_CROSS },   { 'Z',      CELL_PAD_CTRL_CIRCLE },
-        { 'A',       CELL_PAD_CTRL_SQUARE },  { 'S',      CELL_PAD_CTRL_TRIANGLE },
-        { 'Q',       CELL_PAD_CTRL_L1 },      { 'W',      CELL_PAD_CTRL_R1 },
-        { '1',       CELL_PAD_CTRL_L2 },      { '2',      CELL_PAD_CTRL_R2 },
-        { 'I',       CELL_PAD_CTRL_START },   { VK_RETURN, CELL_PAD_CTRL_START },
-        { 'R',       CELL_PAD_CTRL_SELECT },  { VK_TAB,    CELL_PAD_CTRL_SELECT },
-    };
-
     u16 btns = 0;
-    for (unsigned i = 0; i < sizeof map / sizeof map[0]; i++)
-        if (GetAsyncKeyState(map[i].vk) & 0x8000) btns |= map[i].btn;
-
-    hs->buttons   = btns;
-    hs->connected = 1;
-    hs->analog_lx = (u8)((btns & CELL_PAD_CTRL_LEFT) ? 0 :
-                         (btns & CELL_PAD_CTRL_RIGHT) ? 255 : 128);
-    hs->analog_ly = (u8)((btns & CELL_PAD_CTRL_UP) ? 0 :
-                         (btns & CELL_PAD_CTRL_DOWN) ? 255 : 128);
-    hs->analog_rx = hs->analog_ry = 128;
-    hs->trigger_l2 = (u8)((btns & CELL_PAD_CTRL_L2) ? 255 : 0);
-    hs->trigger_r2 = (u8)((btns & CELL_PAD_CTRL_R2) ? 255 : 0);
-
+    for (int a = 0; a < PA_COUNT; a++)
+        if (s_map_key[a] > 0 && (GetAsyncKeyState(s_map_key[a]) & 0x8000)) btns |= k_action_bit[a];
+    if (!hs->connected) {   /* no controller: the keyboard is the whole pad */
+        hs->buttons = 0;
+        hs->analog_lx = hs->analog_ly = hs->analog_rx = hs->analog_ry = 128;
+        hs->trigger_l2 = hs->trigger_r2 = 0;
+        hs->connected = 1;
+    }
+    hs->buttons |= btns;
+    if (btns & (CELL_PAD_CTRL_UP | CELL_PAD_CTRL_DOWN | CELL_PAD_CTRL_LEFT | CELL_PAD_CTRL_RIGHT)) {
+        if (hs->analog_lx == 128 && hs->analog_ly == 128) {
+            hs->analog_lx = (u8)((btns & CELL_PAD_CTRL_LEFT) ? 0 : (btns & CELL_PAD_CTRL_RIGHT) ? 255 : 128);
+            hs->analog_ly = (u8)((btns & CELL_PAD_CTRL_UP) ? 0 : (btns & CELL_PAD_CTRL_DOWN) ? 255 : 128);
+        }
+    }
+    if (btns & CELL_PAD_CTRL_L2) hs->trigger_l2 = 255;
+    if (btns & CELL_PAD_CTRL_R2) hs->trigger_r2 = 255;
+    pad_set_pressures(hs);
     { static int said = 0;
       if (!said && btns) { said = 1;
-          printf("[cellPad] keyboard fallback active on port 0 (no XInput device)\n");
+          printf("[cellPad] keyboard input active on port 0\n");
           fflush(stdout); } }
 }
 #endif
 
+/* Controllers: Xbox through XInput, PlayStation (DS4/DualSense) over HID --
+ * see pad_phys.c -- each mapped to PS3 actions by button position. */
 static void pad_poll_xinput(void)
 {
+    pad_map_load();
     for (int i = 0; i < PAD_MAX_HOST_PORTS; i++) {
-        XINPUT_STATE state;
-        memset(&state, 0, sizeof(state));
-
-        DWORD result = XInputGetState((DWORD)i, &state);
-        if (result != ERROR_SUCCESS) {
-            s_host_state[i].connected = 0;
+        PadPhys p;
+        PadHostState* hs = &s_host_state[i];
+        if (!pad_phys_poll(i, &p)) {
+            hs->connected = 0;
+            hs->buttons = 0;
+            hs->analog_lx = hs->analog_ly = hs->analog_rx = hs->analog_ry = 128;
+            hs->trigger_l2 = hs->trigger_r2 = 0;
             continue;
         }
-
-        s_host_state[i].connected = 1;
-        XINPUT_GAMEPAD* gp = &state.Gamepad;
-
-        /* Map XInput buttons to PS3 CELL_PAD_CTRL_* */
+        hs->connected = 1;
         u16 btns = 0;
-        if (gp->wButtons & XINPUT_GAMEPAD_BACK)           btns |= CELL_PAD_CTRL_SELECT;
-        if (gp->wButtons & XINPUT_GAMEPAD_LEFT_THUMB)     btns |= CELL_PAD_CTRL_L3;
-        if (gp->wButtons & XINPUT_GAMEPAD_RIGHT_THUMB)    btns |= CELL_PAD_CTRL_R3;
-        if (gp->wButtons & XINPUT_GAMEPAD_START)          btns |= CELL_PAD_CTRL_START;
-        if (gp->wButtons & XINPUT_GAMEPAD_DPAD_UP)        btns |= CELL_PAD_CTRL_UP;
-        if (gp->wButtons & XINPUT_GAMEPAD_DPAD_RIGHT)     btns |= CELL_PAD_CTRL_RIGHT;
-        if (gp->wButtons & XINPUT_GAMEPAD_DPAD_DOWN)      btns |= CELL_PAD_CTRL_DOWN;
-        if (gp->wButtons & XINPUT_GAMEPAD_DPAD_LEFT)      btns |= CELL_PAD_CTRL_LEFT;
-        if (gp->bLeftTrigger > PAD_TRIGGER_THRESHOLD)     btns |= CELL_PAD_CTRL_L2;
-        if (gp->bRightTrigger > PAD_TRIGGER_THRESHOLD)    btns |= CELL_PAD_CTRL_R2;
-        if (gp->wButtons & XINPUT_GAMEPAD_LEFT_SHOULDER)  btns |= CELL_PAD_CTRL_L1;
-        if (gp->wButtons & XINPUT_GAMEPAD_RIGHT_SHOULDER) btns |= CELL_PAD_CTRL_R1;
-        if (gp->wButtons & XINPUT_GAMEPAD_Y)              btns |= CELL_PAD_CTRL_TRIANGLE;
-        if (gp->wButtons & XINPUT_GAMEPAD_B)              btns |= CELL_PAD_CTRL_CIRCLE;
-        if (gp->wButtons & XINPUT_GAMEPAD_A)              btns |= CELL_PAD_CTRL_CROSS;
-        if (gp->wButtons & XINPUT_GAMEPAD_X)              btns |= CELL_PAD_CTRL_SQUARE;
-
-        s_host_state[i].buttons = btns;
-
-        /* Analog sticks. PS3 Y axis is inverted vs XInput (up = 0). Reflect about
-         * 128 (256 - x), NOT 255 - x: the latter turns a centered stick into 127,
-         * whose bits (0x7F) alias SELECT+START and can make the guest self-exit.
-         * (via sagemono, PR #42) */
-        s_host_state[i].analog_lx = pad_xinput_stick_to_u8(gp->sThumbLX, PAD_STICK_DEADZONE);
-        s_host_state[i].analog_ly = (u8)(256 - pad_xinput_stick_to_u8(gp->sThumbLY, PAD_STICK_DEADZONE));
-        s_host_state[i].analog_rx = pad_xinput_stick_to_u8(gp->sThumbRX, PAD_STICK_DEADZONE);
-        s_host_state[i].analog_ry = (u8)(256 - pad_xinput_stick_to_u8(gp->sThumbRY, PAD_STICK_DEADZONE));
-
-        /* Triggers */
-        s_host_state[i].trigger_l2 = gp->bLeftTrigger;
-        s_host_state[i].trigger_r2 = gp->bRightTrigger;
-
-        /* Pressure-sensitive buttons: XInput has digital only, so 0 or 255 */
-        s_host_state[i].press_up       = (btns & CELL_PAD_CTRL_UP)       ? 255 : 0;
-        s_host_state[i].press_down     = (btns & CELL_PAD_CTRL_DOWN)     ? 255 : 0;
-        s_host_state[i].press_left     = (btns & CELL_PAD_CTRL_LEFT)     ? 255 : 0;
-        s_host_state[i].press_right    = (btns & CELL_PAD_CTRL_RIGHT)    ? 255 : 0;
-        s_host_state[i].press_triangle = (btns & CELL_PAD_CTRL_TRIANGLE) ? 255 : 0;
-        s_host_state[i].press_circle   = (btns & CELL_PAD_CTRL_CIRCLE)   ? 255 : 0;
-        s_host_state[i].press_cross    = (btns & CELL_PAD_CTRL_CROSS)    ? 255 : 0;
-        s_host_state[i].press_square   = (btns & CELL_PAD_CTRL_SQUARE)   ? 255 : 0;
-        s_host_state[i].press_l1       = (btns & CELL_PAD_CTRL_L1)       ? 255 : 0;
-        s_host_state[i].press_r1       = (btns & CELL_PAD_CTRL_R1)       ? 255 : 0;
+        for (int a = 0; a < PA_COUNT; a++)
+            if (s_map_btn[a] >= 0 && (p.buttons & (1u << s_map_btn[a]))) btns |= k_action_bit[a];
+        hs->buttons = btns;
+        /* PS3 Y axis: up = 0 -- pad_phys already reports it that way. */
+        hs->analog_lx = p.lx; hs->analog_ly = p.ly;
+        hs->analog_rx = p.rx; hs->analog_ry = p.ry;
+        /* Analog L2/R2 follow whichever trigger the action is mapped to. */
+        hs->trigger_l2 = (s_map_btn[PA_L2] == PB_L2) ? p.l2 : (s_map_btn[PA_L2] == PB_R2) ? p.r2
+                       : ((btns & CELL_PAD_CTRL_L2) ? 255 : 0);
+        hs->trigger_r2 = (s_map_btn[PA_R2] == PB_R2) ? p.r2 : (s_map_btn[PA_R2] == PB_L2) ? p.l2
+                       : ((btns & CELL_PAD_CTRL_R2) ? 255 : 0);
+        pad_set_pressures(hs);
     }
 }
 
@@ -441,7 +459,8 @@ static void pad_poll_backend(void)
     pad_poll_sdl2();
 #endif
 #ifdef _WIN32
-    if (!s_host_state[0].connected) pad_poll_keyboard();
+    pad_map_load();
+    pad_poll_keyboard();   /* keyboard always adds to port 0 */
 #endif
 }
 

@@ -132,3 +132,6 @@ third_party/ffmpeg/bin/
 projects/*/shader_cache/
 projects/*/spu_dump/
 projects/*/audio-capture.f32
+
+# Launcher cover art is the title's own artwork: kept local, embedded when present.
+projects/*/launcher_art/banner.*

@@ -53,6 +53,7 @@
  * there is nothing to shim: the 15.6 ms default timer granularity this works
  * around is a Windows problem. */
 #include <timeapi.h>
+#include <io.h>        /* _dup2: the log redirect of a double-clicked start */
 #endif
 
 /* ---------------------------------------------------------------------------
@@ -379,9 +380,30 @@ static void harness_guest_caller(uint32_t opd, uint64_t a0, uint64_t a1,
     ppu_guest_call(opd, a0, a1, a2, a3, a4, a5, a6, a7);
 }
 
+extern "C" int cv_launcher_run(char* eboot_out, size_t cap);
+
 int main(int argc, char** argv)
 {
     std::string eboot_path;
+#ifdef _WIN32
+    /* Started by a double-click, this process owns its console: send the log
+     * to run-log.txt beside the executable and drop the black window. (The
+     * launcher script redirects the log itself and shares its console.) */
+    { DWORD pl[4];
+      if (GetConsoleWindow() && GetConsoleProcessList(pl, 4) == 1) {
+          char exe[MAX_PATH]; GetModuleFileNameA(NULL, exe, MAX_PATH);
+          std::string log = (std::filesystem::path(exe).parent_path() / "run-log.txt").string();
+          /* freopen (not freopen_s) shares the file, so the log can be read while the game runs */
+          if (freopen(log.c_str(), "w", stdout)) _dup2(_fileno(stdout), _fileno(stderr));
+          FreeConsole();
+      } }
+    /* The options window. CV_NO_LAUNCHER=1 skips it (tests, scripts). */
+    if (!getenv("CV_NO_LAUNCHER")) {
+        char chosen[1024] = {0};
+        if (!cv_launcher_run(chosen, sizeof chosen)) return 0;
+        eboot_path = chosen;
+    } else
+#endif
     if (argc >= 2) {
         eboot_path = argv[1];
     } else {

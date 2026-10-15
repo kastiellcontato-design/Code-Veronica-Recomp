@@ -190,6 +190,7 @@ endif()
 
 add_executable(${PROJECT_NAME}
     main.cpp
+    launcher.cpp
     stubs.cpp
     ${PS3RECOMP_SCAFFOLD}
     ${HLE_NID_TABLE}
@@ -216,6 +217,27 @@ if(SPU_SOURCES)
                 "/arch:${SPU_ARCH}" "-ffp-contract=off")
         endif()
     endif()
+endif()
+
+# Launcher art: every image in launcher_art/ becomes an RCDATA resource named
+# after the file (ps_cross.png -> PS_CROSS). The cover (banner.*) is the
+# title's own artwork and is not in the repository; without it the launcher
+# draws a plain banner.
+if(WIN32)
+    file(GLOB LAUNCHER_ART CONFIGURE_DEPENDS
+         "${CMAKE_CURRENT_SOURCE_DIR}/launcher_art/*.png"
+         "${CMAKE_CURRENT_SOURCE_DIR}/launcher_art/*.jpg")
+    set(_launcher_rc "")
+    foreach(_f IN LISTS LAUNCHER_ART)
+        get_filename_component(_n "${_f}" NAME_WE)
+        string(TOUPPER "${_n}" _n)
+        string(APPEND _launcher_rc "${_n} RCDATA \"${_f}\"
+")
+    endforeach()
+    file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/launcher_art.rc" "${_launcher_rc}")
+    target_sources(${PROJECT_NAME} PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/launcher_art.rc")
+    set_source_files_properties(launcher.cpp PROPERTIES
+        INCLUDE_DIRECTORIES "${PS3RECOMP_DIR}/libs/input")
 endif()
 
 # app.rc carries the icon, the version block and the manifest, and needs a

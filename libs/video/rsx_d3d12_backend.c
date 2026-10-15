@@ -667,9 +667,14 @@ static u32    s_lock_n  = 0;
  * Win32 window
  * -----------------------------------------------------------------------*/
 
+static int s_hide_cursor;   /* WINDOW_MODE=fullscreen */
+
 static LRESULT CALLBACK d3d12_wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 {
     switch (msg) {
+    case WM_SETCURSOR:
+        if (s_hide_cursor && LOWORD(lp) == HTCLIENT) { SetCursor(NULL); return TRUE; }
+        break;
     case WM_CLOSE:
         s_d3d.window_closed = 1;
         DestroyWindow(hwnd);
@@ -702,20 +707,63 @@ static HWND create_window(u32 width, u32 height, const char* title)
     wc.lpszClassName = "ps3recomp_d3d12";
     RegisterClassExA(&wc);
 
-    RECT wr = {0, 0, (LONG)width, (LONG)height};
-    AdjustWindowRect(&wr, WS_OVERLAPPEDWINDOW, FALSE);
-
     /* Keep the display awake (see rsx_null_backend.c). */
     SetThreadExecutionState(ES_CONTINUOUS | ES_DISPLAY_REQUIRED | ES_SYSTEM_REQUIRED);
+
+    /* WINDOW_MODE: "window" (default) a framed window, "borderless" a
+     * frameless window covering the monitor, "fullscreen" the same kept on top
+     * with the mouse cursor hidden. The swapchain keeps the render size and
+     * DXGI stretches it to the window, so the window is sized independently:
+     * a framed window is at least the 1280x720 guest frame (480p rendering
+     * still shows at 720p) and shrinks to fit the work area, keeping 16:9; a
+     * monitor that is not 16:9 gets the largest 16:9 rect, centred, over a
+     * black backdrop that cannot take focus. */
+    const char* wm = getenv("WINDOW_MODE");
+    int mode = 0;
+    if (wm && !_stricmp(wm, "borderless")) mode = 1;
+    else if (wm && !_stricmp(wm, "fullscreen")) mode = 2;
+    HMONITOR mon = MonitorFromPoint((POINT){0, 0}, MONITOR_DEFAULTTOPRIMARY);
+    MONITORINFO mi; mi.cbSize = sizeof mi; GetMonitorInfoA(mon, &mi);
+    const RECT mr = mi.rcMonitor, wa = mi.rcWork;
+    if (mode != 0) {
+        s_hide_cursor = (mode == 2);
+        const LONG mw = mr.right - mr.left, mh = mr.bottom - mr.top;
+        LONG w = mw, h = mw * 9 / 16;
+        if (h > mh) { h = mh; w = mh * 16 / 9; }
+        HWND owner = NULL;
+        const DWORD ex = (mode == 2) ? WS_EX_TOPMOST : 0;
+        if (w != mw || h != mh) {
+            WNDCLASSEXA bc = {0};
+            bc.cbSize = sizeof bc; bc.lpfnWndProc = DefWindowProcA; bc.hInstance = GetModuleHandle(NULL);
+            bc.hCursor = LoadCursor(NULL, IDC_ARROW); bc.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
+            bc.lpszClassName = "ps3recomp_backdrop";
+            RegisterClassExA(&bc);
+            owner = CreateWindowExA(ex | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW, "ps3recomp_backdrop", "",
+                                    WS_POPUP | WS_VISIBLE, mr.left, mr.top, mw, mh,
+                                    NULL, NULL, GetModuleHandle(NULL), NULL);
+        }
+        return CreateWindowExA(ex, "ps3recomp_d3d12", title ? title : "ps3recomp (D3D12)",
+                               WS_POPUP | WS_VISIBLE, mr.left + (mw - w) / 2, mr.top + (mh - h) / 2,
+                               w, h, owner, NULL, GetModuleHandle(NULL), NULL);
+    }
+    LONG cw = (LONG)width, ch = (LONG)height;
+    if (cw < 1280 || ch < 720) { cw = 1280; ch = 720; }
+    const DWORD style = WS_OVERLAPPEDWINDOW | WS_VISIBLE;
+    for (;;) {   /* fit the frame inside the work area */
+        RECT t = {0, 0, cw, ch};
+        AdjustWindowRect(&t, style & ~WS_VISIBLE, FALSE);
+        if ((t.right - t.left) <= (wa.right - wa.left) && (t.bottom - t.top) <= (wa.bottom - wa.top)) break;
+        cw = cw * 9 / 10; ch = ch * 9 / 10;
+        if (cw < 320) break;
+    }
+    RECT wr = {0, 0, cw, ch};
+    AdjustWindowRect(&wr, style & ~WS_VISIBLE, FALSE);
     return CreateWindowExA(
         0, "ps3recomp_d3d12",
         title ? title : "ps3recomp (D3D12)",
-        WS_OVERLAPPEDWINDOW | WS_VISIBLE,
-        CW_USEDEFAULT, CW_USEDEFAULT,
-        wr.right - wr.left, wr.bottom - wr.top,
+        style, CW_USEDEFAULT, CW_USEDEFAULT, wr.right - wr.left, wr.bottom - wr.top,
         NULL, NULL, GetModuleHandle(NULL), NULL);
 }
-
 /* ---------------------------------------------------------------------------
  * D3D12 initialization
  * -----------------------------------------------------------------------*/
@@ -9474,7 +9522,7 @@ int rsx_d3d12_backend_init(u32 width, u32 height, const char* title)
     }
     { const char* e = getenv("RES_SCALE");
       float f = e ? (float)atof(e) : 1.0f;
-      if (f > 1.0f && f <= 4.0f) s_rs = f;
+      if (f >= 0.5f && f <= 4.0f && f != 1.0f) s_rs = f;   /* 0.667 = 480p */
       if (s_rs != 1.0f)
           printf("[D3D12] RES_SCALE %.2f: rendering %ux%u for a %ux%u guest\n",
                  s_rs, rs_dim(width, s_rs), rs_dim(height, s_rs), width, height); }
