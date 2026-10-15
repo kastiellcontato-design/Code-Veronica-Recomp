@@ -437,6 +437,7 @@ const wchar_t* key_font()
 /* The label of a Windows virtual key, short enough for a 28-px cap. */
 std::wstring key_label(int vk)
 {
+    if (vk <= 0) return L"-";   /* an action with no key */
     switch (vk) {
     case 0x20: return L"Space";  case 0x08: return L"BkSp"; case 0x0D: return L"Enter";
     case 0x09: return L"Tab";    case 0x1B: return L"Esc";  case 0x14: return L"Caps";
@@ -459,18 +460,35 @@ std::wstring key_label(int vk)
     return L"?";
 }
 
-/* The key PAD_KEYMAP gives PS3 action `a` (pad_map.h ids), else the default. */
-int key_for(int a)
+/* The keys PAD_KEYMAP gives PS3 action `a` (pad_map.h ids; up to
+ * PAD_KEY_SLOTS joined by '+', 0 = empty), else the default. */
+std::vector<int> keys_for(int a)
 {
-    int vk = k_pad_default_key[a];
+    std::vector<int> keys{ k_pad_default_key[a] };
     const char* e = getenv("PAD_KEYMAP");
     const size_t idn = strlen(k_pad_action_id[a]);
     for (const char* p = e; p && *p; ) {
-        if (!strncmp(p, k_pad_action_id[a], idn) && p[idn] == '=') vk = (int)strtol(p + idn + 1, nullptr, 0);
+        if (!strncmp(p, k_pad_action_id[a], idn) && p[idn] == '=') {
+            keys.clear();
+            for (const char* v = p + idn + 1; ; ) {
+                char* end;
+                const int vk = (int)strtol(v, &end, 0);
+                if (vk > 0) keys.push_back(vk);
+                if (*end != '+') break;
+                v = end + 1;
+            }
+        }
         p = strchr(p, ',');
         if (p) p++;
     }
-    return vk;
+    return keys;
+}
+
+/* The key the icons show for action `a`: its first one (0: none mapped). */
+int key_for(int a)
+{
+    const std::vector<int> k = keys_for(a);
+    return k.empty() ? 0 : k[0];
 }
 
 /* Draw `t` in `box`, shrinking the font until it fits. */
@@ -1256,7 +1274,7 @@ void main_page_layout(std::vector<Rgba>& img, const std::vector<Rgba>& orig, con
     std::set<int> lit;
     for (int a : { PA_CROSS, PA_CIRCLE, PA_SQUARE, PA_TRIANGLE, PA_L1, PA_R1, PA_SELECT, PA_START,
                    PA_UP, PA_DOWN, PA_LEFT, PA_RIGHT })
-        lit.insert(key_for(a));
+        for (int vk : keys_for(a)) lit.insert(vk);   /* every key that does something here */
     blend(img, render_ss(KW, KHT, [&](Gdiplus::Graphics& g) { draw_keyboard(g, 0, 0, (float)KW, lit); }), KW, KHT, KX, KY);
 }
 

@@ -145,7 +145,7 @@ static int pad_host_window_focused(void)
 /* Pad mapping: which controller button (by position) and which key drive
  * each PS3 action. Defaults in pad_map.h; a launcher overrides them through
  * PAD_BTNMAP / PAD_KEYMAP. */
-static int s_map_btn[PA_COUNT], s_map_key[PA_COUNT];
+static int s_map_btn[PA_COUNT][PAD_BTN_SLOTS], s_map_key[PA_COUNT][PAD_KEY_SLOTS];   /* -1 / 0: empty */
 
 /* The device the player touched last (pad_phys.h, pad_last_input): a
  * controller's PAD_KIND_*, or PAD_INPUT_KEYBOARD. Button icons follow it. */
@@ -158,19 +158,28 @@ static void pad_map_load(void)
     if (done) return;
     done = 1;
     if (s_map_live) return;
-    memcpy(s_map_btn, k_pad_default_btn, sizeof s_map_btn);
-    memcpy(s_map_key, k_pad_default_key, sizeof s_map_key);
+    for (int a = 0; a < PA_COUNT; a++) {
+        for (int k = 0; k < PAD_BTN_SLOTS; k++) s_map_btn[a][k] = k ? -1 : k_pad_default_btn[a];
+        for (int k = 0; k < PAD_KEY_SLOTS; k++) s_map_key[a][k] = k ? 0 : k_pad_default_key[a];
+    }
     const char* envs[2] = { getenv("PAD_BTNMAP"), getenv("PAD_KEYMAP") };
     for (int which = 0; which < 2; which++) {
         const char* e = envs[which];
         while (e && *e) {
-            char name[24] = {0}, val[24] = {0};
+            char name[24] = {0}, val[64] = {0};
             int n = 0;
-            if (sscanf(e, "%23[^=]=%23[^,]%n", name, val, &n) < 2) break;
+            if (sscanf(e, "%23[^=]=%63[^,]%n", name, val, &n) < 2) break;
             for (int a = 0; a < PA_COUNT; a++) {
                 if (_stricmp(name, k_pad_action_id[a])) continue;
-                if (which == 0) { int pb = pad_phys_from_id(val); s_map_btn[a] = pb; }
-                else            { s_map_key[a] = (int)strtol(val, NULL, 0); }
+                /* the slots, joined by '+'; the ones not given are empty */
+                char* part = val;
+                for (int k = 0; k < (which == 0 ? PAD_BTN_SLOTS : PAD_KEY_SLOTS); k++) {
+                    char* plus = part ? strchr(part, '+') : NULL;
+                    if (plus) *plus = 0;
+                    if (which == 0) s_map_btn[a][k] = part ? pad_phys_from_id(part) : -1;
+                    else            s_map_key[a][k] = part ? (int)strtol(part, NULL, 0) : 0;
+                    part = plus ? plus + 1 : NULL;
+                }
             }
             e += n;
             if (*e == ',') e++;
@@ -181,10 +190,13 @@ static void pad_map_load(void)
 /* A launcher's options menu, while the game runs: new mapping (applies on the
  * next poll) and input hold-off while the menu has the focus. */
 int g_pad_block;
-void cellpad_set_map(const int* btn, const int* key)
+void cellpad_set_map(const int* btn, const int* key)   /* [PA_COUNT][PAD_BTN_SLOTS], [PA_COUNT][PAD_KEY_SLOTS] */
 {
     s_map_live = 1;
-    for (int a = 0; a < PA_COUNT; a++) { s_map_btn[a] = btn[a]; s_map_key[a] = key[a]; }
+    for (int a = 0; a < PA_COUNT; a++) {
+        for (int k = 0; k < PAD_BTN_SLOTS; k++) s_map_btn[a][k] = btn[a * PAD_BTN_SLOTS + k];
+        for (int k = 0; k < PAD_KEY_SLOTS; k++) s_map_key[a][k] = key[a * PAD_KEY_SLOTS + k];
+    }
 }
 
 static const u16 k_action_bit[PA_COUNT] = {
@@ -230,7 +242,8 @@ static void pad_poll_keyboard(void)
     }
     u16 btns = 0;
     for (int a = 0; a < PA_COUNT; a++)
-        if (s_map_key[a] > 0 && (GetAsyncKeyState(s_map_key[a]) & 0x8000)) btns |= k_action_bit[a];
+        for (int k = 0; k < PAD_KEY_SLOTS; k++)
+            if (s_map_key[a][k] > 0 && (GetAsyncKeyState(s_map_key[a][k]) & 0x8000)) btns |= k_action_bit[a];
     if (!hs->connected) {   /* no controller: the keyboard is the whole pad */
         hs->buttons = 0;
         hs->analog_lx = hs->analog_ly = hs->analog_rx = hs->analog_ry = 128;
@@ -256,6 +269,20 @@ static void pad_poll_keyboard(void)
 }
 #endif
 
+static u8 pad_trigger(int a, const PadPhys* p, int pressed)
+{
+    int v = -1, other = 0;
+    for (int k = 0; k < PAD_BTN_SLOTS; k++) {
+        const int b = s_map_btn[a][k];
+        if (b == PB_L2) v = v > p->l2 ? v : p->l2;
+        else if (b == PB_R2) v = v > p->r2 ? v : p->r2;
+        else if (b >= 0 && (p->buttons & (1u << b))) other = 1;
+    }
+    if (other) return 255;
+    if (v >= 0) return (u8)v;
+    return pressed ? 255 : 0;
+}
+
 /* Controllers: Xbox through XInput, PlayStation (DS4/DualSense) over HID --
  * see pad_phys.c -- each mapped to PS3 actions by button position. */
 static void pad_poll_xinput(void)
@@ -274,7 +301,8 @@ static void pad_poll_xinput(void)
         hs->connected = 1;
         u16 btns = 0;
         for (int a = 0; a < PA_COUNT; a++)
-            if (s_map_btn[a] >= 0 && (p.buttons & (1u << s_map_btn[a]))) btns |= k_action_bit[a];
+            for (int k = 0; k < PAD_BTN_SLOTS; k++)
+                if (s_map_btn[a][k] >= 0 && (p.buttons & (1u << s_map_btn[a][k]))) btns |= k_action_bit[a];
         if (p.buttons || abs((int)p.lx - 128) > 64 || abs((int)p.ly - 128) > 64 ||
             abs((int)p.rx - 128) > 64 || abs((int)p.ry - 128) > 64)
             s_last_input = p.kind;
@@ -282,11 +310,10 @@ static void pad_poll_xinput(void)
         /* PS3 Y axis: up = 0 -- pad_phys already reports it that way. */
         hs->analog_lx = p.lx; hs->analog_ly = p.ly;
         hs->analog_rx = p.rx; hs->analog_ry = p.ry;
-        /* Analog L2/R2 follow whichever trigger the action is mapped to. */
-        hs->trigger_l2 = (s_map_btn[PA_L2] == PB_L2) ? p.l2 : (s_map_btn[PA_L2] == PB_R2) ? p.r2
-                       : ((btns & CELL_PAD_CTRL_L2) ? 255 : 0);
-        hs->trigger_r2 = (s_map_btn[PA_R2] == PB_R2) ? p.r2 : (s_map_btn[PA_R2] == PB_L2) ? p.l2
-                       : ((btns & CELL_PAD_CTRL_R2) ? 255 : 0);
+        /* Analog L2/R2 follow the triggers the action is mapped to (the
+         * deeper press of the two when both are); other buttons are full. */
+        hs->trigger_l2 = pad_trigger(PA_L2, &p, (btns & CELL_PAD_CTRL_L2) != 0);
+        hs->trigger_r2 = pad_trigger(PA_R2, &p, (btns & CELL_PAD_CTRL_R2) != 0);
         pad_set_pressures(hs);
     }
 }

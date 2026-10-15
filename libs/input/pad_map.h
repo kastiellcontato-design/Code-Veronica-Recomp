@@ -1,10 +1,12 @@
 /*
  * ps3recomp - default pad mapping shared by cellPad and title launchers.
  *
- * Each PS3 pad action is driven by one controller button (by position, see
- * pad_phys.h) and one keyboard key (a Windows virtual-key code). cellPad reads
- * overrides from PAD_BTNMAP / PAD_KEYMAP ("cross=south,circle=east,..." and
- * "cross=32,circle=8,..."), which a launcher sets from its settings.
+ * Each PS3 pad action is driven by up to PAD_BTN_SLOTS controller buttons (by
+ * position, see pad_phys.h) and up to PAD_KEY_SLOTS keyboard keys (Windows
+ * virtual-key codes); the first slot is the one the game's icons show. cellPad
+ * reads overrides from PAD_BTNMAP / PAD_KEYMAP ("cross=south+west,..." and
+ * "cross=32+75,circle=8,...": slots joined by '+', "none" / 0 for an empty
+ * one), which a launcher sets from its settings.
  */
 #ifndef PS3RECOMP_PAD_MAP_H
 #define PS3RECOMP_PAD_MAP_H
@@ -17,6 +19,9 @@ enum {
     PA_SELECT, PA_START, PA_UP, PA_DOWN, PA_LEFT, PA_RIGHT,
     PA_COUNT
 };
+
+#define PAD_KEY_SLOTS 3
+#define PAD_BTN_SLOTS 2
 
 static const char* const k_pad_action_id[PA_COUNT] = {
     "cross", "circle", "square", "triangle", "l1", "r1", "l2", "r2", "l3", "r3",

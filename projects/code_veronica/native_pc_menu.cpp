@@ -1,7 +1,9 @@
 /* Code Veronica EU 1.00: extend the guest's OPTION menu using its own 2D queue.
  * Only the build-local lift is wrapped. EBOOT and original generated files stay intact.
- * New labels use cached serif glyph outlines rasterized by Windows, submitted as
- * one GPU batch in the game framebuffer (no additional window).
+ * New labels use serif glyphs rasterized by Windows at the menu's own scale (one
+ * texel per UI unit, like the game's lettering) and drawn magnified the way the
+ * game's text is, bilinearly, submitted as one GPU batch in the game
+ * framebuffer (no additional window).
  */
 #include "ppu_recomp.h"
 #include "../../libs/video/rsx_ui_batch.h"
@@ -39,7 +41,6 @@ int pc_row=0;
 std::array<int,6> values={1,0,0,80,50,100}; // neutral brightness, contrast and saturation
 int pc_adjust_direction=0;
 ULONGLONG pc_adjust_started=0;
-constexpr float kGlyphRasterScale=1.5f;
 
 bool enabled() {
     static const bool on=[] { const char* value=std::getenv("CV_NATIVE_PC_MENU"); return !value || std::strcmp(value,"0")!=0; }();
@@ -86,95 +87,75 @@ void read_settings() {
     values[3]=std::clamp(values[3],0,160); values[4]=std::clamp(values[4],0,130); values[5]=std::clamp(values[5],0,200);
 }
 
-struct Span { float x,y,w; unsigned char coverage; float h=1.0f/kGlyphRasterScale; };
-struct Glyph { int advance=0; std::vector<Span> spans; };
+/* One cell between four texel centres, with its corners' coverage (top-left,
+ * bottom-left, top-right, bottom-right from the low byte); a run of identical
+ * uniform cells is one wide cell. */
+struct Cell { float x,y,w; uint32_t corners; };
+struct Glyph { int advance=0; std::vector<Cell> cells; };
 struct Font {
     HDC dc=CreateCompatibleDC(nullptr);
-    HFONT font=CreateFontW(-28,0,0,0,FW_BOLD,FALSE,FALSE,FALSE,DEFAULT_CHARSET,
+    HFONT font=CreateFontW(-27,0,0,0,FW_BOLD,FALSE,FALSE,FALSE,DEFAULT_CHARSET,
                            OUT_DEFAULT_PRECIS,CLIP_DEFAULT_PRECIS,ANTIALIASED_QUALITY,DEFAULT_PITCH,L"Times New Roman");
     HGDIOBJ old=nullptr;
-    int ascent=24;
+    // 27 units to the em: capitals as tall as the menu's own (EXIT, DEFAULT),
+    // measured on screen. The baseline sits 21 units below a row's y, which
+    // centres PC SETTINGS between DEFAULT and EXIT.
+    const int ascent=21;
     std::map<unsigned,Glyph> glyphs;
-    Font() { if(dc&&font) { old=SelectObject(dc,font); TEXTMETRICW metrics{}; if(GetTextMetricsW(dc,&metrics))ascent=metrics.tmAscent; } }
+    Font() { if(dc&&font) old=SelectObject(dc,font); }
     ~Font() { if(dc&&old)SelectObject(dc,old); if(font)DeleteObject(font); if(dc)DeleteDC(dc); }
     const Glyph& get(unsigned character) {
         auto found=glyphs.find(character); if(found!=glyphs.end())return found->second;
-        Glyph glyph; glyph.advance=14;
+        Glyph glyph; glyph.advance=9;
         if(dc&&font) {
             MAT2 matrix{};
             matrix.eM11.value=matrix.eM22.value=1;
-            matrix.eM11.fract=matrix.eM22.fract=0x8000;
             GLYPHMETRICS metrics{};
             DWORD size=GetGlyphOutlineW(dc,character,GGO_GRAY8_BITMAP,&metrics,0,nullptr,&matrix);
             if(size!=GDI_ERROR) {
-                glyph.advance=static_cast<int>(std::lround(metrics.gmCellIncX/kGlyphRasterScale));
+                glyph.advance=metrics.gmCellIncX;
                 std::vector<unsigned char> bitmap(size);
                 if(size && GetGlyphOutlineW(dc,character,GGO_GRAY8_BITMAP,&metrics,size,bitmap.data(),&matrix)!=GDI_ERROR) {
-                    const unsigned stride=(metrics.gmBlackBoxX+3)&~3u;
-                    for(unsigned y=0;y<metrics.gmBlackBoxY;y++) {
-                        for(unsigned x=0;x<metrics.gmBlackBoxX;) {
-                            const unsigned alpha=(bitmap[y*stride+x]*255u+32u)/64u;
-                            if(!alpha) { ++x; continue; }
-                            unsigned end=x+1;
-                            while(end<metrics.gmBlackBoxX && (bitmap[y*stride+end]*255u+32u)/64u==alpha)++end;
-                            const float px=(float(x)+metrics.gmptGlyphOrigin.x)/kGlyphRasterScale;
-                            const float py=float(y)/kGlyphRasterScale+ascent-float(metrics.gmptGlyphOrigin.y)/kGlyphRasterScale;
-                            glyph.spans.push_back({px,py,float(end-x)/kGlyphRasterScale,static_cast<unsigned char>(alpha)});
+                    const int w=int(metrics.gmBlackBoxX),h=int(metrics.gmBlackBoxY),stride=(w+3)&~3;
+                    auto cov=[&](int x,int y)->uint32_t {
+                        if(x<0||y<0||x>=w||y>=h)return 0;
+                        return (bitmap[size_t(y)*stride+x]*255u+32u)/64u;
+                    };
+                    auto corners=[&](int x,int y) { return cov(x,y)|cov(x,y+1)<<8|cov(x+1,y)<<16|cov(x+1,y+1)<<24; };
+                    const float left=float(metrics.gmptGlyphOrigin.x),top=float(ascent-metrics.gmptGlyphOrigin.y);
+                    for(int y=-1;y<h;y++)
+                        for(int x=-1;x<w;) {
+                            const uint32_t c=corners(x,y);
+                            if(!c) { ++x; continue; }
+                            int end=x+1;
+                            if((c&255)*0x01010101u==c)
+                                while(end<w && corners(end,y)==c)++end;
+                            glyph.cells.push_back({left+x+.5f,top+y+.5f,float(end-x),c});
                             x=end;
                         }
-                    }
                 }
             }
         }
-        // Merge vertically adjacent identical runs into solid rectangles.
-        // This preserves every covered pixel while reducing native quad draws.
-        std::vector<Span> merged;
-        for(const auto& span:glyph.spans) {
-            bool joined=false;
-            for(auto& rect:merged) {
-                if(rect.x==span.x && rect.w==span.w && rect.coverage==span.coverage && std::fabs(rect.y+rect.h-span.y)<0.001f) {
-                    rect.h+=span.h;joined=true;break;
-                }
-            }
-            if(!joined)merged.push_back(span);
-        }
-        glyph.spans=std::move(merged);
         return glyphs.emplace(character,std::move(glyph)).first->second;
     }
 };
-struct Vertex { float x,y,z; uint32_t color; };
 struct TextBatch {
-    std::vector<Vertex> vertices;
-    void rect(float x,float y,float w,float h,uint32_t color) {
-        const Vertex first{x,y,0.05f,color};
-        if(!vertices.empty()) { vertices.push_back(vertices.back()); vertices.push_back(first); }
-        vertices.push_back(first); vertices.push_back({x,y+h,0.05f,color});
-        vertices.push_back({x+w,y,0.05f,color}); vertices.push_back({x+w,y+h,0.05f,color});
-    }
+    std::vector<rsx_ui_quad> quads;
     void text(const std::string& text,float x,float y,uint32_t color,float scale=1.f,bool centered=false) {
         static Font font;
         if(centered) { int width=0; for(unsigned char ch:text)width+=font.get(ch).advance; x-=width*scale*.5f; }
-        const unsigned alpha=color>>24;
-        for(unsigned char ch:text) {
-            const auto& glyph=font.get(ch);
-            // Shadow, then face. Coverage lives in the vertex color's alpha.
-            for(int pass=0;pass<2;pass++)for(const auto& span:glyph.spans) {
-                const unsigned a=alpha*span.coverage/255;
-                rect(x+(span.x+(pass?0:2))*scale,y+(span.y+(pass?0:2))*scale,span.w*scale,span.h*scale,
-                     (a<<24)|(pass?(color&0xffffff):0));
+        for(int pass=0;pass<2;pass++) {   // shadow, then face
+            float pen=x;
+            for(unsigned char ch:text) {
+                const auto& glyph=font.get(ch);
+                for(const auto& cell:glyph.cells)
+                    quads.push_back({pen+(cell.x+(pass?0:2))*scale,y+(cell.y+(pass?0:2))*scale,cell.w*scale,scale,
+                                     pass?color:(color&0xFF000000u),cell.corners});
+                pen+=glyph.advance*scale;
             }
-            x+=glyph.advance*scale;
         }
     }
     void submit(const ppu_context*) {
-        // Reuse exactly the approved glyph rectangles, now submitted in one
-        // render batch instead of thousands of guest heap/queue/draw calls.
-        std::vector<rsx_ui_quad> quads;
-        quads.reserve((vertices.size()+2)/6);
-        for(size_t first=0;first+3<vertices.size();first+=6) {
-            const auto& a=vertices[first]; const auto& b=vertices[first+3];
-            quads.push_back({a.x,a.y,b.x-a.x,b.y-a.y,a.color});
-        }
         rsx_d3d12_set_ui_quads(quads.data(),uint32_t(quads.size()));
     }
 };
@@ -296,18 +277,13 @@ extern "C" int cv_native_pc_menu_selftest(void) {
     cursor=5;
     check(!move_extra_row(cursor,selected,kDown)&&cursor==5&&!selected,"EXIT wrap remains native");
     TextBatch text;text.text("PC SETTINGS",32,310,0xFFFFFFFF);
-    check(!text.vertices.empty(),"serif glyphs available");
-    check(text.vertices.size()%6==4,"separate glyph spans form one strip");
-    check((text.vertices.size()+2)/6<131072,"entry geometry stays within the expanded UI batch");
-    for(const auto& vertex:text.vertices)check(vertex.x>=0&&vertex.x<640&&vertex.y>=0&&vertex.y<384,"entry fits original menu panel");
-    size_t quad_count=0;
-    for(size_t first=0;first+3<text.vertices.size();first+=6) {
-        const auto& a=text.vertices[first];const auto& b=text.vertices[first+3];
-        check(b.x>a.x && b.y>a.y,"batched glyph rectangles retain positive area");
-        ++quad_count;
+    check(!text.quads.empty(),"serif glyphs available");
+    check(text.quads.size()<131072,"entry fits single GPU batch");
+    for(const auto& q:text.quads) {
+        check(q.x>=0&&q.x+q.w<640&&q.y>=0&&q.y+q.h<384,"entry fits original menu panel");
+        check(q.w>0&&q.h>0,"glyph cells retain positive area");
     }
-    check(quad_count<131072,"entry fits single GPU batch");
-    std::printf("[pc-menu-test] %s: navigation and %zu text vertices\n",failures?"FAILED":"PASS",text.vertices.size());
+    std::printf("[pc-menu-test] %s: navigation and %zu text cells\n",failures?"FAILED":"PASS",text.quads.size());
     return failures?1:0;
 }
 #endif

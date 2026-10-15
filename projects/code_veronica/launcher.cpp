@@ -129,8 +129,8 @@ struct Settings {
     bool patch[8] = {};    /* k_patches on/off */
     int layout = 2;        /* button icons: 0 PlayStation, 1 Xbox, 2 automatic, 3 keyboard */
     std::wstring game, rap, fw;
-    int key[PA_COUNT];
-    int btn[PA_COUNT];
+    int key[PA_COUNT][PAD_KEY_SLOTS];   /* 0: empty; the first is what the game's icons show */
+    int btn[PA_COUNT][PAD_BTN_SLOTS];   /* -1: empty */
 };
 struct ResOpt { const wchar_t* name; const char* scale; };
 const ResOpt k_res[] = {
@@ -242,14 +242,19 @@ Settings load_settings()
     /* No page for it any more: without a firmware tree the runtime serves its
      * own flashATRAC.pic stand-in. A path in the ini still reaches PS3_DEV_FLASH. */
     s.fw   = ini_get(L"pastas", L"firmware", env_w("PS3_DEV_FLASH"));
+    /* tecla_cross / botao_cross: the first slot; tecla_cross_2 ... the others */
     for (int a = 0; a < PA_COUNT; a++) {
-        std::wstring kid = L"tecla_" + widen(k_pad_action_id[a]);
-        std::wstring bid = L"botao_" + widen(k_pad_action_id[a]);
-        s.key[a] = _wtoi(ini_get(L"controles", kid.c_str(), std::to_wstring(k_pad_default_key[a])).c_str());
-        std::wstring b = ini_get(L"controles", bid.c_str(), widen(pad_phys_id(k_pad_default_btn[a])));
-        std::string nb(b.begin(), b.end());
-        int pb = pad_phys_from_id(nb.c_str());
-        s.btn[a] = pb >= 0 ? pb : k_pad_default_btn[a];
+        for (int k = 0; k < PAD_KEY_SLOTS; k++) {
+            std::wstring kid = L"tecla_" + widen(k_pad_action_id[a]) + (k ? L"_" + std::to_wstring(k + 1) : L"");
+            s.key[a][k] = _wtoi(ini_get(L"controles", kid.c_str(), std::to_wstring(k ? 0 : k_pad_default_key[a])).c_str());
+        }
+        for (int k = 0; k < PAD_BTN_SLOTS; k++) {
+            std::wstring bid = L"botao_" + widen(k_pad_action_id[a]) + (k ? L"_" + std::to_wstring(k + 1) : L"");
+            std::wstring b = ini_get(L"controles", bid.c_str(), widen(pad_phys_id(k ? -1 : k_pad_default_btn[a])));
+            std::string nb(b.begin(), b.end());
+            int pb = pad_phys_from_id(nb.c_str());
+            s.btn[a][k] = pb >= 0 || nb == "none" ? pb : (k ? -1 : k_pad_default_btn[a]);
+        }
     }
     return s;
 }
@@ -270,8 +275,12 @@ void save_settings(const Settings& s)
     ini_set(L"pastas", L"rap", s.rap);
     ini_set(L"pastas", L"firmware", s.fw);
     for (int a = 0; a < PA_COUNT; a++) {
-        ini_set(L"controles", (L"tecla_" + widen(k_pad_action_id[a])).c_str(), std::to_wstring(s.key[a]));
-        ini_set(L"controles", (L"botao_" + widen(k_pad_action_id[a])).c_str(), widen(pad_phys_id(s.btn[a])));
+        for (int k = 0; k < PAD_KEY_SLOTS; k++)
+            ini_set(L"controles", (L"tecla_" + widen(k_pad_action_id[a]) + (k ? L"_" + std::to_wstring(k + 1) : L"")).c_str(),
+                    std::to_wstring(s.key[a][k]));
+        for (int k = 0; k < PAD_BTN_SLOTS; k++)
+            ini_set(L"controles", (L"botao_" + widen(k_pad_action_id[a]) + (k ? L"_" + std::to_wstring(k + 1) : L"")).c_str(),
+                    widen(pad_phys_id(s.btn[a][k])));
     }
 }
 
@@ -384,7 +393,7 @@ struct UI {
     Page page = P_INICIO;
     int hover = -1;
     int open_dd = -1;            /* open dropdown id */
-    Capture cap = CAP_NONE; int cap_action = -1; ULONGLONG cap_since = 0;
+    Capture cap = CAP_NONE; int cap_action = -1, cap_slot = 0; ULONGLONG cap_since = 0;
     uint32_t pad_prev[PAD_PHYS_MAX] = {};
     std::vector<Hit> hits;
     std::wstring play_msg;
@@ -410,8 +419,9 @@ enum {
     ID_PLAY = 400, ID_RESUME, ID_QUIT,
     ID_GAME_BROWSE = 500, ID_GAME_OPEN, ID_RAP_BROWSE, ID_RAP_OPEN,
     ID_LAYOUT_PS = 600, ID_LAYOUT_XB, ID_LAYOUT_AUTO, ID_LAYOUT_KB,
-    ID_KEY = 700, ID_BTN = 800, ID_RESTORE = 900, ID_PATCH = 1000,  /* + index */
+    ID_KEY = 700, ID_BTN = 800, ID_RESTORE = 900, ID_PATCH = 1000,  /* + index (keys and buttons: action * slots + slot) */
     ID_CACHE_CLEAR = 1100, ID_CACHE_OPEN,
+    ID_KEY_CLEAR = 1200, ID_BTN_CLEAR = 1300,                      /* + action * slots + slot */
 };
 
 void hit(float x, float y, float w, float h, int id) { g.hits.push_back({ RectF(x, y, w, h), id }); }
@@ -963,7 +973,12 @@ void draw_controles(Graphics& gr, const Font& head, const Font& body, const Font
     y += 54;
     /* 28 px rows: with 16 of them the Restore row ends above the bottom bar
      * (Jogar / Voltar ao jogo at H - 78); 31 px ran the two into each other. */
-    const float c1 = x, c2 = x + 250, c3 = x + 480, rowh = 28;
+    /* Keyboard: PAD_KEY_SLOTS keys per action; controller: PAD_BTN_SLOTS
+     * buttons. Each box has a cross to empty it; the first is what the
+     * game's icons show. */
+    const float c1 = x, c2 = x + 176, c3 = x + 552, rowh = 28;
+    const float kw = 118, kgap = 5, bw = 134, bgap = 6;
+    const float kcol = PAD_KEY_SLOTS * kw + (PAD_KEY_SLOTS - 1) * kgap, bcol = PAD_BTN_SLOTS * bw + (PAD_BTN_SLOTS - 1) * bgap;
     /* The column whose icons the game shows is marked (red, underlined);
      * the other is dimmed. Automatic marks both. */
     const bool kb_on = g.s.layout >= 2, pad_on = g.s.layout != 3;
@@ -971,35 +986,46 @@ void draw_controles(Graphics& gr, const Font& head, const Font& body, const Font
     text(gr, T(S_COL_KB), c2, y, col, kb_on ? C_RED : C_DIM);
     text(gr, T(S_COL_PAD), c3, y, col, pad_on ? C_RED : C_DIM);
     { SolidBrush ul(C_RED);
-      if (kb_on)  gr.FillRectangle(&ul, c2, y + 24, 220.0f, 2.0f);
-      if (pad_on) gr.FillRectangle(&ul, c3, y + 24, 262.0f, 2.0f); }
+      if (kb_on)  gr.FillRectangle(&ul, c2, y + 24, kcol, 2.0f);
+      if (pad_on) gr.FillRectangle(&ul, c3, y + 24, bcol, 2.0f); }
     y += 30;
+    /* a box: the glyph, the name, and the cross when it holds something */
+    auto slot_box = [&](RectF r, int id, int clear_id, bool active, bool empty, auto glyph, const std::wstring& name,
+                        const std::wstring& prompt) {
+        field(gr, r, g.hover == id, active);
+        if (active) {
+            text(gr, prompt, r.X + 6, r.Y, fsm, C_RED_HI, StringAlignmentNear, r.Width - 8, r.Height);
+        } else if (!empty) {
+            glyph(r.X + 3, r.Y + 2, 21.0f);
+            text(gr, name, r.X + 27, r.Y, fsm, C_TEXT, StringAlignmentNear, r.Width - 27 - 12, r.Height);
+            const float cx = r.X + r.Width - 9, cy = r.Y + r.Height / 2;
+            Pen xp(g.hover == clear_id ? C_RED_HI : C_DIM, 1.5f);
+            gr.DrawLine(&xp, cx - 3.5f, cy - 3.5f, cx + 3.5f, cy + 3.5f);
+            gr.DrawLine(&xp, cx - 3.5f, cy + 3.5f, cx + 3.5f, cy - 3.5f);
+        } else {
+            text(gr, L"+", r.X, r.Y, body, C_DIM, StringAlignmentCenter, r.Width, r.Height);
+        }
+        hit(r.X, r.Y, r.Width - (empty ? 0 : 18), r.Height, id);
+        if (!empty && !active) hit(r.X + r.Width - 18, r.Y, 18, r.Height, clear_id);
+    };
     for (int i = 0; i < NROWS; i++) {
         int a = k_rows[i];
         float ry = y + i * rowh;
         btn_glyph(gr, 0, k_pad_default_btn[a], c1, ry + 1, 26.0f);
-        text(gr, action_name(a), c1 + 38, ry, body, C_TEXT, StringAlignmentNear, 200, 28);
-        /* keyboard cell: the keycap the game shows, then the key's name */
-        RectF kr(c2 + 34, ry + 1, 186, 25);
-        bool kact = g.cap == CAP_KEY && g.cap_action == a;
-        if (!kact) key_glyph(gr, g.s.key[a], c2, ry + 1, 26.0f);
-        field(gr, kr, g.hover == ID_KEY + a, kact);
-        text(gr, kact ? std::wstring(T(S_PRESS_KEY)) : key_name(g.s.key[a]), kr.X + 8, kr.Y, body,
-             kact ? C_RED_HI : C_TEXT, StringAlignmentNear, kr.Width - 12, kr.Height);
-        hit(kr.X, kr.Y, kr.Width, kr.Height, ID_KEY + a);
-        /* controller cell */
-        RectF br(c3 + 34, ry + 1, 228, 25);
-        bool bact = g.cap == CAP_BTN && g.cap_action == a;
-        int pb = g.s.btn[a];
-        if (!bact && pb >= 0) btn_glyph(gr, icon_layout(), shown_button(pb), c3, ry + 1, 26.0f);
-        field(gr, br, g.hover == ID_BTN + a, bact);
-        text(gr, bact ? std::wstring(T(S_PRESS_BTN)) : pb_name(icon_layout(), shown_button(pb)),
-             br.X + 8, br.Y, body, bact ? C_RED_HI : C_TEXT, StringAlignmentNear, br.Width - 30, br.Height);
-        SolidBrush ab(C_DIM);
-        PointF tri[3] = { PointF(br.X + br.Width - 18, br.Y + 10), PointF(br.X + br.Width - 8, br.Y + 10),
-                          PointF(br.X + br.Width - 13, br.Y + 16) };
-        gr.FillPolygon(&ab, tri, 3);
-        hit(br.X, br.Y, br.Width, br.Height, ID_BTN + a);
+        text(gr, action_name(a), c1 + 38, ry, body, C_TEXT, StringAlignmentNear, c2 - c1 - 44, 28);
+        for (int k = 0; k < PAD_KEY_SLOTS; k++) {
+            const int vk = g.s.key[a][k], n = a * PAD_KEY_SLOTS + k;
+            slot_box(RectF(c2 + k * (kw + kgap), ry + 1, kw, 25), ID_KEY + n, ID_KEY_CLEAR + n,
+                     g.cap == CAP_KEY && g.cap_action == a && g.cap_slot == k, vk <= 0,
+                     [&](float gx, float gy, float sz) { key_glyph(gr, vk, gx, gy, sz); }, key_name(vk), T(S_PRESS_KEY));
+        }
+        for (int k = 0; k < PAD_BTN_SLOTS; k++) {
+            const int pb = g.s.btn[a][k], n = a * PAD_BTN_SLOTS + k;
+            slot_box(RectF(c3 + k * (bw + bgap), ry + 1, bw, 25), ID_BTN + n, ID_BTN_CLEAR + n,
+                     g.cap == CAP_BTN && g.cap_action == a && g.cap_slot == k, pb < 0,
+                     [&](float gx, float gy, float sz) { btn_glyph(gr, icon_layout(), shown_button(pb), gx, gy, sz); },
+                     pb_name(icon_layout(), shown_button(pb)), T(S_PRESS_BTN));
+        }
     }
     float by = y + NROWS * rowh + 8;
     button(gr, RectF(x, by, 160, 32), T(S_RESTORE), ID_RESTORE, body);
@@ -1210,7 +1236,7 @@ void apply_live(bool restore_menu = true)
     }
     rsx_d3d12_set_color_adjust(g.s.brightness, g.s.contrast);
     rsx_d3d12_set_saturation(g.s.saturation);
-    cellpad_set_map(g.s.btn, g.s.key);
+    cellpad_set_map(&g.s.btn[0][0], &g.s.key[0][0]);
     set_map_env();
     for (int i = 0; i < NPATCHES; i++) ps3_patch_set(k_patches[i].id, g.s.patch[i]);
 }
@@ -1282,14 +1308,26 @@ void click(int id)
         set_icon_env();   /* the game reads it when it next loads a screen with icons */
         changed();
     }
-    else if (id >= ID_KEY && id < ID_KEY + PA_COUNT) { g.cap = CAP_KEY; g.cap_action = id - ID_KEY; g.cap_since = GetTickCount64(); SetFocus(g.hwnd); }
-    else if (id >= ID_BTN && id < ID_BTN + PA_COUNT) {
-        g.cap = CAP_BTN; g.cap_action = id - ID_BTN; g.cap_since = GetTickCount64();
+    else if (id >= ID_KEY && id < ID_KEY + PA_COUNT * PAD_KEY_SLOTS) {
+        g.cap = CAP_KEY; g.cap_action = (id - ID_KEY) / PAD_KEY_SLOTS; g.cap_slot = (id - ID_KEY) % PAD_KEY_SLOTS;
+        g.cap_since = GetTickCount64(); SetFocus(g.hwnd);
+    }
+    else if (id >= ID_KEY_CLEAR && id < ID_KEY_CLEAR + PA_COUNT * PAD_KEY_SLOTS) {
+        g.s.key[(id - ID_KEY_CLEAR) / PAD_KEY_SLOTS][(id - ID_KEY_CLEAR) % PAD_KEY_SLOTS] = 0; changed();
+    }
+    else if (id >= ID_BTN_CLEAR && id < ID_BTN_CLEAR + PA_COUNT * PAD_BTN_SLOTS) {
+        g.s.btn[(id - ID_BTN_CLEAR) / PAD_BTN_SLOTS][(id - ID_BTN_CLEAR) % PAD_BTN_SLOTS] = -1; changed();
+    }
+    else if (id >= ID_BTN && id < ID_BTN + PA_COUNT * PAD_BTN_SLOTS) {
+        g.cap = CAP_BTN; g.cap_action = (id - ID_BTN) / PAD_BTN_SLOTS; g.cap_slot = (id - ID_BTN) % PAD_BTN_SLOTS;
+        g.cap_since = GetTickCount64();
         for (int i = 0; i < PAD_PHYS_MAX; i++) { PadPhys p; pad_phys_poll(i, &p); g.pad_prev[i] = p.buttons; }
     }
     else if (id == ID_RESTORE) {
-        memcpy(g.s.key, k_pad_default_key, sizeof g.s.key);
-        memcpy(g.s.btn, k_pad_default_btn, sizeof g.s.btn);
+        for (int a = 0; a < PA_COUNT; a++) {
+            for (int k = 0; k < PAD_KEY_SLOTS; k++) g.s.key[a][k] = k ? 0 : k_pad_default_key[a];
+            for (int k = 0; k < PAD_BTN_SLOTS; k++) g.s.btn[a][k] = k ? -1 : k_pad_default_btn[a];
+        }
         changed();
     }
     else if (id == ID_PLAY) {
@@ -1350,7 +1388,9 @@ LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp)
         if (g.cap == CAP_KEY) {
             if (wp == VK_ESCAPE) { g.cap = CAP_NONE; InvalidateRect(h, NULL, FALSE); return 0; }
             int vk = vk_from_msg(wp, lp);
-            g.s.key[g.cap_action] = vk; g.cap = CAP_NONE; changed(); return 0;
+            int* keys = g.s.key[g.cap_action];
+            for (int k = 0; k < PAD_KEY_SLOTS; k++) if (keys[k] == vk) keys[k] = 0;   /* once per action */
+            keys[g.cap_slot] = vk; g.cap = CAP_NONE; changed(); return 0;
         }
         if (g.cap == CAP_BTN && wp == VK_ESCAPE) { g.cap = CAP_NONE; InvalidateRect(h, NULL, FALSE); return 0; }
         if (wp == VK_ESCAPE && g.open_dd >= 0) { g.open_dd = -1; InvalidateRect(h, NULL, FALSE); return 0; }
@@ -1406,7 +1446,11 @@ LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp)
                 uint32_t pressed = p.buttons & ~g.pad_prev[i];
                 g.pad_prev[i] = p.buttons;
                 for (int b = 0; b < PB_COUNT && pressed; b++)
-                    if (pressed & (1u << b)) { g.s.btn[g.cap_action] = b; g.cap = CAP_NONE; changed(); return 0; }
+                    if (pressed & (1u << b)) {
+                        int* btns = g.s.btn[g.cap_action];
+                        for (int k = 0; k < PAD_BTN_SLOTS; k++) if (btns[k] == b) btns[k] = -1;   /* once per action */
+                        btns[g.cap_slot] = b; g.cap = CAP_NONE; changed(); return 0;
+                    }
             }
             if (GetTickCount64() - g.cap_since > 10000) { g.cap = CAP_NONE; redraw = true; }
         }
@@ -1437,8 +1481,11 @@ void set_map_env()
 {
     std::string bm, km;
     for (int a = 0; a < PA_COUNT; a++) {
-        bm += std::string(k_pad_action_id[a]) + "=" + pad_phys_id(g.s.btn[a]) + (a + 1 < PA_COUNT ? "," : "");
-        km += std::string(k_pad_action_id[a]) + "=" + std::to_string(g.s.key[a]) + (a + 1 < PA_COUNT ? "," : "");
+        bm += std::string(k_pad_action_id[a]) + "=";
+        km += std::string(k_pad_action_id[a]) + "=";
+        for (int k = 0; k < PAD_BTN_SLOTS; k++) bm += std::string(k ? "+" : "") + pad_phys_id(g.s.btn[a][k]);
+        for (int k = 0; k < PAD_KEY_SLOTS; k++) km += (k ? "+" : "") + std::to_string(g.s.key[a][k]);
+        if (a + 1 < PA_COUNT) { bm += ","; km += ","; }
     }
     set_env("PAD_BTNMAP", bm);
     set_env("PAD_KEYMAP", km);

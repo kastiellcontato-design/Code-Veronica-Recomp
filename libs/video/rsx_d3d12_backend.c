@@ -481,14 +481,20 @@ static void ui_batch_draw(u32 fi)
         s_ui_vb[fi]=grown;s_ui_mapped[fi]=grown_mapped;s_ui_vb_quads[fi]=capacity;
     }
     UiVertex* dst=(UiVertex*)s_ui_mapped[fi];
-    const unsigned corners[6]={0,1,2,2,1,3};
+    /* Two triangles per quad, split along the diagonal whose corners agree
+     * best, so interpolated corner alphas follow an edge instead of crossing
+     * it. */
+    static const unsigned split_bl_tr[6]={0,1,2,2,1,3}, split_tl_br[6]={0,1,3,0,3,2};
     for(u32 q=0;q<count;q++) {
         const rsx_ui_quad* r=&s_ui_quads[q];
+        const u32 ca=r->corner_a?r->corner_a:0xFFFFFFFFu;
+        const int a0=(int)(ca&255),a1=(int)((ca>>8)&255),a2=(int)((ca>>16)&255),a3=(int)(ca>>24);
+        const unsigned* corners=abs(a0-a3)<abs(a1-a2)?split_tl_br:split_bl_tr;
         for(unsigned k=0;k<6;k++) {
             unsigned c=corners[k];
             UiVertex v={r->x+((c&2)?r->w:0),r->y+((c&1)?r->h:0),0,
                 ((r->argb>>16)&255)/255.f,((r->argb>>8)&255)/255.f,
-                (r->argb&255)/255.f,(r->argb>>24)/255.f,0,0};
+                (r->argb&255)/255.f,(r->argb>>24)/255.f*(float)((ca>>(8*c))&255)/255.f,0,0};
             dst[q*6+k]=v;
         }
     }
