@@ -968,6 +968,12 @@ LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp)
         return 0;
     case WM_ACTIVATE:
         g_pad_block = g.running && LOWORD(wp) != WA_INACTIVE;   /* the game ignores input under the menu */
+        /* However it was activated (taskbar, Alt+Tab, a click), come above a
+         * fullscreen game, which is topmost; give that up when the game
+         * takes the focus back. */
+        if (g.running)
+            SetWindowPos(h, LOWORD(wp) != WA_INACTIVE ? HWND_TOPMOST : HWND_NOTOPMOST, 0, 0, 0, 0,
+                         SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
         break;
     case WM_CLOSE:
         if (g.running) { ShowWindow(h, SW_HIDE); quit_game(); return 0; }
