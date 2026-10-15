@@ -220,9 +220,10 @@ if(SPU_SOURCES)
 endif()
 
 # Launcher art: every image in launcher_art/ becomes an RCDATA resource named
-# after the file (ps_cross.png -> PS_CROSS). The cover (banner.*) is the
-# title's own artwork and is not in the repository; without it the launcher
-# draws a plain banner.
+# after the file (banner.jpg -> BANNER), and icon.ico becomes the program icon
+# (resource 1: Explorer, taskbar, both windows). The cover and the icon are the
+# title's own artwork and are not in the repository; without them the launcher
+# draws a plain banner and the exe keeps the default icon.
 if(WIN32)
     file(GLOB LAUNCHER_ART CONFIGURE_DEPENDS
          "${CMAKE_CURRENT_SOURCE_DIR}/launcher_art/*.png"
@@ -234,6 +235,10 @@ if(WIN32)
         string(APPEND _launcher_rc "${_n} RCDATA \"${_f}\"
 ")
     endforeach()
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/launcher_art/icon.ico")
+        string(APPEND _launcher_rc "1 ICON \"${CMAKE_CURRENT_SOURCE_DIR}/launcher_art/icon.ico\"
+")
+    endif()
     file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/launcher_art.rc" "${_launcher_rc}")
     target_sources(${PROJECT_NAME} PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/launcher_art.rc")
     set_source_files_properties(launcher.cpp PROPERTIES

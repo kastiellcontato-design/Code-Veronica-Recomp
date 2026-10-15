@@ -146,11 +146,13 @@ static int pad_host_window_focused(void)
  * each PS3 action. Defaults in pad_map.h; a launcher overrides them through
  * PAD_BTNMAP / PAD_KEYMAP. */
 static int s_map_btn[PA_COUNT], s_map_key[PA_COUNT];
+static volatile int s_map_live;   /* set by cellpad_set_map: ignore the env */
 static void pad_map_load(void)
 {
     static int done = 0;
     if (done) return;
     done = 1;
+    if (s_map_live) return;
     memcpy(s_map_btn, k_pad_default_btn, sizeof s_map_btn);
     memcpy(s_map_key, k_pad_default_key, sizeof s_map_key);
     const char* envs[2] = { getenv("PAD_BTNMAP"), getenv("PAD_KEYMAP") };
@@ -169,6 +171,15 @@ static void pad_map_load(void)
             if (*e == ',') e++;
         }
     }
+}
+
+/* A launcher's options menu, while the game runs: new mapping (applies on the
+ * next poll) and input hold-off while the menu has the focus. */
+int g_pad_block;
+void cellpad_set_map(const int* btn, const int* key)
+{
+    s_map_live = 1;
+    for (int a = 0; a < PA_COUNT; a++) { s_map_btn[a] = btn[a]; s_map_key[a] = key[a]; }
 }
 
 static const u16 k_action_bit[PA_COUNT] = {
@@ -223,7 +234,8 @@ static void pad_poll_keyboard(void)
     }
     hs->buttons |= btns;
     if (btns & (CELL_PAD_CTRL_UP | CELL_PAD_CTRL_DOWN | CELL_PAD_CTRL_LEFT | CELL_PAD_CTRL_RIGHT)) {
-        if (hs->analog_lx == 128 && hs->analog_ly == 128) {
+        /* a controller's stick at rest never reads exactly 128 */
+        if (abs((int)hs->analog_lx - 128) < 40 && abs((int)hs->analog_ly - 128) < 40) {
             hs->analog_lx = (u8)((btns & CELL_PAD_CTRL_LEFT) ? 0 : (btns & CELL_PAD_CTRL_RIGHT) ? 255 : 128);
             hs->analog_ly = (u8)((btns & CELL_PAD_CTRL_UP) ? 0 : (btns & CELL_PAD_CTRL_DOWN) ? 255 : 128);
         }
@@ -461,6 +473,14 @@ static void pad_poll_backend(void)
 #ifdef _WIN32
     pad_map_load();
     pad_poll_keyboard();   /* keyboard always adds to port 0 */
+    if (g_pad_block)       /* the options menu has the focus */
+        for (int i = 0; i < PAD_MAX_HOST_PORTS; i++) {
+            PadHostState* hs = &s_host_state[i];
+            hs->buttons = 0;
+            hs->analog_lx = hs->analog_ly = hs->analog_rx = hs->analog_ry = 128;
+            hs->trigger_l2 = hs->trigger_r2 = 0;
+            pad_set_pressures(hs);
+        }
 #endif
 }
 

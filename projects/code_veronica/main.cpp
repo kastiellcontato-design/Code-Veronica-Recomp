@@ -287,8 +287,15 @@ static DWORD WINAPI frame_clock(LPVOID)
             int pumped = rsx_backend_pump();
             ps3_tl_end(10);
             if (pumped != 0) {
-                rsx_ok = 0;              /* window closed */
-                continue;
+                /* Window closed: end the process. Left running, the guest went
+                 * on headless (CPU, audio) with nothing on screen. Terminate,
+                 * not exit(): SPU and PPU threads are still mid-flight. */
+                fflush(nullptr);
+#ifdef _WIN32
+                TerminateProcess(GetCurrentProcess(), 0);
+#else
+                std::_Exit(0);
+#endif
             }
             /* Present on a guest flip. A present on a fixed clock can catch the
              * drain mid-frame and flash a partial one. Before the first flip

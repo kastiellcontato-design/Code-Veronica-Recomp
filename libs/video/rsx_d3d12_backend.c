@@ -667,11 +667,85 @@ static u32    s_lock_n  = 0;
  * Win32 window
  * -----------------------------------------------------------------------*/
 
-static int s_hide_cursor;   /* WINDOW_MODE=fullscreen */
+/* WINDOW_MODE: 0 "window" (default) a framed window, 1 "borderless" a
+ * frameless window covering the monitor, 2 "fullscreen" the same kept on top
+ * with the mouse cursor hidden. All three are ordinary windows (never DXGI
+ * exclusive fullscreen), so capture tools see them. The swapchain keeps the
+ * render size and DXGI stretches it to the window, so the window is sized
+ * independently: a framed window is at least the 1280x720 guest frame (480p
+ * rendering still shows at 720p) and shrinks to fit the work area, keeping
+ * 16:9; a monitor that is not 16:9 gets the largest 16:9 rect, centred, over
+ * a black backdrop that cannot take focus. The mode can change while the game
+ * runs (rsx_d3d12_set_window_mode, Alt+Enter); the switch is applied on the
+ * window's own thread. */
+#define WM_RSX_SET_MODE (WM_APP + 0x51)
+static int  s_hide_cursor;
+static int  s_wmode;
+static HWND s_backdrop;
+static u32  s_win_w = 1280, s_win_h = 720;   /* render size, for the framed window */
+void (*g_rsx_menu_hook)(void);               /* Insert: the title's options menu */
+
+static void window_apply_mode(HWND hwnd, int mode)
+{
+    HMONITOR mon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTOPRIMARY);
+    MONITORINFO mi; mi.cbSize = sizeof mi; GetMonitorInfoA(mon, &mi);
+    const RECT mr = mi.rcMonitor, wa = mi.rcWork;
+    s_wmode = mode;
+    s_hide_cursor = (mode == 2);
+    if (mode != 0) {
+        const LONG mw = mr.right - mr.left, mh = mr.bottom - mr.top;
+        LONG w = mw, h = mw * 9 / 16;
+        if (h > mh) { h = mh; w = mh * 16 / 9; }
+        const HWND z = (mode == 2) ? HWND_TOPMOST : HWND_NOTOPMOST;
+        if (w != mw || h != mh) {
+            if (!s_backdrop) {
+                WNDCLASSEXA bc = {0};
+                bc.cbSize = sizeof bc; bc.lpfnWndProc = DefWindowProcA; bc.hInstance = GetModuleHandle(NULL);
+                bc.hCursor = LoadCursor(NULL, IDC_ARROW); bc.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
+                bc.lpszClassName = "ps3recomp_backdrop";
+                RegisterClassExA(&bc);
+                s_backdrop = CreateWindowExA(WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW, "ps3recomp_backdrop", "",
+                                             WS_POPUP, 0, 0, 0, 0, NULL, NULL, GetModuleHandle(NULL), NULL);
+            }
+            SetWindowPos(s_backdrop, z, mr.left, mr.top, mw, mh, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+            SetWindowLongPtrA(hwnd, GWLP_HWNDPARENT, (LONG_PTR)s_backdrop);
+        } else if (s_backdrop) {
+            SetWindowLongPtrA(hwnd, GWLP_HWNDPARENT, 0);
+            DestroyWindow(s_backdrop); s_backdrop = NULL;
+        }
+        SetWindowLongPtrA(hwnd, GWL_STYLE, WS_POPUP | WS_VISIBLE);
+        SetWindowPos(hwnd, z, mr.left + (mw - w) / 2, mr.top + (mh - h) / 2, w, h,
+                     SWP_FRAMECHANGED | SWP_SHOWWINDOW);
+        return;
+    }
+    if (s_backdrop) {
+        SetWindowLongPtrA(hwnd, GWLP_HWNDPARENT, 0);
+        DestroyWindow(s_backdrop); s_backdrop = NULL;
+    }
+    LONG cw = (LONG)s_win_w, ch = (LONG)s_win_h;
+    if (cw < 1280 || ch < 720) { cw = 1280; ch = 720; }
+    const DWORD style = WS_OVERLAPPEDWINDOW | WS_VISIBLE;
+    for (;;) {   /* fit the frame inside the work area */
+        RECT t = {0, 0, cw, ch};
+        AdjustWindowRect(&t, style & ~WS_VISIBLE, FALSE);
+        if ((t.right - t.left) <= (wa.right - wa.left) && (t.bottom - t.top) <= (wa.bottom - wa.top)) break;
+        cw = cw * 9 / 10; ch = ch * 9 / 10;
+        if (cw < 320) break;
+    }
+    RECT wr = {0, 0, cw, ch};
+    AdjustWindowRect(&wr, style & ~WS_VISIBLE, FALSE);
+    const int ww = wr.right - wr.left, wh = wr.bottom - wr.top;
+    SetWindowLongPtrA(hwnd, GWL_STYLE, style);
+    SetWindowPos(hwnd, HWND_NOTOPMOST, wa.left + ((wa.right - wa.left) - ww) / 2,
+                 wa.top + ((wa.bottom - wa.top) - wh) / 2, ww, wh, SWP_FRAMECHANGED | SWP_SHOWWINDOW);
+}
 
 static LRESULT CALLBACK d3d12_wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 {
     switch (msg) {
+    case WM_RSX_SET_MODE:
+        window_apply_mode(hwnd, (int)wp);
+        return 0;
     case WM_SETCURSOR:
         if (s_hide_cursor && LOWORD(lp) == HTCLIENT) { SetCursor(NULL); return TRUE; }
         break;
@@ -680,13 +754,21 @@ static LRESULT CALLBACK d3d12_wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         DestroyWindow(hwnd);
         return 0;
     case WM_DESTROY:
+        if (s_backdrop) { DestroyWindow(s_backdrop); s_backdrop = NULL; }
         PostQuitMessage(0);
         return 0;
+    case WM_SYSKEYDOWN:
+        if (wp == VK_RETURN && !(lp & (1 << 30))) {   /* Alt+Enter: window <-> fullscreen */
+            window_apply_mode(hwnd, s_wmode == 0 ? 2 : 0);
+            return 0;
+        }
+        break;
     case WM_KEYDOWN:
         if (wp == VK_ESCAPE) {
             s_d3d.window_closed = 1;
             DestroyWindow(hwnd);
         }
+        if (wp == VK_INSERT && !(lp & (1 << 30)) && g_rsx_menu_hook) g_rsx_menu_hook();
         if (wp == VK_F12 && !(lp & (1 << 30))) {   /* F12: rsxcap the next frame */
             extern volatile int g_rsx_cap_request;
             g_rsx_cap_request = 1;
@@ -704,66 +786,35 @@ static HWND create_window(u32 width, u32 height, const char* title)
     wc.lpfnWndProc = d3d12_wndproc;
     wc.hInstance = GetModuleHandle(NULL);
     wc.hCursor = LoadCursor(NULL, IDC_ARROW);
+    wc.hIcon = LoadIcon(GetModuleHandle(NULL), MAKEINTRESOURCE(1));   /* the title's icon, if it has one */
     wc.lpszClassName = "ps3recomp_d3d12";
     RegisterClassExA(&wc);
 
     /* Keep the display awake (see rsx_null_backend.c). */
     SetThreadExecutionState(ES_CONTINUOUS | ES_DISPLAY_REQUIRED | ES_SYSTEM_REQUIRED);
 
-    /* WINDOW_MODE: "window" (default) a framed window, "borderless" a
-     * frameless window covering the monitor, "fullscreen" the same kept on top
-     * with the mouse cursor hidden. The swapchain keeps the render size and
-     * DXGI stretches it to the window, so the window is sized independently:
-     * a framed window is at least the 1280x720 guest frame (480p rendering
-     * still shows at 720p) and shrinks to fit the work area, keeping 16:9; a
-     * monitor that is not 16:9 gets the largest 16:9 rect, centred, over a
-     * black backdrop that cannot take focus. */
     const char* wm = getenv("WINDOW_MODE");
     int mode = 0;
     if (wm && !_stricmp(wm, "borderless")) mode = 1;
     else if (wm && !_stricmp(wm, "fullscreen")) mode = 2;
-    HMONITOR mon = MonitorFromPoint((POINT){0, 0}, MONITOR_DEFAULTTOPRIMARY);
-    MONITORINFO mi; mi.cbSize = sizeof mi; GetMonitorInfoA(mon, &mi);
-    const RECT mr = mi.rcMonitor, wa = mi.rcWork;
-    if (mode != 0) {
-        s_hide_cursor = (mode == 2);
-        const LONG mw = mr.right - mr.left, mh = mr.bottom - mr.top;
-        LONG w = mw, h = mw * 9 / 16;
-        if (h > mh) { h = mh; w = mh * 16 / 9; }
-        HWND owner = NULL;
-        const DWORD ex = (mode == 2) ? WS_EX_TOPMOST : 0;
-        if (w != mw || h != mh) {
-            WNDCLASSEXA bc = {0};
-            bc.cbSize = sizeof bc; bc.lpfnWndProc = DefWindowProcA; bc.hInstance = GetModuleHandle(NULL);
-            bc.hCursor = LoadCursor(NULL, IDC_ARROW); bc.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
-            bc.lpszClassName = "ps3recomp_backdrop";
-            RegisterClassExA(&bc);
-            owner = CreateWindowExA(ex | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW, "ps3recomp_backdrop", "",
-                                    WS_POPUP | WS_VISIBLE, mr.left, mr.top, mw, mh,
-                                    NULL, NULL, GetModuleHandle(NULL), NULL);
-        }
-        return CreateWindowExA(ex, "ps3recomp_d3d12", title ? title : "ps3recomp (D3D12)",
-                               WS_POPUP | WS_VISIBLE, mr.left + (mw - w) / 2, mr.top + (mh - h) / 2,
-                               w, h, owner, NULL, GetModuleHandle(NULL), NULL);
-    }
-    LONG cw = (LONG)width, ch = (LONG)height;
-    if (cw < 1280 || ch < 720) { cw = 1280; ch = 720; }
-    const DWORD style = WS_OVERLAPPEDWINDOW | WS_VISIBLE;
-    for (;;) {   /* fit the frame inside the work area */
-        RECT t = {0, 0, cw, ch};
-        AdjustWindowRect(&t, style & ~WS_VISIBLE, FALSE);
-        if ((t.right - t.left) <= (wa.right - wa.left) && (t.bottom - t.top) <= (wa.bottom - wa.top)) break;
-        cw = cw * 9 / 10; ch = ch * 9 / 10;
-        if (cw < 320) break;
-    }
-    RECT wr = {0, 0, cw, ch};
-    AdjustWindowRect(&wr, style & ~WS_VISIBLE, FALSE);
-    return CreateWindowExA(
-        0, "ps3recomp_d3d12",
-        title ? title : "ps3recomp (D3D12)",
-        style, CW_USEDEFAULT, CW_USEDEFAULT, wr.right - wr.left, wr.bottom - wr.top,
-        NULL, NULL, GetModuleHandle(NULL), NULL);
+    s_win_w = width; s_win_h = height;
+    HWND hwnd = CreateWindowExA(0, "ps3recomp_d3d12", title ? title : "ps3recomp (D3D12)",
+                                WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 1280, 720,
+                                NULL, NULL, GetModuleHandle(NULL), NULL);
+    if (hwnd) window_apply_mode(hwnd, mode);
+    return hwnd;
 }
+
+/* Live options for a title's launcher; safe from any thread. */
+void rsx_d3d12_set_window_mode(int mode)
+{
+    if (s_d3d.hwnd) PostMessageA(s_d3d.hwnd, WM_RSX_SET_MODE, (WPARAM)mode, 0);
+}
+void rsx_d3d12_close(void)
+{
+    if (s_d3d.hwnd) PostMessageA(s_d3d.hwnd, WM_CLOSE, 0, 0);
+}
+void* rsx_d3d12_window(void) { return s_d3d.hwnd; }
 /* ---------------------------------------------------------------------------
  * D3D12 initialization
  * -----------------------------------------------------------------------*/
@@ -1661,6 +1712,73 @@ static void wait_for_gpu(void)
     }
 }
 
+/* RES_SCALE changed while running (a launcher's options menu). Applied at a
+ * frame boundary, after Present: drain the GPU, resize the swapchain to the
+ * new render size, rebuild the shared depth buffer, and drop every offscreen
+ * target so each is recreated at the new scale on its next use. Whatever the
+ * dropped targets held is lost, so one frame may show a glitch. */
+static volatile float s_rs_pending;
+void rsx_d3d12_set_res_scale(float f)
+{
+    if (f < 0.5f || f > 4.0f) f = 1.0f;
+    s_rs_pending = f;
+}
+
+static void apply_res_scale(void)
+{
+    const float f = s_rs_pending;
+    s_rs_pending = 0.0f;
+    if (f == s_rs || !s_d3d.swap_chain) return;
+    wait_for_gpu();
+    for (int i = 0; i < MAX_OFF_RTS; i++) {
+        OffRT* r = &s_d3d.off_rt[i];
+        defer_release(r->res); r->res = NULL;
+        defer_release(r->up);  r->up = NULL;
+        defer_release(r->wb);  r->wb = NULL; r->wb_pending = 0;
+        r->used = 0;
+    }
+    if (s_screen_copy) { defer_release(s_screen_copy); s_screen_copy = NULL; }
+    for (u32 i = 0; i < FRAME_COUNT; i++)
+        if (s_d3d.render_targets[i]) { s_d3d.render_targets[i]->lpVtbl->Release(s_d3d.render_targets[i]);
+                                       s_d3d.render_targets[i] = NULL; }
+    const float old = s_rs;
+    s_rs = f;
+    HRESULT hr = s_d3d.swap_chain->lpVtbl->ResizeBuffers(s_d3d.swap_chain, FRAME_COUNT,
+        rs_dim(s_d3d.width, s_rs), rs_dim(s_d3d.height, s_rs), DXGI_FORMAT_R8G8B8A8_UNORM,
+        s_tearing ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0);
+    if (FAILED(hr)) {   /* keep the old size */
+        printf("[D3D12] RES_SCALE %.2f: ResizeBuffers failed (0x%08lX)\n", f, hr);
+        s_rs = old;
+    }
+    D3D12_CPU_DESCRIPTOR_HANDLE rtv;
+    s_d3d.rtv_heap->lpVtbl->GetCPUDescriptorHandleForHeapStart(s_d3d.rtv_heap, &rtv);
+    for (u32 i = 0; i < FRAME_COUNT; i++) {
+        s_d3d.swap_chain->lpVtbl->GetBuffer(s_d3d.swap_chain, i, &IID_ID3D12Resource,
+                                            (void**)&s_d3d.render_targets[i]);
+        s_d3d.device->lpVtbl->CreateRenderTargetView(s_d3d.device, s_d3d.render_targets[i], NULL, rtv);
+        rtv.ptr += s_d3d.rtv_descriptor_size;
+    }
+    /* depth: same description as at init, at the new scale */
+    D3D12_RESOURCE_DESC dd; s_d3d.depth_buffer->lpVtbl->GetDesc(s_d3d.depth_buffer, &dd);
+    dd.Width = rs_dim(2048, s_rs); dd.Height = rs_dim(2048, s_rs);
+    D3D12_HEAP_PROPERTIES hp = {0}; hp.Type = D3D12_HEAP_TYPE_DEFAULT;
+    D3D12_CLEAR_VALUE cv = {0};
+    cv.Format = DXGI_FORMAT_D24_UNORM_S8_UINT; cv.DepthStencil.Depth = 1.0f;
+    ID3D12Resource* nd = NULL;
+    if (SUCCEEDED(s_d3d.device->lpVtbl->CreateCommittedResource(s_d3d.device, &hp, D3D12_HEAP_FLAG_NONE,
+            &dd, D3D12_RESOURCE_STATE_DEPTH_WRITE, &cv, &IID_ID3D12Resource, (void**)&nd))) {
+        defer_release(s_d3d.depth_buffer);
+        s_d3d.depth_buffer = nd;
+        D3D12_DEPTH_STENCIL_VIEW_DESC dsv = {0};
+        dsv.Format = DXGI_FORMAT_D24_UNORM_S8_UINT;
+        dsv.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
+        D3D12_CPU_DESCRIPTOR_HANDLE dh;
+        s_d3d.dsv_heap->lpVtbl->GetCPUDescriptorHandleForHeapStart(s_d3d.dsv_heap, &dh);
+        s_d3d.device->lpVtbl->CreateDepthStencilView(s_d3d.device, nd, &dsv, dh);
+    }
+    printf("[D3D12] RES_SCALE now %.2f: rendering %ux%u\n", s_rs,
+           rs_dim(s_d3d.width, s_rs), rs_dim(s_d3d.height, s_rs));
+}
 static void move_to_next_frame(void)
 {
     u64 current_fence = s_d3d.fence_values[s_d3d.frame_index];
@@ -7619,12 +7737,13 @@ skip_dump_consider: ;
                                                  s_tearing ? DXGI_PRESENT_ALLOW_TEARING : 0);
           if (_ph == DXGI_ERROR_DEVICE_REMOVED || _ph == DXGI_ERROR_DEVICE_RESET) dred_report("Present"); }   /* skipped for an offscreen-only batch */
 
+    if (s_rs_pending != 0.0f) apply_res_scale();
     move_to_next_frame();
 
     s_d3d.frame_count++;
 
     /* RPCS3-style titlebar stats, refreshed once a second: presented FPS,
-     * draw count of the last frame, and the backbuffer size. */
+     * draw count of the last frame, and the render (backbuffer) size. */
     {
         static ULONGLONG s_tt0 = 0;
         static u64 s_tframes = 0;
@@ -7637,7 +7756,7 @@ skip_dump_consider: ;
             snprintf(tb, sizeof(tb), "%s | FPS: %.2f | draws: %u | %ux%u",
                      g_rsx_title_base,
                      s_tframes * 1000.0 / (double)(tnow - s_tt0),
-                     s_dbg_last_draws, s_d3d.width, s_d3d.height);
+                     s_dbg_last_draws, rs_dim(s_d3d.width, s_rs), rs_dim(s_d3d.height, s_rs));
             /* Posted, not SetWindowText: this runs on the render thread, and
              * SetWindowText on another thread's window waits for that thread
              * to pump. The window thread applies it in pump_messages. */
