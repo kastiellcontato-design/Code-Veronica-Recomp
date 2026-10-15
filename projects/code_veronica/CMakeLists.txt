@@ -216,6 +216,7 @@ add_executable(${PROJECT_NAME}
     main.cpp
     launcher.cpp
     button_icons.cpp
+    patch_files.cpp
     stubs.cpp
     ${PS3RECOMP_SCAFFOLD}
     ${HLE_NID_TABLE}

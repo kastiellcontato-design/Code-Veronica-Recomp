@@ -43,6 +43,8 @@ enum StrId {
     S_CACHE_CLEARED_FMT,
     S_LANG_SYSTEM,
     S_OV_TITLE, S_OV_SHOW, S_OV_DESC, S_OV_FRAMETIME,
+    S_PATCH_FOLDER, S_PATCH_FOLDER_HINT, S_PATCH_FOUND_FMT, S_PATCH_NONE, S_PATCH_CODE, S_PATCH_TYPE_FMT,
+    S_PATCH_FROM_FMT,
     S_COUNT
 };
 
@@ -93,6 +95,13 @@ static const wchar_t* const k_str_pt[] = {
     L"Mostrar overlay de desempenho",
     L"FPS, tempo de quadro e uso do PC no canto superior direito do jogo. Marque o que aparece:",
     L"Tempo de quadro (ms)",
+    L"Pasta de patches",
+    L"Arquivos .yml no formato do RPCS3 (patch.yml); os patches desta versão do jogo aparecem abaixo.",
+    L"%d patch(es) para este jogo em %d arquivo(s).",
+    L"Nenhum patch para esta versão do jogo nessa pasta.",
+    L"Muda o código do jogo, e essa troca não vem compilada nesta versão: não dá para ligar.",
+    L"Usa um tipo de patch que este jogo não suporta (%s).",
+    L"por %s  ·  %s",
 };
 static_assert(sizeof k_str_pt / sizeof k_str_pt[0] == S_COUNT, "k_str_pt: one text per StrId");
 
@@ -143,6 +152,13 @@ static const wchar_t* const k_str_en[] = {
     L"Show performance overlay",
     L"FPS, frame time and PC usage in the game's top-right corner. Tick what it shows:",
     L"Frame time (ms)",
+    L"Patch folder",
+    L".yml files in RPCS3's format (patch.yml); the patches for this version of the game are listed below.",
+    L"%d patch(es) for this game in %d file(s).",
+    L"No patches for this version of the game in that folder.",
+    L"Changes the game's code, and that change is not compiled into this build: it cannot be turned on.",
+    L"Uses a kind of patch this game does not support (%s).",
+    L"by %s  ·  %s",
 };
 static_assert(sizeof k_str_en / sizeof k_str_en[0] == S_COUNT, "k_str_en: one text per StrId");
 
@@ -193,6 +209,13 @@ static const wchar_t* const k_str_es[] = {
     L"Mostrar superposición de rendimiento",
     L"FPS, tiempo de fotograma y uso del PC en la esquina superior derecha del juego. Marca lo que muestra:",
     L"Tiempo de fotograma (ms)",
+    L"Carpeta de parches",
+    L"Archivos .yml en el formato de RPCS3 (patch.yml); abajo aparecen los parches de esta versión del juego.",
+    L"%d parche(s) para este juego en %d archivo(s).",
+    L"No hay parches para esta versión del juego en esa carpeta.",
+    L"Cambia el código del juego, y ese cambio no viene compilado en esta versión: no se puede activar.",
+    L"Usa un tipo de parche que este juego no admite (%s).",
+    L"por %s  ·  %s",
 };
 static_assert(sizeof k_str_es / sizeof k_str_es[0] == S_COUNT, "k_str_es: one text per StrId");
 
@@ -243,6 +266,13 @@ static const wchar_t* const k_str_ja[] = {
     L"パフォーマンスオーバーレイを表示",
     L"ゲーム画面の右上に FPS、フレーム時間、PC の使用状況を表示します。表示する項目:",
     L"フレーム時間 (ms)",
+    L"パッチフォルダー",
+    L"RPCS3 形式 (patch.yml) の .yml ファイル。このバージョンのゲーム用パッチが下に表示されます。",
+    L"このゲーム用のパッチ: %d 件 (%d ファイル)。",
+    L"このフォルダーにはこのバージョンのゲーム用パッチがありません。",
+    L"ゲームのコードを変更するもので、この変更はこのビルドに組み込まれていないため有効にできません。",
+    L"このゲームが対応していない種類のパッチを使っています (%s)。",
+    L"作者: %s  ·  %s",
 };
 static_assert(sizeof k_str_ja / sizeof k_str_ja[0] == S_COUNT, "k_str_ja: one text per StrId");
 
@@ -347,6 +377,13 @@ static const wchar_t* const k_str_fr[] = {
     L"Afficher l'overlay de performances",
     L"FPS, temps d'image et utilisation du PC en haut à droite du jeu. Cochez ce qu'il affiche :",
     L"Temps d'image (ms)",
+    L"Dossier de patchs",
+    L"Fichiers .yml au format de RPCS3 (patch.yml) ; les patchs de cette version du jeu s'affichent ci-dessous.",
+    L"%d patch(s) pour ce jeu dans %d fichier(s).",
+    L"Aucun patch pour cette version du jeu dans ce dossier.",
+    L"Modifie le code du jeu, et ce changement n'est pas compilé dans cette version : impossible de l'activer.",
+    L"Utilise un type de patch que ce jeu ne prend pas en charge (%s).",
+    L"par %s  ·  %s",
 };
 static_assert(sizeof k_str_fr / sizeof k_str_fr[0] == S_COUNT, "k_str_fr: one text per StrId");
 
@@ -451,6 +488,13 @@ static const wchar_t* const k_str_de[] = {
     L"Leistungs-Overlay anzeigen",
     L"FPS, Frametime und PC-Auslastung oben rechts im Spiel. Wähle aus, was angezeigt wird:",
     L"Frametime (ms)",
+    L"Patch-Ordner",
+    L".yml-Dateien im Format von RPCS3 (patch.yml); die Patches für diese Spielversion stehen unten.",
+    L"%d Patch(es) für dieses Spiel in %d Datei(en).",
+    L"Keine Patches für diese Spielversion in diesem Ordner.",
+    L"Ändert den Code des Spiels, und diese Änderung ist in diesem Build nicht einkompiliert: nicht aktivierbar.",
+    L"Nutzt eine Patch-Art, die dieses Spiel nicht unterstützt (%s).",
+    L"von %s  ·  %s",
 };
 static_assert(sizeof k_str_de / sizeof k_str_de[0] == S_COUNT, "k_str_de: one text per StrId");
 
@@ -555,6 +599,13 @@ static const wchar_t* const k_str_it[] = {
     L"Mostra overlay prestazioni",
     L"FPS, tempo per fotogramma e uso del PC in alto a destra nel gioco. Scegli cosa mostrare:",
     L"Tempo per fotogramma (ms)",
+    L"Cartella delle patch",
+    L"File .yml nel formato di RPCS3 (patch.yml); qui sotto compaiono le patch di questa versione del gioco.",
+    L"%d patch per questo gioco in %d file.",
+    L"Nessuna patch per questa versione del gioco in quella cartella.",
+    L"Modifica il codice del gioco, e questa modifica non è compilata in questa versione: non si può attivare.",
+    L"Usa un tipo di patch che questo gioco non supporta (%s).",
+    L"di %s  ·  %s",
 };
 static_assert(sizeof k_str_it / sizeof k_str_it[0] == S_COUNT, "k_str_it: one text per StrId");
 
@@ -659,6 +710,13 @@ static const wchar_t* const k_str_pl[] = {
     L"Pokaż nakładkę wydajności",
     L"FPS, czas klatki i użycie komputera w prawym górnym rogu gry. Zaznacz, co pokazywać:",
     L"Czas klatki (ms)",
+    L"Folder z łatkami",
+    L"Pliki .yml w formacie RPCS3 (patch.yml); łatki do tej wersji gry są widoczne poniżej.",
+    L"Łatki do tej gry: %d, w plikach: %d.",
+    L"W tym folderze nie ma łatek do tej wersji gry.",
+    L"Zmienia kod gry, a ta zmiana nie jest wkompilowana w tę wersję: nie można jej włączyć.",
+    L"Używa rodzaju łatki, którego ta gra nie obsługuje (%s).",
+    L"autor: %s  ·  %s",
 };
 static_assert(sizeof k_str_pl / sizeof k_str_pl[0] == S_COUNT, "k_str_pl: one text per StrId");
 
@@ -763,6 +821,13 @@ static const wchar_t* const k_str_tr[] = {
     L"Performans katmanını göster",
     L"Oyunun sağ üst köşesinde FPS, kare süresi ve PC kullanımı. Gösterilecekleri seçin:",
     L"Kare süresi (ms)",
+    L"Yama klasörü",
+    L"RPCS3 biçiminde (patch.yml) .yml dosyaları; oyunun bu sürümüne ait yamalar aşağıda listelenir.",
+    L"Bu oyun için %d yama, %d dosyada.",
+    L"Bu klasörde oyunun bu sürümü için yama yok.",
+    L"Oyunun kodunu değiştirir ve bu değişiklik bu sürüme derlenmemiştir: açılamaz.",
+    L"Bu oyunun desteklemediği bir yama türü kullanıyor (%s).",
+    L"%s  ·  %s",
 };
 static_assert(sizeof k_str_tr / sizeof k_str_tr[0] == S_COUNT, "k_str_tr: one text per StrId");
 
@@ -867,6 +932,13 @@ static const wchar_t* const k_str_ar[] = {
     L"إظهار طبقة الأداء",
     L"عدد الإطارات وزمن الإطار واستخدام الحاسوب في الزاوية العلوية اليمنى من اللعبة. اختر ما يُعرض:",
     L"زمن الإطار (ms)",
+    L"مجلد التصحيحات",
+    L"ملفات .yml بصيغة RPCS3 (patch.yml)؛ تظهر أدناه تصحيحات هذا الإصدار من اللعبة.",
+    L"%d تصحيح لهذه اللعبة في %d ملف.",
+    L"لا توجد تصحيحات لهذا الإصدار من اللعبة في هذا المجلد.",
+    L"يغيّر شيفرة اللعبة، وهذا التغيير غير مُضمَّن في هذا الإصدار: لا يمكن تفعيله.",
+    L"يستخدم نوع تصحيح لا تدعمه هذه اللعبة (%s).",
+    L"بواسطة %s  ·  %s",
 };
 static_assert(sizeof k_str_ar / sizeof k_str_ar[0] == S_COUNT, "k_str_ar: one text per StrId");
 
@@ -971,6 +1043,13 @@ static const wchar_t* const k_str_zh[] = {
     L"显示性能浮层",
     L"在游戏右上角显示 FPS、帧时间和电脑占用。勾选要显示的项目：",
     L"帧时间 (ms)",
+    L"补丁文件夹",
+    L"RPCS3 格式 (patch.yml) 的 .yml 文件；下方列出适用于此游戏版本的补丁。",
+    L"此游戏共有 %d 个补丁，来自 %d 个文件。",
+    L"该文件夹中没有适用于此游戏版本的补丁。",
+    L"此补丁修改游戏代码，而此版本未编译该修改：无法启用。",
+    L"使用了此游戏不支持的补丁类型 (%s)。",
+    L"作者 %s  ·  %s",
 };
 static_assert(sizeof k_str_zh / sizeof k_str_zh[0] == S_COUNT, "k_str_zh: one text per StrId");
 
@@ -1075,6 +1154,13 @@ static const wchar_t* const k_str_ko[] = {
     L"성능 오버레이 표시",
     L"게임 화면 오른쪽 위에 FPS, 프레임 시간, PC 사용량을 표시합니다. 표시할 항목을 선택하세요:",
     L"프레임 시간 (ms)",
+    L"패치 폴더",
+    L"RPCS3 형식(patch.yml)의 .yml 파일. 이 버전의 게임용 패치가 아래에 표시됩니다.",
+    L"이 게임용 패치 %d개 (%d개 파일).",
+    L"이 폴더에는 이 버전의 게임용 패치가 없습니다.",
+    L"게임 코드를 바꾸는 패치이며, 이 변경은 이 빌드에 컴파일되어 있지 않아 켤 수 없습니다.",
+    L"이 게임이 지원하지 않는 패치 종류를 사용합니다 (%s).",
+    L"제작: %s  ·  %s",
 };
 static_assert(sizeof k_str_ko / sizeof k_str_ko[0] == S_COUNT, "k_str_ko: one text per StrId");
 
@@ -1179,6 +1265,13 @@ static const wchar_t* const k_str_ru[] = {
     L"Показывать оверлей производительности",
     L"FPS, время кадра и загрузка ПК в правом верхнем углу игры. Отметьте, что показывать:",
     L"Время кадра (мс)",
+    L"Папка с патчами",
+    L"Файлы .yml в формате RPCS3 (patch.yml); ниже — патчи для этой версии игры.",
+    L"Патчей для этой игры: %d, файлов: %d.",
+    L"В этой папке нет патчей для этой версии игры.",
+    L"Меняет код игры, а это изменение не скомпилировано в эту версию: включить нельзя.",
+    L"Использует тип патча, который эта игра не поддерживает (%s).",
+    L"автор: %s  ·  %s",
 };
 static_assert(sizeof k_str_ru / sizeof k_str_ru[0] == S_COUNT, "k_str_ru: one text per StrId");
 

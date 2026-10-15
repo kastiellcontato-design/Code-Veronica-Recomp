@@ -34,6 +34,7 @@
 #include "pad_phys.h"
 #include "pad_map.h"
 #include "launcher_i18n.h"
+#include "patch_files.h"
 
 /* button_icons.cpp: the keycaps' short labels and font, shared with the game. */
 std::wstring cv_key_cap_label(int vk);
@@ -60,6 +61,7 @@ extern void (*g_rsx_menu_hook)(void);
 extern int g_pad_block;
 void  cellpad_set_map(const int* btn, const int* key);
 void  ps3_patch_set(const char* name, int on);
+int   ps3_patch_writes(const char* id, const char* spec, int on);
 }
 namespace {
 
@@ -131,6 +133,8 @@ struct Settings {
     bool overlay = false;  /* the performance overlay (rsx_perf_overlay.h) */
     int overlay_items = 3; /* bits of k_overlay_items: FPS and frame time */
     std::wstring game, rap, fw;
+    std::wstring patch_dir;                 /* patch files (patch_files.h) */
+    std::vector<std::string> patch_files_on; /* ids of the file patches turned on */
     int key[PA_COUNT][PAD_KEY_SLOTS];   /* 0: empty; the first is what the game's icons show */
     int btn[PA_COUNT][PAD_BTN_SLOTS];   /* -1: empty */
 };
@@ -246,6 +250,16 @@ Settings load_settings()
     }
     s.overlay = _wtoi(ini_get(L"overlay", L"mostrar", L"0").c_str()) != 0;
     s.overlay_items = _wtoi(ini_get(L"overlay", L"itens", L"3").c_str()) & ((1 << NOVERLAY) - 1);
+    s.patch_dir = ini_get(L"pastas", L"patches", L"");
+    {
+        const std::wstring on = ini_get(L"patches", L"arquivos", L"");
+        std::string cur;
+        for (wchar_t c : on) {
+            if (c == L',') { if (!cur.empty()) s.patch_files_on.push_back(cur); cur.clear(); }
+            else cur += (char)c;
+        }
+        if (!cur.empty()) s.patch_files_on.push_back(cur);
+    }
     s.game = ini_get(L"pastas", L"jogo", def_game);
     s.rap  = ini_get(L"pastas", L"rap", find_rap(env_w("PS3_RAP_DIR")));
     /* No page for it any more: without a firmware tree the runtime serves its
@@ -282,6 +296,12 @@ void save_settings(const Settings& s)
         ini_set(L"patches", widen(k_patches[i].id).c_str(), s.patch[i] ? L"1" : L"0");
     ini_set(L"overlay", L"mostrar", s.overlay ? L"1" : L"0");
     ini_set(L"overlay", L"itens", std::to_wstring(s.overlay_items));
+    ini_set(L"pastas", L"patches", s.patch_dir);
+    {
+        std::wstring on;
+        for (const std::string& id : s.patch_files_on) on += (on.empty() ? L"" : L",") + std::wstring(id.begin(), id.end());
+        ini_set(L"patches", L"arquivos", on);
+    }
     ini_set(L"pastas", L"jogo", s.game);
     ini_set(L"pastas", L"rap", s.rap);
     ini_set(L"pastas", L"firmware", s.fw);
@@ -405,6 +425,8 @@ struct UI {
     int hover = -1;
     int open_dd = -1;            /* open dropdown id */
     Capture cap = CAP_NONE; int cap_action = -1, cap_slot = 0; ULONGLONG cap_since = 0;
+    std::vector<FilePatch> fpatches;   /* read from s.patch_dir when it changes or the page opens */
+    int fpatch_files = 0; float patch_scroll = 0, patch_scroll_max = 0;
     uint32_t pad_prev[PAD_PHYS_MAX] = {};
     std::vector<Hit> hits;
     std::wstring play_msg;
@@ -434,6 +456,7 @@ enum {
     ID_CACHE_CLEAR = 1100, ID_CACHE_OPEN,
     ID_KEY_CLEAR = 1200, ID_BTN_CLEAR = 1300,                      /* + action * slots + slot */
     ID_OVERLAY = 1400, ID_OVERLAY_ITEM = 1410,                     /* + item */
+    ID_PATCH_DIR_BROWSE = 1500, ID_PATCH_DIR_OPEN, ID_FPATCH = 1600,  /* + file patch index */
 };
 
 void hit(float x, float y, float w, float h, int id) { g.hits.push_back({ RectF(x, y, w, h), id }); }
@@ -780,6 +803,39 @@ void draw_jogo(Graphics& gr, const Font& head, const Font& body, const Font& fsm
              StringAlignmentNear, 690, 24);
 }
 
+bool file_patch_on(const FilePatch& p)
+{
+    for (const std::string& id : g.s.patch_files_on) if (id == p.id) return p.status == FilePatch::OK;
+    return false;
+}
+
+/* A patch's card: title, one line of notes, a dim third line, the switch. */
+void patch_card(Graphics& gr, float x, float y, float w, float h, bool on, bool usable, int id,
+                const std::wstring& title, const std::wstring& desc, const std::wstring& foot, bool foot_warn,
+                const Font& body, const Font& fsm)
+{
+    const bool hot = usable && g.hover == id;
+    RectF card(x, y, w, h);
+    GraphicsPath* cp = round_rect(card, 6);
+    SolidBrush cb(hot ? C_HOVER : C_PANEL); gr.FillPath(&cb, cp);
+    Pen cbd(on ? C_RED : C_FIELD_BD, 1); gr.DrawPath(&cbd, cp); delete cp;
+    RectF sw(x + w - 70, y + (h - 26) / 2, 48, 26);
+    GraphicsPath* sp = round_rect(sw, 13);
+    SolidBrush sb(on ? C_RED : usable ? Color(255, 60, 52, 52) : Color(255, 40, 36, 36)); gr.FillPath(&sb, sp); delete sp;
+    SolidBrush knob(usable ? C_TEXT : Color(255, 90, 84, 84));
+    gr.FillEllipse(&knob, on ? sw.X + sw.Width - 23 : sw.X + 3, sw.Y + 3, 20.0f, 20.0f);
+    text(gr, title, x + 18, y + 8, body, usable ? C_TEXT : C_DIM, StringAlignmentNear, w - 120, 24);
+    text(gr, desc, x + 18, y + 32, fsm, C_DIM, StringAlignmentNear, w - 120, 20);
+    text(gr, foot, x + 18, y + 52, fsm, foot_warn ? C_RED_HI : Color(255, 120, 110, 104), StringAlignmentNear, w - 120, 20);
+    if (usable) hit(x, y, w, h, id);
+}
+
+void scan_patch_dir()
+{
+    g.fpatches = patch_files_scan(g.s.patch_dir, &g.fpatch_files);
+    g.patch_scroll = 0;
+}
+
 void draw_patches(Graphics& gr, const Font& head, const Font& body, const Font& fsm)
 {
     float x = SIDE + 32.0f, y = 34;
@@ -789,22 +845,43 @@ void draw_patches(Graphics& gr, const Font& head, const Font& body, const Font& 
          x, y + 32, fsm, C_DIM, StringAlignmentNear, w, 20);
     y += 74;
     for (int i = 0; i < NPATCHES; i++) {
-        const bool on = g.s.patch[i], hot = g.hover == ID_PATCH + i;
-        RectF card(x, y, w, 84);
-        GraphicsPath* cp = round_rect(card, 6);
-        SolidBrush cb(hot ? C_HOVER : C_PANEL); gr.FillPath(&cb, cp);
-        Pen cbd(on ? C_RED : C_FIELD_BD, 1); gr.DrawPath(&cbd, cp); delete cp;
-        /* switch */
-        RectF sw(x + w - 70, y + 28, 48, 26);
-        GraphicsPath* sp = round_rect(sw, 13);
-        SolidBrush sb(on ? C_RED : Color(255, 60, 52, 52)); gr.FillPath(&sb, sp); delete sp;
-        SolidBrush knob(C_TEXT);
-        gr.FillEllipse(&knob, on ? sw.X + sw.Width - 23 : sw.X + 3, sw.Y + 3, 20.0f, 20.0f);
-        text(gr, T(k_patches[i].title), x + 18, y + 10, body, C_TEXT, StringAlignmentNear, w - 120, 24);
-        text(gr, T(k_patches[i].desc), x + 18, y + 34, fsm, C_DIM, StringAlignmentNear, w - 120, 20);
-        text(gr, T(k_patches[i].credit), x + 18, y + 54, fsm, Color(255, 120, 110, 104), StringAlignmentNear, w - 120, 20);
-        hit(x, y, w, 84, ID_PATCH + i);
+        patch_card(gr, x, y, w, 84, g.s.patch[i], true, ID_PATCH + i, T(k_patches[i].title), T(k_patches[i].desc),
+                   T(k_patches[i].credit), false, body, fsm);
         y += 96;
+    }
+    /* the folder of patch files */
+    std::wstring note;
+    if (!g.s.patch_dir.empty()) {
+        wchar_t b[200];
+        if (g.fpatches.empty()) note = T(S_PATCH_NONE);
+        else { swprintf(b, 200, T(S_PATCH_FOUND_FMT), (int)g.fpatches.size(), g.fpatch_files); note = b; }
+    }
+    path_row(gr, x, y, T(S_PATCH_FOLDER), g.s.patch_dir, g.s.patch_dir.empty() ? std::wstring(T(S_PATCH_FOLDER_HINT)) : note,
+             !g.fpatches.empty() || g.s.patch_dir.empty(), ID_PATCH_DIR_BROWSE, ID_PATCH_DIR_OPEN, body, fsm);
+    y += 66;
+    /* its patches, in a list that scrolls with the wheel */
+    const float top = y, bottom = H - 96.0f, ch = 76, gap = 8;
+    g.patch_scroll_max = std::max(0.0f, g.fpatches.size() * (ch + gap) - (bottom - top));
+    g.patch_scroll = std::min(std::max(g.patch_scroll, 0.0f), g.patch_scroll_max);
+    gr.SetClip(RectF(x - 2, top, w + 4, bottom - top));
+    for (size_t i = 0; i < g.fpatches.size(); i++) {
+        const FilePatch& p = g.fpatches[i];
+        const float cy = top + i * (ch + gap) - g.patch_scroll;
+        if (cy + ch < top || cy > bottom) continue;
+        std::wstring foot;
+        wchar_t b[400];
+        if (p.status == FilePatch::CODE) foot = T(S_PATCH_CODE);
+        else if (p.status == FilePatch::TYPE) { swprintf(b, 400, T(S_PATCH_TYPE_FMT), p.bad_type.c_str()); foot = b; }
+        else { swprintf(b, 400, T(S_PATCH_FROM_FMT), p.author.empty() ? L"?" : p.author.c_str(), p.file.c_str()); foot = b; }
+        const bool usable = p.status == FilePatch::OK && cy >= top && cy + ch <= bottom;
+        patch_card(gr, x, cy, w, ch, file_patch_on(p), usable, ID_FPATCH + (int)i, p.title, p.notes, foot,
+                   p.status != FilePatch::OK, body, fsm);
+    }
+    gr.ResetClip();
+    if (g.patch_scroll_max > 0) {   /* where the list is */
+        const float track = bottom - top, bar = std::max(30.0f, track * track / (track + g.patch_scroll_max));
+        SolidBrush sb(Color(255, 70, 62, 62));
+        gr.FillRectangle(&sb, x + w + 8, top + (track - bar) * g.patch_scroll / g.patch_scroll_max, 4.0f, bar);
     }
 }
 
@@ -1342,7 +1419,10 @@ void click(int id)
         g.open_dd = -1; InvalidateRect(g.hwnd, NULL, FALSE); return;
     }
     if (g.cap != CAP_NONE) { g.cap = CAP_NONE; g.cap_action = -1; }
-    if (id >= ID_NAV && id < ID_NAV + P_COUNT) { g.page = (Page)(id - ID_NAV); g.cache_msg.clear(); }
+    if (id >= ID_NAV && id < ID_NAV + P_COUNT) {
+        g.page = (Page)(id - ID_NAV); g.cache_msg.clear();
+        if (g.page == P_PATCHES) scan_patch_dir();   /* the folder may have new files */
+    }
     else if (id >= ID_PATCH && id < ID_PATCH + NPATCHES) { g.s.patch[id - ID_PATCH] ^= true; changed(); }
     else if (id == ID_DD_MODE || id == ID_DD_RES || id == ID_DD_AA || id == ID_DD_LANG) {
         g.open_dd = id; g.dd_scroll = 0;
@@ -1375,6 +1455,20 @@ void click(int id)
         g.cap = CAP_BTN; g.cap_action = (id - ID_BTN) / PAD_BTN_SLOTS; g.cap_slot = (id - ID_BTN) % PAD_BTN_SLOTS;
         g.cap_since = GetTickCount64();
         for (int i = 0; i < PAD_PHYS_MAX; i++) { PadPhys p; pad_phys_poll(i, &p); g.pad_prev[i] = p.buttons; }
+    }
+    else if (id == ID_PATCH_DIR_BROWSE) {
+        auto p = pick(true, g.s.patch_dir, nullptr, nullptr);
+        if (!p.empty()) { g.s.patch_dir = p; scan_patch_dir(); changed(); }
+    }
+    else if (id == ID_PATCH_DIR_OPEN && !g.s.patch_dir.empty()) open_in_explorer(g.s.patch_dir);
+    else if (id >= ID_FPATCH && id < ID_FPATCH + (int)g.fpatches.size()) {
+        const FilePatch& p = g.fpatches[(size_t)(id - ID_FPATCH)];
+        auto& on = g.s.patch_files_on;
+        const auto it = std::find(on.begin(), on.end(), p.id);
+        const bool now = it == on.end();
+        if (now) on.push_back(p.id); else on.erase(it);
+        if (g.running) ps3_patch_writes(p.id.c_str(), p.spec.c_str(), now);   /* at once, in the running game */
+        changed();
     }
     else if (id == ID_OVERLAY) { g.s.overlay = !g.s.overlay; set_overlay_env(); changed(); }
     else if (id >= ID_OVERLAY_ITEM && id < ID_OVERLAY_ITEM + NOVERLAY) {
@@ -1435,6 +1529,9 @@ LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp)
     case WM_MOUSEWHEEL:
         if (g.open_dd >= 0) {
             g.dd_scroll += GET_WHEEL_DELTA_WPARAM(wp) > 0 ? -1 : 1;
+            InvalidateRect(h, NULL, FALSE);
+        } else if (g.page == P_PATCHES && g.patch_scroll_max > 0) {
+            g.patch_scroll += GET_WHEEL_DELTA_WPARAM(wp) > 0 ? -60.0f : 60.0f;
             InvalidateRect(h, NULL, FALSE);
         }
         return 0;
@@ -1629,6 +1726,13 @@ void start_game()
     set_env("PS3_PATCHES", pl);
     set_map_env();
     set_overlay_env();
+    {   /* file patches: applied by the runtime once the game is loaded */
+        if (g.fpatches.empty()) scan_patch_dir();
+        std::string w;
+        for (const FilePatch& p : g.fpatches)
+            if (file_patch_on(p)) w += (w.empty() ? "" : ";") + p.id + "=" + p.spec;
+        set_env("PS3_PATCH_WRITES", w);
+    }
     /* Sound effects decode through the runtime's own ATRAC3 plug-in, so no
      * PS3 firmware is needed even when a dev_flash path is configured. */
     set_env_default("PS3_ATRAC_STANDIN", "1");

@@ -393,6 +393,8 @@ static void harness_guest_caller(uint32_t opd, uint64_t a0, uint64_t a1,
 
 extern "C" int cv_launcher_run(char* eboot_out, size_t cap);
 extern "C" void cv_button_icons_init(void);   /* button_icons.cpp */
+extern "C" void ps3_patch_site(uint32_t addr, uint32_t word, const char* flag);   /* runtime/patches */
+extern "C" void ps3_patch_writes_from_env(void);
 
 int main(int argc, char** argv)
 {
@@ -411,6 +413,9 @@ int main(int argc, char** argv)
       } }
     /* Xbox button icons: the game's own Xbox 360 art, swapped in per archive. */
     cv_button_icons_init();
+    /* The switchable sites lifted into this build (projects/code_veronica/
+     * patches.json, EU sites): a patch file with the same write switches them. */
+    ps3_patch_site(0x001AFCCC, 0x38600000, "cv_door_skip");
 
     /* The options window. CV_NO_LAUNCHER=1 skips it (tests, scripts). */
     if (!getenv("CV_NO_LAUNCHER")) {
@@ -483,6 +488,8 @@ int main(int argc, char** argv)
         fprintf(stderr, "ERROR: could not load %s\n", eboot_path.c_str());
         return 1;
     }
+
+    ps3_patch_writes_from_env();   /* patch files: the data they change, before the game reads it */
 
     derive_vfs_root(eboot_path.c_str());
     printf("[boot] VFS root: %s\n", ppu_vfs_root);
