@@ -44,6 +44,7 @@ using namespace Gdiplus;
 extern "C" {
 void  rsx_d3d12_set_window_mode(int mode);
 void  rsx_d3d12_set_res_scale(float f);
+void  rsx_d3d12_set_aa(int mode);
 void  rsx_d3d12_close(void);
 void* rsx_d3d12_window(void);
 extern void (*g_rsx_menu_hook)(void);
@@ -65,6 +66,7 @@ const int W = 1120, H = 770, SIDE = 230;
 struct Settings {
     int mode = 0;          /* 0 janela, 1 sem borda, 2 tela cheia */
     int res = 1;           /* index into k_res */
+    int aa = 0;            /* anti-aliasing: 0 off, 1 FXAA, 2 SMAA */
     int layout = 0;        /* 0 PlayStation, 1 Xbox */
     std::wstring game, rap, fw;
     int key[PA_COUNT];
@@ -76,6 +78,7 @@ const ResOpt k_res[] = {
     { L"1440p (2560x1440)", "2" }, { L"4K (3840x2160)", "3" } };
 const wchar_t* k_modes[] = { L"Em janela", L"Janela sem borda", L"Tela cheia" };
 const char* k_mode_env[] = { "window", "borderless", "fullscreen" };
+const wchar_t* k_aa[] = { L"Desligado", L"FXAA (leve)", L"SMAA (melhor)" };
 
 /* Actions shown on the Controles page. */
 const int k_rows[] = { PA_CROSS, PA_CIRCLE, PA_SQUARE, PA_TRIANGLE, PA_L1, PA_R1, PA_L2, PA_R2,
@@ -125,9 +128,11 @@ Settings load_settings()
     Settings s;
     s.mode   = _wtoi(ini_get(L"tela", L"modo", L"0").c_str());
     s.res    = _wtoi(ini_get(L"tela", L"resolucao", L"1").c_str());
+    s.aa     = _wtoi(ini_get(L"tela", L"antialias", L"0").c_str());
     s.layout = _wtoi(ini_get(L"controles", L"layout", L"0").c_str());
     if (s.mode < 0 || s.mode > 2) s.mode = 0;
     if (s.res < 0 || s.res > 4) s.res = 1;
+    if (s.aa < 0 || s.aa > 2) s.aa = 0;
     if (s.layout < 0 || s.layout > 1) s.layout = 0;
     /* First run: take the paths the old launcher script set, if any. */
     std::wstring def_game = env_w("PS3_VFS_ROOT");
@@ -158,6 +163,7 @@ void save_settings(const Settings& s)
 {
     ini_set(L"tela", L"modo", std::to_wstring(s.mode));
     ini_set(L"tela", L"resolucao", std::to_wstring(s.res));
+    ini_set(L"tela", L"antialias", std::to_wstring(s.aa));
     ini_set(L"controles", L"layout", std::to_wstring(s.layout));
     ini_set(L"pastas", L"jogo", s.game);
     ini_set(L"pastas", L"rap", s.rap);
@@ -255,7 +261,7 @@ struct UI {
     int pad_count = 0;
     int pad_kind = 0;              /* PAD_KIND_* of the first connected pad */
     bool running = false;          /* Jogar pressed: the window stays as the options menu */
-    int applied_mode = -1, applied_res = -1;
+    int applied_mode = -1, applied_res = -1, applied_aa = -1;
     uint32_t combo_prev = 0;
     std::string eboot;
 };
@@ -264,7 +270,7 @@ UI g;
 /* ids */
 enum {
     ID_NAV = 100,               /* + page */
-    ID_DD_MODE = 200, ID_DD_RES = 201, ID_DD_ITEM = 300,  /* + item index */
+    ID_DD_MODE = 200, ID_DD_RES = 201, ID_DD_AA = 202, ID_DD_ITEM = 300,  /* + item index */
     ID_PLAY = 400, ID_RESUME, ID_QUIT,
     ID_GAME_BROWSE = 500, ID_GAME_OPEN, ID_RAP_BROWSE, ID_RAP_OPEN, ID_FW_BROWSE, ID_FW_OPEN,
     ID_LAYOUT_PS = 600, ID_LAYOUT_XB,
@@ -523,12 +529,12 @@ void draw_inicio(Graphics& gr, const Font& head, const Font& body, const Font& c
     text(gr, L"Modo de exibição", x, y, body, C_TEXT, StringAlignmentNear, 200, 30);
     dropdown(gr, RectF(x + 210, y, 200, 30), k_modes[g.s.mode], ID_DD_MODE, body);
     text(gr, L"Limite de quadros", x + 450, y, body, C_TEXT, StringAlignmentNear, 180, 30);
-    dropdown(gr, RectF(x + 630, y, 150, 30), L"30 FPS", -1, body, false);
+    dropdown(gr, RectF(x + 630, y, 150, 30), L"30 FPS (original)", -1, body, false);
     y += 44;
     text(gr, L"Resolução de renderização", x, y, body, C_TEXT, StringAlignmentNear, 205, 30);
     dropdown(gr, RectF(x + 210, y, 200, 30), k_res[g.s.res].name, ID_DD_RES, body);
-    text(gr, L"Limite do jogo original.", x + 450, y, body, C_DIM,
-         StringAlignmentNear, 330, 30);
+    text(gr, L"Anti-serrilhado", x + 450, y, body, C_TEXT, StringAlignmentNear, 180, 30);
+    dropdown(gr, RectF(x + 630, y, 150, 30), k_aa[g.s.aa], ID_DD_AA, body);
     y += 54;
     bool o1, o2, o3;
     std::wstring m1 = check_game(g.s.game, &o1), m2 = check_rap(g.s.rap, &o2), m3 = check_fw(g.s.fw, &o3);
@@ -786,16 +792,17 @@ void paint(HDC hdc)
     /* open dropdown list on top */
     if (g.open_dd >= 0) {
         std::vector<std::wstring> items; int sel = 0;
+        float x = SIDE + 32.0f + 210, y = 330 + 14 + 44 + 30, bw = 200;
         if (g.open_dd == ID_DD_MODE) { for (auto m : k_modes) items.push_back(m); sel = g.s.mode; }
-        else { for (auto& r : k_res) items.push_back(r.name); sel = g.s.res; }
-        float x = SIDE + 32.0f + 210, y = 330 + 14 + 44 + (g.open_dd == ID_DD_RES ? 44.0f : 0.0f) + 30;
-        RectF box(x, y, 200, items.size() * 28.0f);
+        else if (g.open_dd == ID_DD_RES) { for (auto& r : k_res) items.push_back(r.name); sel = g.s.res; y += 44; }
+        else { for (auto a : k_aa) items.push_back(a); sel = g.s.aa; x = SIDE + 32.0f + 630; y += 44; bw = 150; }
+        RectF box(x, y, bw, items.size() * 28.0f);
         SolidBrush lb(Color(255, 34, 28, 28)); gr.FillRectangle(&lb, box);
         Pen lp(C_RED, 1); gr.DrawRectangle(&lp, box.X, box.Y, box.Width - 1, box.Height - 1);
         /* remove underlying hits so clicks land on the list */
         g.hits.clear();
         for (size_t i = 0; i < items.size(); i++) {
-            RectF ir(x, y + i * 28.0f, 200, 28);
+            RectF ir(x, y + i * 28.0f, bw, 28);
             bool hot = g.hover == ID_DD_ITEM + (int)i;
             if (hot || (int)i == sel) { SolidBrush hb(hot ? Color(255, 70, 24, 24) : Color(255, 46, 30, 30)); gr.FillRectangle(&hb, ir); }
             text(gr, items[i], ir.X + 8, ir.Y, fBody, C_TEXT, StringAlignmentNear, ir.Width - 12, ir.Height);
@@ -860,6 +867,10 @@ void apply_live()
         g.applied_res = g.s.res;
         rsx_d3d12_set_res_scale((float)atof(k_res[g.s.res].scale));
     }
+    if (g.s.aa != g.applied_aa) {
+        g.applied_aa = g.s.aa;
+        rsx_d3d12_set_aa(g.s.aa);
+    }
     cellpad_set_map(g.s.btn, g.s.key);
 }
 
@@ -895,14 +906,16 @@ void click(int id)
     if (g.open_dd >= 0) {
         if (id >= ID_DD_ITEM && id < ID_DD_ITEM + 10) {
             int i = id - ID_DD_ITEM;
-            if (g.open_dd == ID_DD_MODE) g.s.mode = i; else g.s.res = i;
+            if (g.open_dd == ID_DD_MODE) g.s.mode = i;
+            else if (g.open_dd == ID_DD_RES) g.s.res = i;
+            else g.s.aa = i;
             g.open_dd = -1; changed(); return;
         }
         g.open_dd = -1; InvalidateRect(g.hwnd, NULL, FALSE); return;
     }
     if (g.cap != CAP_NONE) { g.cap = CAP_NONE; g.cap_action = -1; }
     if (id >= ID_NAV && id < ID_NAV + 3) { g.page = (Page)(id - ID_NAV); }
-    else if (id == ID_DD_MODE || id == ID_DD_RES) { g.open_dd = id; }
+    else if (id == ID_DD_MODE || id == ID_DD_RES || id == ID_DD_AA) { g.open_dd = id; }
     else if (id == ID_GAME_BROWSE) { auto p = pick(true, g.s.game, nullptr, nullptr); if (!p.empty()) { g.s.game = p; changed(); } }
     else if (id == ID_RAP_BROWSE) { auto p = pick(false, g.s.rap, L"Licença PS3 (*.rap)", L"*.rap"); if (!p.empty()) { g.s.rap = p; changed(); } }
     else if (id == ID_FW_BROWSE) { auto p = pick(true, g.s.fw, nullptr, nullptr); if (!p.empty()) { g.s.fw = p; changed(); } }
@@ -1049,6 +1062,7 @@ void start_game()
     if (!s.fw.empty()) set_env("PS3_DEV_FLASH", narrow(s.fw));
     set_env("RES_SCALE", k_res[s.res].scale);
     set_env("WINDOW_MODE", k_mode_env[s.mode]);
+    set_env("AA_MODE", std::to_string(s.aa));
     std::string bm, km;
     for (int a = 0; a < PA_COUNT; a++) {
         bm += std::string(k_pad_action_id[a]) + "=" + pad_phys_id(s.btn[a]) + (a + 1 < PA_COUNT ? "," : "");
@@ -1068,7 +1082,7 @@ void start_game()
     set_env_default("PS3_TITLE", "Resident Evil Code: Veronica X");
     g.eboot = narrow((fs::path(s.game) / L"USRDIR" / L"EBOOT.elf").wstring());
     g.running = true;
-    g.applied_mode = s.mode; g.applied_res = s.res;
+    g.applied_mode = s.mode; g.applied_res = s.res; g.applied_aa = s.aa;
     g_rsx_menu_hook = menu_hook;
     g.page = P_INICIO;
     InvalidateRect(g.hwnd, NULL, FALSE);

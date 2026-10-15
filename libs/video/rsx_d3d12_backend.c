@@ -210,7 +210,8 @@ typedef struct {
 #define ZCONV_SRV     (DRAW_SRV_BASE + MAX_DRAWS * FP_TEX_UNITS)
 /* Per-draw vertex-texture windows (t16-t19), indexed like the t0-t3 ones. */
 #define VTEX_SRV_BASE (ZCONV_SRV + FP_TEX_UNITS)
-#define SRV_HEAP_SIZE (VTEX_SRV_BASE + MAX_DRAWS * 4)
+#define AA_SRV_BASE   (VTEX_SRV_BASE + MAX_DRAWS * 4)   /* anti-aliasing pass: 5 views */
+#define SRV_HEAP_SIZE (AA_SRV_BASE + 8)
 
 /* Per-frame VP texture slot: a guest texture uploaded for this frame's VP
  * draws (re-uploaded every frame -- gcm/cube's plasma animates in guest
@@ -5931,6 +5932,434 @@ static u32 s_last_drawn_off  = 0;
 
 void rsx_d3d12_composite_from_offscreen(u32 raw_off) { s_composite_src = raw_off; }
 
+/* ---------------------------------------------------------------------------
+ * Post-process anti-aliasing on the finished frame, just before Present.
+ * AA_MODE / rsx_d3d12_set_aa: 0 off, 1 FXAA 3.11 (quality preset), 2 SMAA 1x
+ * (Ultra preset; third_party/smaa, MIT). Runs at the render resolution, on the
+ * GPU only, and can change between frames. The backbuffer is copied aside and
+ * the passes write the result back into it.
+ * -------------------------------------------------------------------------*/
+#include "AreaTex.h"
+#include "SearchTex.h"
+#include "smaa_hlsl.h"
+
+static volatile int s_aa_mode = -1;          /* -1: read AA_MODE once */
+void rsx_d3d12_set_aa(int mode) { s_aa_mode = (mode >= 0 && mode <= 2) ? mode : 0; }
+
+static ID3D12RootSignature* s_aa_rs;
+static ID3D12PipelineState *s_aa_fxaa, *s_aa_edge, *s_aa_weight, *s_aa_blend, *s_aa_show;
+static int s_aa_failed[3];
+static ID3D12DescriptorHeap* s_aa_rtv;       /* 0 = edges, 1 = blend weights */
+static ID3D12Resource *s_aa_color, *s_aa_edges, *s_aa_weights;
+static ID3D12Resource *s_aa_area, *s_aa_search, *s_aa_up;
+static u32 s_aa_w, s_aa_h;
+static int s_aa_luts_ready;
+
+static const char k_aa_common[] =
+    "cbuffer C : register(b0) { float4 rt; };\n"     /* 1/w, 1/h, w, h */
+    "SamplerState LinearSampler : register(s0);\n"
+    "SamplerState PointSampler : register(s1);\n"
+    "Texture2D colorTex  : register(t0);\n"
+    "Texture2D edgesTex  : register(t1);\n"
+    "Texture2D areaTex   : register(t2);\n"
+    "Texture2D searchTex : register(t3);\n"
+    "Texture2D blendTex  : register(t4);\n"
+    "void fs_tri(uint id, out float4 p, out float2 uv) {\n"
+    "    uv = float2((id << 1) & 2, id & 2);\n"
+    "    p = float4(uv * float2(2, -2) + float2(-1, 1), 0, 1); }\n";
+
+/* FXAA 3.11, PC quality path (Timothy Lottes), luma computed from the colour. */
+static const char k_aa_fxaa[] =
+    "struct V { float4 p : SV_Position; float2 uv : TEXCOORD0; };\n"
+    "V vs(uint id : SV_VertexID) { V o; fs_tri(id, o.p, o.uv); return o; }\n"
+    "float L(float3 c) { return dot(c, float3(0.299, 0.587, 0.114)); }\n"
+    "float LT(float2 p) { return L(colorTex.SampleLevel(LinearSampler, p, 0).rgb); }\n"
+    "float LO(float2 p, int2 o) { return L(colorTex.SampleLevel(LinearSampler, p, 0, o).rgb); }\n"
+    "static const float kStep[12] = { 1.0, 1.5, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 4.0, 8.0 };\n"
+    "float4 ps(V i) : SV_Target {\n"
+    "    const float subpix = 0.75, edgeTh = 0.166, edgeThMin = 0.0833;\n"
+    "    float2 rcpf = rt.xy; float2 posM = i.uv;\n"
+    "    float4 rgbM = colorTex.SampleLevel(LinearSampler, posM, 0);\n"
+    "    float lumaM = L(rgbM.rgb);\n"
+    "    float lumaS = LO(posM, int2(0, 1)), lumaE = LO(posM, int2(1, 0));\n"
+    "    float lumaN = LO(posM, int2(0, -1)), lumaW = LO(posM, int2(-1, 0));\n"
+    "    float rangeMax = max(max(lumaN, lumaW), max(lumaE, max(lumaS, lumaM)));\n"
+    "    float rangeMin = min(min(lumaN, lumaW), min(lumaE, min(lumaS, lumaM)));\n"
+    "    float range = rangeMax - rangeMin;\n"
+    "    if (range < max(edgeThMin, rangeMax * edgeTh)) return float4(rgbM.rgb, 1);\n"
+    "    float lumaNW = LO(posM, int2(-1, -1)), lumaSE = LO(posM, int2(1, 1));\n"
+    "    float lumaNE = LO(posM, int2(1, -1)), lumaSW = LO(posM, int2(-1, 1));\n"
+    "    float lumaNS = lumaN + lumaS, lumaWE = lumaW + lumaE;\n"
+    "    float subpixRcpRange = 1.0 / range, subpixNSWE = lumaNS + lumaWE;\n"
+    "    float edgeHorz1 = -2.0 * lumaM + lumaNS, edgeVert1 = -2.0 * lumaM + lumaWE;\n"
+    "    float lumaNESE = lumaNE + lumaSE, lumaNWNE = lumaNW + lumaNE;\n"
+    "    float edgeHorz2 = -2.0 * lumaE + lumaNESE, edgeVert2 = -2.0 * lumaN + lumaNWNE;\n"
+    "    float lumaNWSW = lumaNW + lumaSW, lumaSWSE = lumaSW + lumaSE;\n"
+    "    float edgeHorz4 = abs(edgeHorz1) * 2.0 + abs(edgeHorz2);\n"
+    "    float edgeVert4 = abs(edgeVert1) * 2.0 + abs(edgeVert2);\n"
+    "    float edgeHorz3 = -2.0 * lumaW + lumaNWSW, edgeVert3 = -2.0 * lumaS + lumaSWSE;\n"
+    "    float edgeHorz = abs(edgeHorz3) + edgeHorz4, edgeVert = abs(edgeVert3) + edgeVert4;\n"
+    "    float subpixNWSWNESE = lumaNWSW + lumaNESE;\n"
+    "    float lengthSign = rcpf.x;\n"
+    "    bool horzSpan = edgeHorz >= edgeVert;\n"
+    "    float subpixA = subpixNSWE * 2.0 + subpixNWSWNESE;\n"
+    "    if (!horzSpan) { lumaN = lumaW; lumaS = lumaE; } else lengthSign = rcpf.y;\n"
+    "    float subpixB = subpixA * (1.0 / 12.0) - lumaM;\n"
+    "    float gradientN = lumaN - lumaM, gradientS = lumaS - lumaM;\n"
+    "    float lumaNN = lumaN + lumaM, lumaSS = lumaS + lumaM;\n"
+    "    bool pairN = abs(gradientN) >= abs(gradientS);\n"
+    "    float gradient = max(abs(gradientN), abs(gradientS));\n"
+    "    if (pairN) lengthSign = -lengthSign;\n"
+    "    float subpixC = saturate(abs(subpixB) * subpixRcpRange);\n"
+    "    float2 posB = posM;\n"
+    "    float2 offNP = horzSpan ? float2(rcpf.x, 0) : float2(0, rcpf.y);\n"
+    "    if (!horzSpan) posB.x += lengthSign * 0.5; else posB.y += lengthSign * 0.5;\n"
+    "    float2 posN = posB - offNP * kStep[0], posP = posB + offNP * kStep[0];\n"
+    "    float subpixD = -2.0 * subpixC + 3.0, subpixE = subpixC * subpixC;\n"
+    "    float lumaEndN = LT(posN), lumaEndP = LT(posP);\n"
+    "    if (!pairN) lumaNN = lumaSS;\n"
+    "    float gradientScaled = gradient * 0.25;\n"
+    "    float lumaMM = lumaM - lumaNN * 0.5;\n"
+    "    float subpixF = subpixD * subpixE;\n"
+    "    bool lumaMLTZero = lumaMM < 0.0;\n"
+    "    lumaEndN -= lumaNN * 0.5; lumaEndP -= lumaNN * 0.5;\n"
+    "    bool doneN = abs(lumaEndN) >= gradientScaled, doneP = abs(lumaEndP) >= gradientScaled;\n"
+    "    if (!doneN) posN -= offNP * kStep[1];\n"
+    "    if (!doneP) posP += offNP * kStep[1];\n"
+    "    [loop] for (int s = 2; s < 12 && (!doneN || !doneP); s++) {\n"
+    "        if (!doneN) lumaEndN = LT(posN) - lumaNN * 0.5;\n"
+    "        if (!doneP) lumaEndP = LT(posP) - lumaNN * 0.5;\n"
+    "        doneN = abs(lumaEndN) >= gradientScaled; doneP = abs(lumaEndP) >= gradientScaled;\n"
+    "        if (!doneN) posN -= offNP * kStep[s];\n"
+    "        if (!doneP) posP += offNP * kStep[s];\n"
+    "    }\n"
+    "    float dstN = horzSpan ? posM.x - posN.x : posM.y - posN.y;\n"
+    "    float dstP = horzSpan ? posP.x - posM.x : posP.y - posM.y;\n"
+    "    bool goodSpanN = (lumaEndN < 0.0) != lumaMLTZero, goodSpanP = (lumaEndP < 0.0) != lumaMLTZero;\n"
+    "    float spanLengthRcp = 1.0 / (dstP + dstN);\n"
+    "    bool directionN = dstN < dstP;\n"
+    "    float dst = min(dstN, dstP);\n"
+    /* only where the search found that end of the edge: on a long straight edge the
+     * unfinished end reads ~0, its sign is noise, and following it shifted each row
+     * differently (a comb along vertical text stems) */
+    "    bool goodSpan = directionN ? (goodSpanN && doneN) : (goodSpanP && doneP);\n"
+    "    float subpixG = subpixF * subpixF;\n"
+    "    float pixelOffset = dst * (-spanLengthRcp) + 0.5;\n"
+    "    float subpixH = subpixG * subpix;\n"
+    "    float pixelOffsetSubpix = max(goodSpan ? pixelOffset : 0.0, subpixH);\n"
+    "    if (!horzSpan) posM.x += pixelOffsetSubpix * lengthSign; else posM.y += pixelOffsetSubpix * lengthSign;\n"
+    "    return float4(colorTex.SampleLevel(LinearSampler, posM, 0).rgb, 1); }\n";
+
+/* SMAA: the library compiled with our own sampler and texture bindings
+ * (SMAA_CUSTOM_SL), then the three passes. */
+static const char k_aa_smaa_pre[] =
+    "#define SMAA_RT_METRICS rt\n"
+    "#define SMAA_CUSTOM_SL 1\n"
+    "#define SMAA_PRESET_ULTRA 1\n"   /* threshold 0.05: the title is dark and High (0.1) missed most edges */
+    "#define SMAATexture2D(tex) Texture2D tex\n"
+    "#define SMAATexturePass2D(tex) tex\n"
+    "#define SMAASampleLevelZero(tex, coord) tex.SampleLevel(LinearSampler, coord, 0)\n"
+    "#define SMAASampleLevelZeroPoint(tex, coord) tex.SampleLevel(PointSampler, coord, 0)\n"
+    "#define SMAASampleLevelZeroOffset(tex, coord, offset) tex.SampleLevel(LinearSampler, coord, 0, offset)\n"
+    "#define SMAASample(tex, coord) tex.Sample(LinearSampler, coord)\n"
+    "#define SMAASamplePoint(tex, coord) tex.Sample(PointSampler, coord)\n"
+    "#define SMAASampleOffset(tex, coord, offset) tex.Sample(LinearSampler, coord, offset)\n"
+    "#define SMAA_FLATTEN [flatten]\n"
+    "#define SMAA_BRANCH [branch]\n"
+    "#define SMAAGather(tex, coord) tex.Gather(LinearSampler, coord, 0)\n";
+static const char k_aa_smaa_post[] =
+    "struct VE { float4 p : SV_Position; float2 uv : TEXCOORD0; float4 o0 : TEXCOORD1;\n"
+    "            float4 o1 : TEXCOORD2; float4 o2 : TEXCOORD3; float2 pix : TEXCOORD4; };\n"
+    "VE vs_edge(uint id : SV_VertexID) { VE o = (VE)0; fs_tri(id, o.p, o.uv);\n"
+    "    float4 off[3]; SMAAEdgeDetectionVS(o.uv, off); o.o0 = off[0]; o.o1 = off[1]; o.o2 = off[2]; return o; }\n"
+    "float4 ps_edge(VE i) : SV_Target { float4 off[3] = { i.o0, i.o1, i.o2 };\n"
+    "    return float4(SMAALumaEdgeDetectionPS(i.uv, off, colorTex), 0, 0); }\n"
+    "VE vs_weight(uint id : SV_VertexID) { VE o = (VE)0; fs_tri(id, o.p, o.uv);\n"
+    "    float4 off[3]; SMAABlendingWeightCalculationVS(o.uv, o.pix, off);\n"
+    "    o.o0 = off[0]; o.o1 = off[1]; o.o2 = off[2]; return o; }\n"
+    "float4 ps_weight(VE i) : SV_Target { float4 off[3] = { i.o0, i.o1, i.o2 };\n"
+    "    return SMAABlendingWeightCalculationPS(i.uv, i.pix, off, edgesTex, areaTex, searchTex, float4(0, 0, 0, 0)); }\n"
+    "VE vs_blend(uint id : SV_VertexID) { VE o = (VE)0; fs_tri(id, o.p, o.uv);\n"
+    "    SMAANeighborhoodBlendingVS(o.uv, o.o0); return o; }\n"
+    "float4 ps_blend(VE i) : SV_Target {\n"
+    "    return float4(SMAANeighborhoodBlendingPS(i.uv, i.o0, colorTex, blendTex).rgb, 1); }\n"
+    /* AA_SHOW=1: edges in red/green, blend weights in blue (diagnostics) */
+    "float4 ps_show(VE i) : SV_Target { float2 e = edgesTex.SampleLevel(PointSampler, i.uv, 0).rg;\n"
+    "    float4 w = blendTex.SampleLevel(PointSampler, i.uv, 0);\n"
+    "    return float4(e, saturate(dot(w, float4(1, 1, 1, 1)) * 2.0), 1); }\n";
+
+static int aa_init_rs(void)
+{
+    if (s_aa_rs) return 1;
+    D3D12_DESCRIPTOR_RANGE range = {0};
+    range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    range.NumDescriptors = 5;
+    range.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+    D3D12_ROOT_PARAMETER rp[2] = {0};
+    rp[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+    rp[0].Constants.Num32BitValues = 4;
+    rp[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    rp[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    rp[1].DescriptorTable.NumDescriptorRanges = 1;
+    rp[1].DescriptorTable.pDescriptorRanges = &range;
+    rp[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+    D3D12_STATIC_SAMPLER_DESC ss[2] = {0};
+    for (int i = 0; i < 2; i++) {
+        ss[i].Filter = i ? D3D12_FILTER_MIN_MAG_MIP_POINT : D3D12_FILTER_MIN_MAG_LINEAR_MIP_POINT;
+        ss[i].AddressU = ss[i].AddressV = ss[i].AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+        ss[i].MaxLOD = D3D12_FLOAT32_MAX;
+        ss[i].ShaderRegister = (UINT)i;
+        ss[i].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+    }
+    D3D12_ROOT_SIGNATURE_DESC desc = {0};
+    desc.NumParameters = 2; desc.pParameters = rp;
+    desc.NumStaticSamplers = 2; desc.pStaticSamplers = ss;
+    ID3DBlob *sig = NULL, *err = NULL;
+    HRESULT hr = D3D12SerializeRootSignature(&desc, D3D_ROOT_SIGNATURE_VERSION_1, &sig, &err);
+    if (err) err->lpVtbl->Release(err);
+    if (SUCCEEDED(hr))
+        hr = s_d3d.device->lpVtbl->CreateRootSignature(s_d3d.device, 0, sig->lpVtbl->GetBufferPointer(sig),
+                 sig->lpVtbl->GetBufferSize(sig), &IID_ID3D12RootSignature, (void**)&s_aa_rs);
+    if (sig) sig->lpVtbl->Release(sig);
+    if (FAILED(hr)) { printf("[AA] root signature failed (0x%08lX)\n", hr); return 0; }
+    D3D12_DESCRIPTOR_HEAP_DESC hd = {0};
+    hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV; hd.NumDescriptors = 2;
+    if (FAILED(s_d3d.device->lpVtbl->CreateDescriptorHeap(s_d3d.device, &hd, &IID_ID3D12DescriptorHeap,
+                                                         (void**)&s_aa_rtv))) return 0;
+    return 1;
+}
+
+static ID3D12PipelineState* aa_pso(const char* src, size_t len, const char* vs, const char* ps)
+{
+    ID3DBlob *vb = NULL, *pb = NULL, *e = NULL;
+    HRESULT hr = D3DCompile(src, len, "aa", NULL, NULL, vs, "vs_5_0", D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, &vb, &e);
+    if (e) { if (FAILED(hr)) printf("[AA] %s: %s\n", vs, (const char*)e->lpVtbl->GetBufferPointer(e));
+             e->lpVtbl->Release(e); e = NULL; }
+    if (SUCCEEDED(hr))
+        hr = D3DCompile(src, len, "aa", NULL, NULL, ps, "ps_5_0", D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, &pb, &e);
+    if (e) { if (FAILED(hr)) printf("[AA] %s: %s\n", ps, (const char*)e->lpVtbl->GetBufferPointer(e));
+             e->lpVtbl->Release(e); }
+    ID3D12PipelineState* pso = NULL;
+    if (SUCCEEDED(hr)) {
+        D3D12_GRAPHICS_PIPELINE_STATE_DESC pd = {0};
+        pd.pRootSignature = s_aa_rs;
+        pd.VS.pShaderBytecode = vb->lpVtbl->GetBufferPointer(vb); pd.VS.BytecodeLength = vb->lpVtbl->GetBufferSize(vb);
+        pd.PS.pShaderBytecode = pb->lpVtbl->GetBufferPointer(pb); pd.PS.BytecodeLength = pb->lpVtbl->GetBufferSize(pb);
+        pd.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
+        pd.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
+        pd.RasterizerState.DepthClipEnable = TRUE;
+        pd.BlendState.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+        pd.SampleMask = UINT_MAX;
+        pd.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+        pd.NumRenderTargets = 1; pd.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
+        pd.SampleDesc.Count = 1;
+        hr = s_d3d.device->lpVtbl->CreateGraphicsPipelineState(s_d3d.device, &pd, &IID_ID3D12PipelineState,
+                                                               (void**)&pso);
+        if (FAILED(hr)) { printf("[AA] PSO %s failed (0x%08lX)\n", ps, hr); pso = NULL; }
+    }
+    if (vb) vb->lpVtbl->Release(vb);
+    if (pb) pb->lpVtbl->Release(pb);
+    return pso;
+}
+
+/* Builds what the mode needs on its first use (shader compile: one hitch). */
+static int aa_ready(int mode)
+{
+    if (s_aa_failed[mode] || !aa_init_rs()) return 0;
+    if (mode == 1) {
+        if (s_aa_fxaa) return 1;
+        size_t n = sizeof k_aa_common + sizeof k_aa_fxaa;
+        char* src = (char*)malloc(n);
+        if (!src) return 0;
+        snprintf(src, n, "%s%s", k_aa_common, k_aa_fxaa);
+        s_aa_fxaa = aa_pso(src, strlen(src), "vs", "ps");
+        free(src);
+        if (!s_aa_fxaa) { s_aa_failed[1] = 1; return 0; }
+        printf("[AA] FXAA ready\n");
+        return 1;
+    }
+    if (s_aa_blend) return 1;
+    size_t n = sizeof k_aa_common + sizeof k_aa_smaa_pre + sizeof k_smaa_hlsl + sizeof k_aa_smaa_post + 4;
+    char* src = (char*)malloc(n);
+    if (!src) return 0;
+    snprintf(src, n, "%s%s%s\n%s", k_aa_common, k_aa_smaa_pre, k_smaa_hlsl, k_aa_smaa_post);
+    const size_t len = strlen(src);
+    s_aa_edge   = aa_pso(src, len, "vs_edge",   "ps_edge");
+    s_aa_weight = aa_pso(src, len, "vs_weight", "ps_weight");
+    s_aa_blend  = aa_pso(src, len, "vs_blend",  "ps_blend");
+    if (getenv("AA_SHOW")) s_aa_show = aa_pso(src, len, "vs_blend", "ps_show");
+    free(src);
+    if (!s_aa_edge || !s_aa_weight || !s_aa_blend) { s_aa_failed[2] = 1; s_aa_blend = NULL; return 0; }
+    printf("[AA] SMAA ready\n");
+    return 1;
+}
+
+static ID3D12Resource* aa_tex(u32 w, u32 h, DXGI_FORMAT fmt, int rt, D3D12_RESOURCE_STATES st)
+{
+    D3D12_HEAP_PROPERTIES hp = {0}; hp.Type = D3D12_HEAP_TYPE_DEFAULT;
+    D3D12_RESOURCE_DESC td = {0};
+    td.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    td.Width = w; td.Height = h; td.DepthOrArraySize = 1; td.MipLevels = 1;
+    td.Format = fmt; td.SampleDesc.Count = 1;
+    td.Flags = rt ? D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET : D3D12_RESOURCE_FLAG_NONE;
+    D3D12_CLEAR_VALUE cv = {0}; cv.Format = fmt;
+    ID3D12Resource* r = NULL;
+    if (FAILED(s_d3d.device->lpVtbl->CreateCommittedResource(s_d3d.device, &hp, D3D12_HEAP_FLAG_NONE, &td,
+            st, rt ? &cv : NULL, &IID_ID3D12Resource, (void**)&r))) return NULL;
+    return r;
+}
+
+static void aa_barrier(ID3D12Resource* r, D3D12_RESOURCE_STATES a, D3D12_RESOURCE_STATES b)
+{
+    D3D12_RESOURCE_BARRIER br = {0};
+    br.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    br.Transition.pResource = r;
+    br.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    br.Transition.StateBefore = a; br.Transition.StateAfter = b;
+    s_d3d.cmd_list->lpVtbl->ResourceBarrier(s_d3d.cmd_list, 1, &br);
+}
+
+/* SMAA's two lookup tables, uploaded once through the frame's command list. */
+static void aa_upload_luts(void)
+{
+    if (s_aa_luts_ready || s_aa_up) return;
+    const u32 ap = (AREATEX_PITCH + 255) & ~255u, sp = (SEARCHTEX_PITCH + 255) & ~255u;
+    const u64 aoff = 0, soff = ((u64)ap * AREATEX_HEIGHT + 511) & ~511ull;
+    const u64 total = soff + (u64)sp * SEARCHTEX_HEIGHT;
+    D3D12_HEAP_PROPERTIES hp = {0}; hp.Type = D3D12_HEAP_TYPE_UPLOAD;
+    D3D12_RESOURCE_DESC bd = {0};
+    bd.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER; bd.Width = total; bd.Height = 1;
+    bd.DepthOrArraySize = 1; bd.MipLevels = 1; bd.SampleDesc.Count = 1; bd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+    if (FAILED(s_d3d.device->lpVtbl->CreateCommittedResource(s_d3d.device, &hp, D3D12_HEAP_FLAG_NONE, &bd,
+            D3D12_RESOURCE_STATE_GENERIC_READ, NULL, &IID_ID3D12Resource, (void**)&s_aa_up))) {
+        s_aa_up = NULL; s_aa_failed[2] = 1; return;
+    }
+    u8* m = NULL; D3D12_RANGE nr = {0, 0};
+    if (FAILED(s_aa_up->lpVtbl->Map(s_aa_up, 0, &nr, (void**)&m)) || !m) { s_aa_failed[2] = 1; return; }
+    for (u32 y = 0; y < AREATEX_HEIGHT; y++)
+        memcpy(m + aoff + (u64)y * ap, areaTexBytes + (size_t)y * AREATEX_PITCH, AREATEX_PITCH);
+    for (u32 y = 0; y < SEARCHTEX_HEIGHT; y++)
+        memcpy(m + soff + (u64)y * sp, searchTexBytes + (size_t)y * SEARCHTEX_PITCH, SEARCHTEX_PITCH);
+    s_aa_up->lpVtbl->Unmap(s_aa_up, 0, NULL);
+    s_aa_area   = aa_tex(AREATEX_WIDTH, AREATEX_HEIGHT, DXGI_FORMAT_R8G8_UNORM, 0, D3D12_RESOURCE_STATE_COPY_DEST);
+    s_aa_search = aa_tex(SEARCHTEX_WIDTH, SEARCHTEX_HEIGHT, DXGI_FORMAT_R8_UNORM, 0, D3D12_RESOURCE_STATE_COPY_DEST);
+    if (!s_aa_area || !s_aa_search) { s_aa_failed[2] = 1; return; }
+    D3D12_TEXTURE_COPY_LOCATION src = {0}, dst = {0};
+    src.pResource = s_aa_up; src.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+    src.PlacedFootprint.Offset = aoff;
+    src.PlacedFootprint.Footprint.Format = DXGI_FORMAT_R8G8_UNORM;
+    src.PlacedFootprint.Footprint.Width = AREATEX_WIDTH; src.PlacedFootprint.Footprint.Height = AREATEX_HEIGHT;
+    src.PlacedFootprint.Footprint.Depth = 1; src.PlacedFootprint.Footprint.RowPitch = ap;
+    dst.pResource = s_aa_area; dst.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+    s_d3d.cmd_list->lpVtbl->CopyTextureRegion(s_d3d.cmd_list, &dst, 0, 0, 0, &src, NULL);
+    src.PlacedFootprint.Offset = soff;
+    src.PlacedFootprint.Footprint.Format = DXGI_FORMAT_R8_UNORM;
+    src.PlacedFootprint.Footprint.Width = SEARCHTEX_WIDTH; src.PlacedFootprint.Footprint.Height = SEARCHTEX_HEIGHT;
+    src.PlacedFootprint.Footprint.RowPitch = sp;
+    dst.pResource = s_aa_search;
+    s_d3d.cmd_list->lpVtbl->CopyTextureRegion(s_d3d.cmd_list, &dst, 0, 0, 0, &src, NULL);
+    aa_barrier(s_aa_area, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    aa_barrier(s_aa_search, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    srv_write(AA_SRV_BASE + 2, s_aa_area, DXGI_FORMAT_R8G8_UNORM, D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING);
+    srv_write(AA_SRV_BASE + 3, s_aa_search, DXGI_FORMAT_R8_UNORM, D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING);
+    s_aa_luts_ready = 1;
+}
+
+/* Frame-sized targets, recreated when the render size changes. */
+static int aa_targets(u32 w, u32 h)
+{
+    if (s_aa_color && s_aa_w == w && s_aa_h == h) return 1;
+    defer_release(s_aa_color); defer_release(s_aa_edges); defer_release(s_aa_weights);
+    s_aa_color   = aa_tex(w, h, DXGI_FORMAT_R8G8B8A8_UNORM, 0, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    s_aa_edges   = aa_tex(w, h, DXGI_FORMAT_R8G8B8A8_UNORM, 1, D3D12_RESOURCE_STATE_RENDER_TARGET);
+    s_aa_weights = aa_tex(w, h, DXGI_FORMAT_R8G8B8A8_UNORM, 1, D3D12_RESOURCE_STATE_RENDER_TARGET);
+    if (!s_aa_color || !s_aa_edges || !s_aa_weights) {
+        defer_release(s_aa_color); defer_release(s_aa_edges); defer_release(s_aa_weights);
+        s_aa_color = s_aa_edges = s_aa_weights = NULL; s_aa_w = s_aa_h = 0;
+        return 0;
+    }
+    s_aa_w = w; s_aa_h = h;
+    srv_write(AA_SRV_BASE + 0, s_aa_color,   DXGI_FORMAT_R8G8B8A8_UNORM, D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING);
+    srv_write(AA_SRV_BASE + 1, s_aa_edges,   DXGI_FORMAT_R8G8B8A8_UNORM, D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING);
+    srv_write(AA_SRV_BASE + 4, s_aa_weights, DXGI_FORMAT_R8G8B8A8_UNORM, D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING);
+    D3D12_CPU_DESCRIPTOR_HANDLE h0;
+    s_aa_rtv->lpVtbl->GetCPUDescriptorHandleForHeapStart(s_aa_rtv, &h0);
+    const UINT inc = s_d3d.device->lpVtbl->GetDescriptorHandleIncrementSize(s_d3d.device, D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
+    s_d3d.device->lpVtbl->CreateRenderTargetView(s_d3d.device, s_aa_edges, NULL, h0);
+    h0.ptr += inc;
+    s_d3d.device->lpVtbl->CreateRenderTargetView(s_d3d.device, s_aa_weights, NULL, h0);
+    return 1;
+}
+
+static void aa_draw(ID3D12PipelineState* pso, D3D12_CPU_DESCRIPTOR_HANDLE rtv, int clear)
+{
+    ID3D12GraphicsCommandList* cl = s_d3d.cmd_list;
+    if (clear) { const float z[4] = {0, 0, 0, 0}; cl->lpVtbl->ClearRenderTargetView(cl, rtv, z, 0, NULL); }
+    cl->lpVtbl->OMSetRenderTargets(cl, 1, &rtv, FALSE, NULL);
+    cl->lpVtbl->SetPipelineState(cl, pso);
+    cl->lpVtbl->DrawInstanced(cl, 3, 1, 0, 0);
+}
+
+/* fi's backbuffer is in RENDER_TARGET state on entry and on exit. */
+static void aa_apply(u32 fi)
+{
+    if (s_aa_mode < 0) {
+        const char* e = getenv("AA_MODE");
+        s_aa_mode = !e ? 0 : (!_stricmp(e, "fxaa") || !strcmp(e, "1")) ? 1
+                  : (!_stricmp(e, "smaa") || !strcmp(e, "2")) ? 2 : 0;
+    }
+    const int mode = s_aa_mode;
+    if (mode <= 0 || !aa_ready(mode)) return;
+    const u32 w = rs_dim(s_d3d.width, s_rs), h = rs_dim(s_d3d.height, s_rs);
+    if (!aa_targets(w, h)) return;
+    if (mode == 2) { aa_upload_luts(); if (!s_aa_luts_ready) return; }
+    ID3D12GraphicsCommandList* cl = s_d3d.cmd_list;
+    ID3D12Resource* bb = s_d3d.render_targets[fi];
+
+    /* the finished frame -> colour texture */
+    aa_barrier(bb, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_COPY_SOURCE);
+    aa_barrier(s_aa_color, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_DEST);
+    cl->lpVtbl->CopyResource(cl, s_aa_color, bb);
+    aa_barrier(s_aa_color, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    aa_barrier(bb, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET);
+
+    cl->lpVtbl->SetDescriptorHeaps(cl, 1, &s_d3d.srv_heap);
+    cl->lpVtbl->SetGraphicsRootSignature(cl, s_aa_rs);
+    const float metrics[4] = { 1.0f / (float)w, 1.0f / (float)h, (float)w, (float)h };
+    cl->lpVtbl->SetGraphicsRoot32BitConstants(cl, 0, 4, metrics, 0);
+    D3D12_GPU_DESCRIPTOR_HANDLE gh;
+    s_d3d.srv_heap->lpVtbl->GetGPUDescriptorHandleForHeapStart(s_d3d.srv_heap, &gh);
+    gh.ptr += (u64)AA_SRV_BASE * s_d3d.srv_inc;
+    cl->lpVtbl->SetGraphicsRootDescriptorTable(cl, 1, gh);
+    D3D12_VIEWPORT vp = {0, 0, (float)w, (float)h, 0.0f, 1.0f};
+    D3D12_RECT sc = {0, 0, (LONG)w, (LONG)h};
+    { static int split = -1;   /* AA_SPLIT=1: right half only, to compare in one frame */
+      if (split < 0) split = getenv("AA_SPLIT") ? 1 : 0;
+      if (split) sc.left = (LONG)(w / 2); }
+    cl->lpVtbl->RSSetViewports(cl, 1, &vp);
+    cl->lpVtbl->RSSetScissorRects(cl, 1, &sc);
+    cl->lpVtbl->IASetPrimitiveTopology(cl, D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+
+    D3D12_CPU_DESCRIPTOR_HANDLE bb_rtv;
+    s_d3d.rtv_heap->lpVtbl->GetCPUDescriptorHandleForHeapStart(s_d3d.rtv_heap, &bb_rtv);
+    bb_rtv.ptr += (u64)fi * s_d3d.rtv_descriptor_size;
+    if (mode == 1) {
+        aa_draw(s_aa_fxaa, bb_rtv, 0);
+        return;
+    }
+    D3D12_CPU_DESCRIPTOR_HANDLE e_rtv, w_rtv;
+    s_aa_rtv->lpVtbl->GetCPUDescriptorHandleForHeapStart(s_aa_rtv, &e_rtv);
+    w_rtv = e_rtv;
+    w_rtv.ptr += s_d3d.device->lpVtbl->GetDescriptorHandleIncrementSize(s_d3d.device, D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
+    aa_draw(s_aa_edge, e_rtv, 1);
+    aa_barrier(s_aa_edges, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    aa_draw(s_aa_weight, w_rtv, 1);
+    aa_barrier(s_aa_weights, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    aa_draw(s_aa_show ? s_aa_show : s_aa_blend, bb_rtv, 0);
+    aa_barrier(s_aa_edges, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET);
+    aa_barrier(s_aa_weights, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET);
+}
+
 static void composite_present(u32 fi)
 {
     u32 want = s_composite_src;
@@ -7519,6 +7948,7 @@ static void render_frame_impl(void)
 skip_dump_consider: ;
     guest_fb_present(fi);
     composite_present(fi);
+    if (s_rb.present) aa_apply(fi);   /* anti-aliasing on the finished frame */
     int dumping = (s_d3d.dump_frames_left > 0 && s_d3d.readback_buf
                    && s_d3d.dump_skip_left == 0);
     { static int mind2 = -1;

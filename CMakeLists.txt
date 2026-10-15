@@ -91,6 +91,19 @@ target_include_directories(ps3recomp_runtime PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/include"
 )
 
+# SMAA (third_party/smaa, MIT): the D3D12 backend compiles SMAA.hlsl at run
+# time, so its source is embedded as a byte array. AreaTex.h / SearchTex.h are
+# included directly.
+set(_smaa_src "${CMAKE_CURRENT_SOURCE_DIR}/third_party/smaa/SMAA.hlsl")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_smaa_src}")
+file(READ "${_smaa_src}" _smaa_hex HEX)
+string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1," _smaa_hex "${_smaa_hex}")
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/generated/smaa_hlsl.h"
+     "/* generated from third_party/smaa/SMAA.hlsl */\nstatic const char k_smaa_hlsl[] = {${_smaa_hex}0x00};\n")
+target_include_directories(ps3recomp_runtime PRIVATE
+    "${CMAKE_CURRENT_BINARY_DIR}/generated"
+    "${CMAKE_CURRENT_SOURCE_DIR}/third_party/smaa"
+)
 # HLE modules include their own headers
 target_include_directories(ps3recomp_runtime PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/libs/system"
