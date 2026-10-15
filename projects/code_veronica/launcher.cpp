@@ -257,14 +257,53 @@ void save_settings(const Settings& s)
     }
 }
 
+/* The recompiled code is the translation of one exact EBOOT: the PSN European
+ * release NPEB00553, APP_VER 01.00. PARAM.SFO names the title and version
+ * cheaply enough to check on every repaint; the ELF's SHA-1 is checked once
+ * on Jogar (prepare_eboot), since an update can change the EBOOT alone. */
+const char* GAME_VERSION = "01.00";
+const char* GAME_ELF_SHA1 = "d0c9d3ab3a5ed12c80ab77fe73fa58d464083fa1";
+
+/* One string field of a PARAM.SFO, or "" if the file or the key is missing. */
+std::string sfo_field(const fs::path& sfo, const char* key)
+{
+    FILE* f = _wfopen(sfo.c_str(), L"rb");
+    if (!f) return "";
+    std::vector<unsigned char> d(64 * 1024);
+    d.resize(fread(d.data(), 1, d.size(), f));
+    fclose(f);
+    auto u32 = [&](size_t o) { return o + 4 <= d.size() ? (uint32_t)(d[o] | d[o+1] << 8 | d[o+2] << 16 | d[o+3] << 24) : 0u; };
+    if (d.size() < 20 || (d[0] || memcmp(&d[1], "PSF", 3))) return "";
+    const uint32_t keys = u32(8), data = u32(12), n = u32(16);
+    for (uint32_t i = 0; i < n && 20 + 16 * i + 16 <= d.size(); i++) {
+        const size_t e = 20 + 16 * (size_t)i;
+        const size_t ko = keys + (d[e] | d[e+1] << 8), vo = data + u32(e + 12), len = u32(e + 4);
+        if (ko >= d.size() || vo + len > d.size()) continue;
+        if (strncmp((const char*)&d[ko], key, d.size() - ko) == 0)
+            return std::string((const char*)&d[vo], strnlen((const char*)&d[vo], len));
+    }
+    return "";
+}
+
 /* Validation of the three paths. */
 std::wstring check_game(const std::wstring& g, bool* ok)
 {
     std::error_code ec; *ok = false;
     if (g.empty()) return T(S_CHK_GAME_CHOOSE);
-    if (fs::exists(fs::path(g) / L"USRDIR" / L"EBOOT.BIN", ec)) { *ok = true; return T(S_CHK_GAME_OK); }
-    if (fs::exists(fs::path(g) / L"USRDIR" / L"EBOOT.elf", ec)) { *ok = true; return T(S_CHK_GAME_ELF); }
-    return T(S_CHK_GAME_BAD);
+    const fs::path root(g);
+    const bool bin = fs::exists(root / L"USRDIR" / L"EBOOT.BIN", ec);
+    if (!bin && !fs::exists(root / L"USRDIR" / L"EBOOT.elf", ec)) return T(S_CHK_GAME_BAD);
+    const std::string id = sfo_field(root / L"PARAM.SFO", "TITLE_ID");
+    const std::string ver = sfo_field(root / L"PARAM.SFO", "APP_VER");
+    if (id.empty()) return T(S_CHK_GAME_NO_SFO);
+    if (widen(id.c_str()) != GAME_CODE) {
+        std::wstring m = T(S_CHK_GAME_OTHER_FMT); m.replace(m.find(L"%s"), 2, widen(id.c_str())); return m;
+    }
+    if (ver != GAME_VERSION) {
+        std::wstring m = T(S_CHK_GAME_VER_FMT); m.replace(m.find(L"%s"), 2, widen(ver.c_str())); return m;
+    }
+    *ok = true;
+    return T(bin ? S_CHK_GAME_OK : S_CHK_GAME_ELF);
 }
 std::wstring check_rap(const std::wstring& r, bool* ok)
 {
@@ -1108,7 +1147,7 @@ void quit_game()
     else ExitProcess(0);   /* still booting: nothing to close yet */
 }
 void start_game();
-bool prepare_eboot();
+int prepare_eboot();
 
 void changed() { save_settings(g.s); g.play_msg.clear(); apply_live(); InvalidateRect(g.hwnd, NULL, FALSE); }
 
@@ -1156,7 +1195,7 @@ void click(int id)
     else if (id == ID_PLAY) {
         bool ok; check_game(g.s.game, &ok);
         if (!ok) { g.page = P_JOGO; g.play_msg = T(S_SET_FOLDER_FIRST); }
-        else if (!prepare_eboot()) { g.page = P_JOGO; g.play_msg = T(S_DECRYPT_FAIL); }
+        else if (int e = prepare_eboot()) { g.page = P_JOGO; g.play_msg = T(e); }
         else { save_settings(g.s); start_game(); }
     }
     else if (id == ID_RESUME) { hide_menu(); return; }
@@ -1280,29 +1319,45 @@ std::string narrow(const std::wstring& w)
 HANDLE s_play_ev;
 
 extern "C" int npdrm_self_decrypt(const char* self_path, const char* rap_path, const char* out_path);
+extern "C" int edat_sha1_file(const char* path, unsigned char out[20]);
+
+/* True if the ELF is the exact one the recompiled code came from. */
+bool eboot_matches(const std::string& elf)
+{
+    unsigned char h[20];
+    if (edat_sha1_file(elf.c_str(), h) != 0) return false;
+    char hex[41];
+    for (int i = 0; i < 20; i++) snprintf(hex + 2 * i, 3, "%02x", h[i]);
+    return strcmp(hex, GAME_ELF_SHA1) == 0;
+}
 
 /* The game runs from the plain ELF. A PSN copy only has the encrypted
  * EBOOT.BIN, so it is decrypted once with the .rap (the same steps RPCS3
  * takes) into eboot_cache beside the shader cache, and reused while it is
  * newer than the EBOOT.BIN. A folder that already holds a decrypted
  * USRDIR/EBOOT.elf and no EBOOT.BIN is used as it is. */
-bool prepare_eboot()
+int prepare_eboot()
 {
     std::error_code ec;
     const fs::path usr = fs::path(g.s.game) / L"USRDIR", bin = usr / L"EBOOT.BIN";
-    if (!fs::exists(bin, ec)) { g.eboot = narrow((usr / L"EBOOT.elf").wstring()); return true; }
+    if (!fs::exists(bin, ec)) {
+        g.eboot = narrow((usr / L"EBOOT.elf").wstring());
+        return eboot_matches(g.eboot) ? 0 : S_EBOOT_MISMATCH;
+    }
     wchar_t cwd[MAX_PATH]; GetCurrentDirectoryW(MAX_PATH, cwd);
     const fs::path out = fs::path(cwd) / L"eboot_cache" / GAME_CODE / L"EBOOT.elf";
     g.eboot = narrow(out.wstring());
-    if (fs::exists(out, ec) && fs::last_write_time(out, ec) >= fs::last_write_time(bin, ec)) return true;
-    if (g.s.rap.empty()) return false;
-    fs::create_directories(out.parent_path(), ec);
-    return npdrm_self_decrypt(narrow(bin.wstring()).c_str(), narrow(g.s.rap).c_str(),
-                              g.eboot.c_str()) == 0;
+    if (!fs::exists(out, ec) || fs::last_write_time(out, ec) < fs::last_write_time(bin, ec)) {
+        if (g.s.rap.empty()) return S_DECRYPT_FAIL;
+        fs::create_directories(out.parent_path(), ec);
+        if (npdrm_self_decrypt(narrow(bin.wstring()).c_str(), narrow(g.s.rap).c_str(), g.eboot.c_str()) != 0)
+            return S_DECRYPT_FAIL;
+    }
+    if (eboot_matches(g.eboot)) return 0;
+    fs::remove(out, ec);            /* not this version: do not keep it as a cache */
+    return S_EBOOT_MISMATCH;
 }
 
-/* Jogar: hand the choices to the runtime as environment, then keep this
- * window as the in-game options menu. */
 void start_game()
 {
     const Settings& s = g.s;

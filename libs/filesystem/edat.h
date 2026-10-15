@@ -59,6 +59,10 @@ int edat_selftest(void);
  * failure (reason logged; a wrong .rap is reported as such). */
 int npdrm_self_decrypt(const char* self_path, const char* rap_path, const char* out_path);
 
+/* SHA-1 of a whole file (the launcher's check that an ELF is the version the
+ * recompiled code was built from). 0 on success, -1 if it cannot be read. */
+int edat_sha1_file(const char* path, uint8_t out[20]);
+
 #ifdef __cplusplus
 }
 #endif

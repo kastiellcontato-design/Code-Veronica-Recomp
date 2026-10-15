@@ -977,3 +977,17 @@ done:
     free(d);
     return rc;
 }
+
+int edat_sha1_file(const char* path, uint8_t out[20])
+{
+    FILE* f = fopen(path, "rb");
+    if (!f) return -1;
+    sha1_ctx c;
+    sha1_init(&c);
+    static uint8_t buf[1 << 16];
+    size_t n;
+    while ((n = fread(buf, 1, sizeof buf, f)) > 0) sha1_update(&c, buf, n);
+    fclose(f);
+    sha1_final(&c, out);
+    return 0;
+}
