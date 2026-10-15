@@ -218,7 +218,8 @@ Settings load_settings()
         std::error_code ec;
         for (fs::path d = fs::path(exe).parent_path(); !d.empty() && d != d.root_path(); d = d.parent_path()) {
             fs::path g = d / L"JOGO" / GAME_CODE;   /* this checkout keeps the game in <root>/JOGO */
-            if (fs::exists(g / L"USRDIR" / L"EBOOT.elf", ec)) { def_game = g.wstring(); break; }
+            if (fs::exists(g / L"USRDIR" / L"EBOOT.BIN", ec) || fs::exists(g / L"USRDIR" / L"EBOOT.elf", ec))
+            { def_game = g.wstring(); break; }
         }
     }
     s.game = ini_get(L"pastas", L"jogo", def_game);
@@ -261,8 +262,8 @@ std::wstring check_game(const std::wstring& g, bool* ok)
 {
     std::error_code ec; *ok = false;
     if (g.empty()) return T(S_CHK_GAME_CHOOSE);
-    if (fs::exists(fs::path(g) / L"USRDIR" / L"EBOOT.elf", ec)) { *ok = true; return T(S_CHK_GAME_OK); }
-    if (fs::exists(fs::path(g) / L"USRDIR" / L"EBOOT.BIN", ec)) return T(S_CHK_GAME_BIN);
+    if (fs::exists(fs::path(g) / L"USRDIR" / L"EBOOT.BIN", ec)) { *ok = true; return T(S_CHK_GAME_OK); }
+    if (fs::exists(fs::path(g) / L"USRDIR" / L"EBOOT.elf", ec)) { *ok = true; return T(S_CHK_GAME_ELF); }
     return T(S_CHK_GAME_BAD);
 }
 std::wstring check_rap(const std::wstring& r, bool* ok)
@@ -1107,6 +1108,7 @@ void quit_game()
     else ExitProcess(0);   /* still booting: nothing to close yet */
 }
 void start_game();
+bool prepare_eboot();
 
 void changed() { save_settings(g.s); g.play_msg.clear(); apply_live(); InvalidateRect(g.hwnd, NULL, FALSE); }
 
@@ -1154,6 +1156,7 @@ void click(int id)
     else if (id == ID_PLAY) {
         bool ok; check_game(g.s.game, &ok);
         if (!ok) { g.page = P_JOGO; g.play_msg = T(S_SET_FOLDER_FIRST); }
+        else if (!prepare_eboot()) { g.page = P_JOGO; g.play_msg = T(S_DECRYPT_FAIL); }
         else { save_settings(g.s); start_game(); }
     }
     else if (id == ID_RESUME) { hide_menu(); return; }
@@ -1276,6 +1279,28 @@ std::string narrow(const std::wstring& w)
 
 HANDLE s_play_ev;
 
+extern "C" int npdrm_self_decrypt(const char* self_path, const char* rap_path, const char* out_path);
+
+/* The game runs from the plain ELF. A PSN copy only has the encrypted
+ * EBOOT.BIN, so it is decrypted once with the .rap (the same steps RPCS3
+ * takes) into eboot_cache beside the shader cache, and reused while it is
+ * newer than the EBOOT.BIN. A folder that already holds a decrypted
+ * USRDIR/EBOOT.elf and no EBOOT.BIN is used as it is. */
+bool prepare_eboot()
+{
+    std::error_code ec;
+    const fs::path usr = fs::path(g.s.game) / L"USRDIR", bin = usr / L"EBOOT.BIN";
+    if (!fs::exists(bin, ec)) { g.eboot = narrow((usr / L"EBOOT.elf").wstring()); return true; }
+    wchar_t cwd[MAX_PATH]; GetCurrentDirectoryW(MAX_PATH, cwd);
+    const fs::path out = fs::path(cwd) / L"eboot_cache" / GAME_CODE / L"EBOOT.elf";
+    g.eboot = narrow(out.wstring());
+    if (fs::exists(out, ec) && fs::last_write_time(out, ec) >= fs::last_write_time(bin, ec)) return true;
+    if (g.s.rap.empty()) return false;
+    fs::create_directories(out.parent_path(), ec);
+    return npdrm_self_decrypt(narrow(bin.wstring()).c_str(), narrow(g.s.rap).c_str(),
+                              g.eboot.c_str()) == 0;
+}
+
 /* Jogar: hand the choices to the runtime as environment, then keep this
  * window as the in-game options menu. */
 void start_game()
@@ -1311,7 +1336,6 @@ void start_game()
     set_env_default("VP_NOFIXPROJ", "1");
     set_env_default("GCM_PARK_GRACE_MS", "5000");
     set_env_default("PS3_TITLE", "Resident Evil Code: Veronica X");
-    g.eboot = narrow((fs::path(s.game) / L"USRDIR" / L"EBOOT.elf").wstring());
     g.running = true;
     g.applied_mode = s.mode; g.applied_res = s.res; g.applied_aa = s.aa;
     g_rsx_menu_hook = menu_hook;

@@ -130,6 +130,7 @@ projects/*/spu-run-*.txt
 third_party/ffmpeg/bin/
 .mcp.json
 projects/*/shader_cache/
+projects/*/eboot_cache/
 projects/*/spu_dump/
 projects/*/audio-capture.f32
 

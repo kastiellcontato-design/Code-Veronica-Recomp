@@ -53,6 +53,12 @@ const char* edat_resolve(const char* host_path, char* buf, size_t cap);
  * expensive failure mode this file can have. */
 int edat_selftest(void);
 
+/* Decrypt an NPDRM application SELF (a PSN EBOOT.BIN) into the plain ELF, using
+ * the title's .rap licence, as RPCS3's Crypto/unself.cpp does. The output is
+ * written to out_path.part and renamed into place. 0 on success, negative on
+ * failure (reason logged; a wrong .rap is reported as such). */
+int npdrm_self_decrypt(const char* self_path, const char* rap_path, const char* out_path);
+
 #ifdef __cplusplus
 }
 #endif

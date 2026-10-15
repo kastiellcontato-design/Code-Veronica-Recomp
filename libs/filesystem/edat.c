@@ -90,11 +90,34 @@ static void aes128_expand(const uint8_t key[16], uint8_t rk[176])
     }
 }
 
-static void aes128_encrypt_block(const uint8_t rk[176], const uint8_t in[16], uint8_t out[16])
+/* 15 round keys of 16 bytes (the SELF metadata info is AES-256). */
+static void aes256_expand(const uint8_t key[32], uint8_t rk[240])
+{
+    memcpy(rk, key, 32);
+    uint8_t rcon = 1;
+    for (int i = 32; i < 240; i += 4) {
+        uint8_t t[4];
+        memcpy(t, rk + i - 4, 4);
+        if ((i % 32) == 0) {
+            uint8_t tmp = t[0];
+            t[0] = (uint8_t)(AES_SBOX[t[1]] ^ rcon);
+            t[1] = AES_SBOX[t[2]];
+            t[2] = AES_SBOX[t[3]];
+            t[3] = AES_SBOX[tmp];
+            rcon = xtime(rcon);
+        } else if ((i % 32) == 16) {
+            for (int j = 0; j < 4; j++) t[j] = AES_SBOX[t[j]];
+        }
+        for (int j = 0; j < 4; j++) rk[i + j] = (uint8_t)(rk[i - 32 + j] ^ t[j]);
+    }
+}
+
+/* nr = 10 for AES-128, 14 for AES-256. */
+static void aes_encrypt_rounds(const uint8_t* rk, int nr, const uint8_t in[16], uint8_t out[16])
 {
     uint8_t s[16];
     for (int i = 0; i < 16; i++) s[i] = (uint8_t)(in[i] ^ rk[i]);
-    for (int round = 1; round <= 10; round++) {
+    for (int round = 1; round <= nr; round++) {
         for (int i = 0; i < 16; i++) s[i] = AES_SBOX[s[i]];
         /* ShiftRows (state is column-major: byte i is row i%4, column i/4). */
         uint8_t t[16];
@@ -102,7 +125,7 @@ static void aes128_encrypt_block(const uint8_t rk[176], const uint8_t in[16], ui
             for (int r = 0; r < 4; r++)
                 t[c * 4 + r] = s[((c + r) % 4) * 4 + r];
         memcpy(s, t, 16);
-        if (round != 10) {
+        if (round != nr) {
             for (int c = 0; c < 4; c++) {
                 uint8_t* p = s + c * 4;
                 uint8_t a0 = p[0], a1 = p[1], a2 = p[2], a3 = p[3];
@@ -117,12 +140,17 @@ static void aes128_encrypt_block(const uint8_t rk[176], const uint8_t in[16], ui
     memcpy(out, s, 16);
 }
 
-static void aes128_decrypt_block(const uint8_t rk[176], const uint8_t in[16], uint8_t out[16])
+static void aes128_encrypt_block(const uint8_t rk[176], const uint8_t in[16], uint8_t out[16])
+{
+    aes_encrypt_rounds(rk, 10, in, out);
+}
+
+static void aes_decrypt_rounds(const uint8_t* rk, int nr, const uint8_t in[16], uint8_t out[16])
 {
     aes_build_isbox();
     uint8_t s[16];
-    for (int i = 0; i < 16; i++) s[i] = (uint8_t)(in[i] ^ rk[160 + i]);
-    for (int round = 9; round >= 0; round--) {
+    for (int i = 0; i < 16; i++) s[i] = (uint8_t)(in[i] ^ rk[nr * 16 + i]);
+    for (int round = nr - 1; round >= 0; round--) {
         /* InvShiftRows */
         uint8_t t[16];
         for (int c = 0; c < 4; c++)
@@ -143,6 +171,11 @@ static void aes128_decrypt_block(const uint8_t rk[176], const uint8_t in[16], ui
         }
     }
     memcpy(out, s, 16);
+}
+
+static void aes128_decrypt_block(const uint8_t rk[176], const uint8_t in[16], uint8_t out[16])
+{
+    aes_decrypt_rounds(rk, 10, in, out);
 }
 
 static void aes128_cbc_decrypt(const uint8_t key[16], const uint8_t iv[16],
@@ -354,6 +387,19 @@ int edat_selftest(void)
     if (memcmp(out, c, 16) != 0) return -1;
     aes128_decrypt_block(rk, c, out);
     if (memcmp(out, p, 16) != 0) return -2;
+
+    /* FIPS-197 C.3 AES-256 (the SELF metadata layer) */
+    {
+        static const uint8_t c256[16] = {0x8e,0xa2,0xb7,0xca,0x51,0x67,0x45,0xbf,
+                                         0xea,0xfc,0x49,0x90,0x4b,0x49,0x60,0x89};
+        uint8_t k256[32], rk256[240];
+        for (int i = 0; i < 32; i++) k256[i] = (uint8_t)i;
+        aes256_expand(k256, rk256);
+        aes_encrypt_rounds(rk256, 14, p, out);
+        if (memcmp(out, c256, 16) != 0) return -5;
+        aes_decrypt_rounds(rk256, 14, c256, out);
+        if (memcmp(out, p, 16) != 0) return -6;
+    }
 
     /* RFC 4493 AES-CMAC, empty message */
     static const uint8_t ck[16] = {0x2b,0x7e,0x15,0x16,0x28,0xae,0xd2,0xa6,
@@ -698,4 +744,236 @@ const char* edat_resolve(const char* host_path, char* buf, size_t cap)
 
     if (edat_decrypt_file(host_path, buf) != 0) return host_path;
     return buf;
+}
+
+/* ---------------------------------------------------------------------------
+ * NPDRM SELF (EBOOT.BIN) -> ELF
+ *
+ * The same chain RPCS3 runs in Crypto/unself.cpp (SELFDecrypter::LoadMetadata,
+ * DecryptData, WriteElf), in the same order so the two can be diffed:
+ *
+ *   klicensee = rap_to_rif(.rap), AES-ECB-decrypted with NP_KLIC_KEY
+ *   metadata info (0x40)  AES-128-CBC with the klicensee, zero IV,
+ *                         then AES-256-CBC with the NPDRM key for the key revision
+ *   metadata headers      AES-128-CTR with the key/IV from the metadata info
+ *   each section          AES-128-CTR with its key/IV from the data key table,
+ *                         then zlib-inflated into the program segment it names
+ *
+ * The ELF header, program headers and section headers are stored in the clear
+ * inside the SELF and are copied as they are.
+ * -----------------------------------------------------------------------*/
+#define STB_IMAGE_STATIC
+#define STB_IMAGE_IMPLEMENTATION
+#define STBI_ONLY_PNG
+#define STBI_NO_STDIO
+#define STBI_NO_FAILURE_STRINGS
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wunused-function"
+#endif
+#include "../codec/stb_image.h"      /* for its zlib inflate only */
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#endif
+
+static const uint8_t NP_KLIC_KEY[16] = {
+    0xF2,0xFB,0xCA,0x7A,0x75,0xB0,0x4E,0xDC,0x13,0x90,0x63,0x8C,0xCD,0xFD,0xD1,0xEE};
+
+/* RPCS3 key_vault.cpp LoadSelfNPDRMKeys: erk and riv by key revision. */
+static const struct { uint16_t rev; uint8_t erk[32]; uint8_t riv[16]; } SELF_NPDRM_KEYS[] = {
+    { 0x0007,
+      {0x39,0x46,0xDF,0xAA,0x14,0x17,0x18,0xC7,0xBE,0x33,0x9A,0x0D,0x6C,0x26,0x30,0x1C,
+       0x76,0xB5,0x68,0xAE,0xBC,0x5C,0xD5,0x26,0x52,0xF2,0xE2,0xE0,0x29,0x74,0x37,0xC3},
+      {0xE4,0x89,0x7B,0xE5,0x53,0xAE,0x02,0x5C,0xDC,0xBF,0x2B,0x15,0xD1,0xC9,0x23,0x4E} },
+};
+
+static uint16_t be16(const uint8_t* p) { return (uint16_t)(p[0] << 8 | p[1]); }
+
+static void aes256_cbc_decrypt(const uint8_t key[32], const uint8_t iv[16],
+                               uint8_t* buf, size_t len)
+{
+    uint8_t rk[240], prev[16], cur[16];
+    aes256_expand(key, rk);
+    memcpy(prev, iv, 16);
+    for (size_t off = 0; off + 16 <= len; off += 16) {
+        memcpy(cur, buf + off, 16);
+        aes_decrypt_rounds(rk, 14, cur, buf + off);
+        for (int i = 0; i < 16; i++) buf[off + i] ^= prev[i];
+        memcpy(prev, cur, 16);
+    }
+}
+
+/* AES-128-CTR with a 128-bit big-endian counter, as mbedTLS aes_crypt_ctr. */
+static void aes128_ctr(const uint8_t key[16], const uint8_t iv[16], uint8_t* buf, size_t len)
+{
+    uint8_t rk[176], ctr[16], ks[16];
+    aes128_expand(key, rk);
+    memcpy(ctr, iv, 16);
+    for (size_t off = 0; off < len; off += 16) {
+        aes128_encrypt_block(rk, ctr, ks);
+        size_t n = len - off < 16 ? len - off : 16;
+        for (size_t i = 0; i < n; i++) buf[off + i] ^= ks[i];
+        for (int i = 15; i >= 0 && ++ctr[i] == 0; i--) {}
+    }
+}
+
+static int self_fail(const char* why)
+{
+    fprintf(stderr, "[self] %s\n", why);
+    return -1;
+}
+
+static uint8_t* read_whole(const char* path, size_t* size)
+{
+    FILE* f = fopen(path, "rb");
+    if (!f) return NULL;
+    fseek(f, 0, SEEK_END);
+    long n = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    uint8_t* d = n > 0 ? (uint8_t*)malloc((size_t)n) : NULL;
+    if (d && fread(d, 1, (size_t)n, f) != (size_t)n) { free(d); d = NULL; }
+    fclose(f);
+    *size = d ? (size_t)n : 0;
+    return d;
+}
+
+int npdrm_self_decrypt(const char* self_path, const char* rap_path, const char* out_path)
+{
+    if (edat_selftest() != 0) return self_fail("AES self-test failed; refusing to decrypt");
+
+    size_t size = 0, rap_size = 0;
+    uint8_t* d = read_whole(self_path, &size);
+    if (!d) return self_fail("cannot read the SELF");
+    uint8_t* rap = read_whole(rap_path, &rap_size);
+    int rc = -1;
+    uint8_t* elf = NULL;
+    uint8_t* meta = NULL;
+    if (!rap || rap_size != 16) { self_fail("the .rap must be exactly 16 bytes"); goto done; }
+    if (size < 0x90 || be32(d) != 0x53434500 || be16(d + 10) != 1) { self_fail("not a SELF"); goto done; }
+
+    const uint16_t key_rev = be16(d + 8);
+    const uint64_t meta_off = be32(d + 12), hdr_len = be64(d + 16);
+    const uint64_t appinfo = be64(d + 0x28), elf_off = be64(d + 0x30), phdr_off = be64(d + 0x38);
+    const uint64_t shdr_off = be64(d + 0x40), ctrl_off = be64(d + 0x58), ctrl_len = be64(d + 0x60);
+    if (hdr_len > size || appinfo + 0x20 > size || elf_off + 64 > size || ctrl_off + ctrl_len > size ||
+        meta_off + 0x20 + 0x40 + 0x20 > hdr_len) { self_fail("SELF header out of range"); goto done; }
+    if (key_rev & 0x8000) { self_fail("debug SELF: use tools/unfself.py"); goto done; }
+    if (be32(d + appinfo + 12) != 8) { self_fail("not an NPDRM application SELF"); goto done; }
+
+    const uint8_t *erk = NULL, *riv = NULL;
+    for (size_t i = 0; i < sizeof SELF_NPDRM_KEYS / sizeof SELF_NPDRM_KEYS[0]; i++)
+        if (SELF_NPDRM_KEYS[i].rev == key_rev) { erk = SELF_NPDRM_KEYS[i].erk; riv = SELF_NPDRM_KEYS[i].riv; }
+    if (!erk) { fprintf(stderr, "[self] no key for revision 0x%04X\n", key_rev); goto done; }
+
+    /* Control info type 3 holds the NPD header; licences 1 and 2 need the .rap. */
+    const uint8_t* npd = NULL;
+    for (uint64_t o = ctrl_off; o + 0x10 <= ctrl_off + ctrl_len; ) {
+        uint32_t type = be32(d + o), len = be32(d + o + 4);
+        if (type == 3 && o + 0x10 + 0x80 <= size) npd = d + o + 0x10;
+        if (!len) break;
+        o += len;
+    }
+    if (!npd || be32(npd) != 0x4E504400) { self_fail("no NPD header in the control info"); goto done; }
+    const uint32_t license = be32(npd + 8);
+    if (license != 1 && license != 2) { fprintf(stderr, "[self] unexpected licence type %u\n", license); goto done; }
+
+    uint8_t klic[16], rk[176];
+    edat_rap_key(rap, klic);
+    aes128_expand(NP_KLIC_KEY, rk);
+    aes128_decrypt_block(rk, klic, klic);
+
+    /* Metadata info: the klicensee layer, then the key-vault layer. */
+    uint8_t info[0x40];
+    static const uint8_t zero_iv[16] = {0};
+    aes128_cbc_decrypt(klic, zero_iv, d + meta_off + 0x20, info, sizeof info);
+    aes256_cbc_decrypt(erk, riv, info, sizeof info);
+    memset(klic, 0, sizeof klic);
+    if (info[0x10] || info[0x30]) { self_fail("metadata did not decrypt: wrong .rap for this EBOOT.BIN?"); goto done; }
+
+    const size_t meta_len = (size_t)(hdr_len - (meta_off + 0x20 + 0x40));
+    meta = (uint8_t*)malloc(meta_len);
+    if (!meta) goto done;
+    memcpy(meta, d + meta_off + 0x20 + 0x40, meta_len);
+    aes128_ctr(info, info + 0x20, meta, meta_len);
+    memset(info, 0, sizeof info);
+
+    const uint32_t nsec = be32(meta + 12), nkeys = be32(meta + 16);
+    if (0x20 + (size_t)nsec * 0x30 + (size_t)nkeys * 16 > meta_len) { self_fail("metadata headers out of range"); goto done; }
+    const uint8_t* keys = meta + 0x20 + (size_t)nsec * 0x30;
+
+    /* ELF64 header, program headers and section headers are plain copies. */
+    const uint8_t* eh = d + elf_off;
+    if (memcmp(eh, "\x7f" "ELF", 4) || eh[4] != 2) { self_fail("embedded ELF header is not ELF64"); goto done; }
+    const uint64_t e_phoff = be64(eh + 0x20), e_shoff = be64(eh + 0x28);
+    const uint16_t phnum = be16(eh + 0x38), shnum = be16(eh + 0x3C);
+    if (phdr_off + (uint64_t)phnum * 0x38 > size || (shdr_off && shdr_off + (uint64_t)shnum * 0x40 > size))
+    { self_fail("ELF tables out of range"); goto done; }
+    uint64_t out_size = e_phoff + (uint64_t)phnum * 0x38;
+    if (shdr_off) { uint64_t e = e_shoff + (uint64_t)shnum * 0x40; if (e > out_size) out_size = e; }
+    for (uint32_t i = 0; i < nsec; i++) {
+        const uint8_t* sh = meta + 0x20 + i * 0x30;
+        uint32_t prog = be32(sh + 20);
+        if (be32(sh + 16) != 2) continue;
+        if (prog >= phnum) { self_fail("section names a missing program header"); goto done; }
+        const uint8_t* ph = d + phdr_off + (size_t)prog * 0x38;
+        uint64_t e = be64(ph + 8) + be64(ph + 32);
+        if (e > out_size) out_size = e;
+    }
+    if (out_size > (1u << 30)) { self_fail("ELF too large"); goto done; }
+    elf = (uint8_t*)calloc(1, (size_t)out_size);
+    if (!elf) goto done;
+    memcpy(elf, eh, 64);
+    memcpy(elf + e_phoff, d + phdr_off, (size_t)phnum * 0x38);
+
+    for (uint32_t i = 0; i < nsec; i++) {
+        const uint8_t* sh = meta + 0x20 + i * 0x30;
+        const uint64_t off = be64(sh), len = be64(sh + 8);
+        const uint32_t type = be32(sh + 16), prog = be32(sh + 20), enc = be32(sh + 32);
+        const uint32_t ki = be32(sh + 36), vi = be32(sh + 40), comp = be32(sh + 44);
+        if (type != 2) continue;
+        if (off + len > size) { self_fail("section data out of range"); goto done; }
+        uint8_t* buf = (uint8_t*)malloc(len ? (size_t)len : 1);
+        if (!buf) goto done;
+        memcpy(buf, d + off, (size_t)len);
+        if (enc == 3) {
+            if (ki >= nkeys || vi >= nkeys) { free(buf); self_fail("section key index out of range"); goto done; }
+            aes128_ctr(keys + (size_t)ki * 16, keys + (size_t)vi * 16, buf, (size_t)len);
+        }
+        const uint8_t* ph = d + phdr_off + (size_t)prog * 0x38;
+        const uint64_t p_off = be64(ph + 8), p_filesz = be64(ph + 32);
+        if (comp == 2) {
+            int got = stbi_zlib_decode_buffer((char*)elf + p_off, (int)p_filesz, (const char*)buf, (int)len);
+            if (got != (int)p_filesz) {
+                free(buf);
+                fprintf(stderr, "[self] segment %u failed to inflate (%d of %llu bytes)\n",
+                        prog, got, (unsigned long long)p_filesz);
+                goto done;
+            }
+        } else {
+            if (len > p_filesz) { free(buf); self_fail("plain section larger than its segment"); goto done; }
+            memcpy(elf + p_off, buf, (size_t)len);
+        }
+        free(buf);
+    }
+    if (shdr_off) memcpy(elf + e_shoff, d + shdr_off, (size_t)shnum * 0x40);
+
+    /* Write beside the target and rename, so a cut-off run leaves no half ELF. */
+    char tmp[1100];
+    if ((size_t)snprintf(tmp, sizeof tmp, "%s.part", out_path) >= sizeof tmp) goto done;
+    FILE* f = fopen(tmp, "wb");
+    if (!f) { self_fail("cannot write the ELF"); goto done; }
+    size_t w = fwrite(elf, 1, (size_t)out_size, f);
+    if (fclose(f) != 0 || w != (size_t)out_size) { remove(tmp); self_fail("short write"); goto done; }
+    remove(out_path);
+    if (rename(tmp, out_path) != 0) { remove(tmp); self_fail("cannot rename the ELF into place"); goto done; }
+    fprintf(stderr, "[self] decrypted %s -> %s (%llu bytes)\n", self_path, out_path,
+            (unsigned long long)out_size);
+    rc = 0;
+
+done:
+    if (rap) { memset(rap, 0, rap_size); free(rap); }
+    free(meta);
+    free(elf);
+    free(d);
+    return rc;
 }
