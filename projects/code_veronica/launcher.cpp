@@ -171,7 +171,7 @@ struct Settings {
     int layout = 2;        /* button icons: 0 PlayStation, 1 Xbox, 2 automatic, 3 keyboard */
     bool overlay = false;  /* the performance overlay (rsx_perf_overlay.h) */
     int overlay_items = 3; /* bits of k_overlay_items: FPS and frame time */
-    bool shader_opt[4] = { true, true, true, true };   /* k_shader_opts, Desempenho page */
+    bool shader_opt[5] = { true, true, true, true, true };   /* k_shader_opts, Desempenho page */
     std::wstring game, rap, fw, saves;
     std::wstring patch_dir;                 /* patch files (patch_files.h) */
     std::vector<std::string> patch_files_on; /* ids of the file patches turned on */
@@ -204,14 +204,17 @@ const int NPATCHES = sizeof k_patches / sizeof k_patches[0];
 /* The SHADERS switches on the Desempenho page (read by the game at start):
  * the pipeline library (PSO_LIBRARY), loading the saved shaders while the
  * game runs or before it goes on (SHADER_PRELOAD), building new ones on the
- * shader workers (FP_ASYNC) and loading the saved ones on several threads
- * (SHADER_PRELOAD_PARALLEL). All on by default. */
+ * shader workers (FP_ASYNC), loading the saved ones on several threads
+ * (SHADER_PRELOAD_PARALLEL) and the note in the game's corner while they load
+ * (SHADER_PRELOAD_NOTE, which the game reads again as it draws, so it changes
+ * at once). All on by default. */
 struct ShaderOpt { const wchar_t* key; int title, desc; };
 const ShaderOpt k_shader_opts[] = {
     { L"cache_pipelines", S_SH_PSO_T, S_SH_PSO_D },
     { L"carregar_em_segundo_plano", S_SH_LOAD_T, S_SH_LOAD_D },
     { L"compilar_em_segundo_plano", S_SH_BUILD_T, S_SH_BUILD_D },
     { L"carregamento_paralelo", S_SH_PAR_T, S_SH_PAR_D },
+    { L"mostrar_progresso", S_SH_NOTE_T, S_SH_NOTE_D },
 };
 const int NSHADER_OPTS = sizeof k_shader_opts / sizeof k_shader_opts[0];
 
@@ -1594,6 +1597,7 @@ void open_in_explorer(const std::wstring& p)
 /* While the game runs: display mode, resolution and controls apply at once. */
 void set_map_env();
 void set_overlay_env();
+void set_env(const char* k, const std::string& v);
 
 void apply_live(bool restore_menu = true)
 {
@@ -1732,7 +1736,11 @@ void click(int id)
         changed();
     }
     else if (id == ID_OVERLAY) { g.s.overlay = !g.s.overlay; set_overlay_env(); changed(); }
-    else if (id >= ID_SHADER_OPT && id < ID_SHADER_OPT + NSHADER_OPTS) { g.s.shader_opt[id - ID_SHADER_OPT] ^= true; changed(); }
+    else if (id >= ID_SHADER_OPT && id < ID_SHADER_OPT + NSHADER_OPTS) {
+        g.s.shader_opt[id - ID_SHADER_OPT] ^= true;
+        set_env("SHADER_PRELOAD_NOTE", g.s.shader_opt[4] ? "1" : "0");   /* the note, at once */
+        changed();
+    }
     else if (id >= ID_OVERLAY_ITEM && id < ID_OVERLAY_ITEM + NOVERLAY) {
         g.s.overlay_items ^= 1 << (id - ID_OVERLAY_ITEM); set_overlay_env(); changed();
     }
@@ -2029,6 +2037,7 @@ void start_game()
     set_env("SHADER_PRELOAD", s.shader_opt[1] ? "bg" : "wait");
     set_env("FP_ASYNC", s.shader_opt[2] ? "1" : "0");
     set_env("SHADER_PRELOAD_PARALLEL", s.shader_opt[3] ? "1" : "0");
+    set_env("SHADER_PRELOAD_NOTE", s.shader_opt[4] ? "1" : "0");
     {   /* file patches: applied by the runtime once the game is loaded */
         if (g.fpatches.empty()) scan_patch_dir();
         std::string w;

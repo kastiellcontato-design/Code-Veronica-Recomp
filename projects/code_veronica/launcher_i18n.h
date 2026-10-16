@@ -53,7 +53,7 @@ enum StrId {
     S_CREDIT_KASTIEL,
     S_SAVE_FOLDER, S_SAVE_HINT, S_SAVE_NO_MOVE, S_SAVE_DEFAULT, S_SAVE_ERROR, S_SAVE_USING_DEFAULT, S_SAVE_SELECTED,
     S_SUPPORTED_VERSIONS, S_REGION_EU, S_REGION_JP, S_REGION_US,
-    S_SH_TITLE, S_SH_HINT, S_SH_PSO_T, S_SH_PSO_D, S_SH_LOAD_T, S_SH_LOAD_D, S_SH_BUILD_T, S_SH_BUILD_D, S_SH_PAR_T, S_SH_PAR_D,
+    S_SH_TITLE, S_SH_HINT, S_SH_PSO_T, S_SH_PSO_D, S_SH_LOAD_T, S_SH_LOAD_D, S_SH_BUILD_T, S_SH_BUILD_D, S_SH_PAR_T, S_SH_PAR_D, S_SH_NOTE_T, S_SH_NOTE_D,
     S_COUNT
 };
 
@@ -150,7 +150,9 @@ static const wchar_t* const k_str_pt[] = {
     L"Compilar novos shaders em segundo plano",
     L"Menos travadas em áreas novas: o jogo continua enquanto os shaders novos compilam. Um objeto pode aparecer um instante depois. Desative se algo continuar faltando.",
     L"Carregamento rápido do cache de shaders (paralelo)",
-    L"Monta os shaders salvos em várias threads da CPU ao mesmo tempo. Desative se o computador ficar pesado logo depois de abrir o jogo."
+    L"Monta os shaders salvos em várias threads da CPU ao mesmo tempo. Desative se o computador ficar pesado logo depois de abrir o jogo.",
+    L"Mostrar o progresso do carregamento",
+    L"Uma nota no canto do jogo mostra quanto dos shaders salvos já carregou e some ao terminar. Desative para não ver a nota; o carregamento continua igual. Muda na hora."
 };
 static_assert(sizeof k_str_pt / sizeof k_str_pt[0] == S_COUNT, "k_str_pt: one text per StrId");
 
@@ -247,7 +249,9 @@ static const wchar_t* const k_str_en[] = {
     L"Compile new shaders in the background",
     L"Fewer hitches in new areas: the game keeps running while new shaders compile. An object may appear a moment later. Turn off if something keeps missing.",
     L"Fast shader cache loading (parallel)",
-    L"Builds the saved shaders on several CPU threads at once. Turn off if the computer feels sluggish right after the game opens."
+    L"Builds the saved shaders on several CPU threads at once. Turn off if the computer feels sluggish right after the game opens.",
+    L"Show loading progress",
+    L"A note in the game's corner shows how much of the saved shaders has loaded and disappears when done. Turn off to hide it; loading works the same. Changes at once."
 };
 static_assert(sizeof k_str_en / sizeof k_str_en[0] == S_COUNT, "k_str_en: one text per StrId");
 
@@ -344,7 +348,9 @@ static const wchar_t* const k_str_es[] = {
     L"Compilar shaders nuevos en segundo plano",
     L"Menos tirones en zonas nuevas: el juego sigue mientras se compilan los shaders nuevos. Un objeto puede aparecer un instante después. Desactívalo si algo sigue faltando.",
     L"Carga rápida de la caché de shaders (paralela)",
-    L"Crea los shaders guardados en varios hilos de la CPU a la vez. Desactívalo si el equipo va lento justo después de abrir el juego."
+    L"Crea los shaders guardados en varios hilos de la CPU a la vez. Desactívalo si el equipo va lento justo después de abrir el juego.",
+    L"Mostrar el progreso de carga",
+    L"Una nota en la esquina del juego muestra cuánto de los shaders guardados ya se cargó y desaparece al terminar. Desactívalo para ocultarla; la carga sigue igual. Cambia al instante."
 };
 static_assert(sizeof k_str_es / sizeof k_str_es[0] == S_COUNT, "k_str_es: one text per StrId");
 
@@ -441,7 +447,9 @@ static const wchar_t* const k_str_ja[] = {
     L"新しいシェーダーをバックグラウンドでコンパイル",
     L"新しいエリアでのカクつきが減ります。新しいシェーダーのコンパイル中もゲームは進みます。物体の表示が一瞬遅れることがあります。何かが表示されないままならオフにしてください。",
     L"シェーダーキャッシュの高速読み込み（並列）",
-    L"保存済みのシェーダーを複数の CPU スレッドで同時に作成します。起動直後に PC が重くなる場合はオフにしてください。"
+    L"保存済みのシェーダーを複数の CPU スレッドで同時に作成します。起動直後に PC が重くなる場合はオフにしてください。",
+    L"読み込みの進行状況を表示",
+    L"保存済みシェーダーの読み込み状況をゲーム画面の隅に表示し、完了すると消えます。オフにすると表示されませんが、読み込みは同じように行われます。すぐに反映されます。"
 };
 static_assert(sizeof k_str_ja / sizeof k_str_ja[0] == S_COUNT, "k_str_ja: one text per StrId");
 
@@ -592,7 +600,9 @@ static const wchar_t* const k_str_fr[] = {
     L"Compiler les nouveaux shaders en arrière-plan",
     L"Moins de saccades dans les nouvelles zones : le jeu continue pendant la compilation des nouveaux shaders. Un objet peut apparaître un instant plus tard. Désactivez si quelque chose manque encore.",
     L"Chargement rapide du cache des shaders (parallèle)",
-    L"Construit les shaders enregistrés sur plusieurs threads du processeur à la fois. Désactivez si l'ordinateur ralentit juste après l'ouverture du jeu."
+    L"Construit les shaders enregistrés sur plusieurs threads du processeur à la fois. Désactivez si l'ordinateur ralentit juste après l'ouverture du jeu.",
+    L"Afficher la progression du chargement",
+    L"Une note dans le coin du jeu indique où en est le chargement des shaders enregistrés et disparaît à la fin. Désactivez pour la masquer ; le chargement reste identique. Effet immédiat."
 };
 static_assert(sizeof k_str_fr / sizeof k_str_fr[0] == S_COUNT, "k_str_fr: one text per StrId");
 
@@ -743,7 +753,9 @@ static const wchar_t* const k_str_de[] = {
     L"Neue Shader im Hintergrund kompilieren",
     L"Weniger Ruckler in neuen Bereichen: Das Spiel läuft weiter, während neue Shader kompiliert werden. Ein Objekt kann einen Moment später erscheinen. Ausschalten, wenn etwas weiterhin fehlt.",
     L"Schnelles Laden des Shader-Caches (parallel)",
-    L"Erstellt die gespeicherten Shader auf mehreren CPU-Threads gleichzeitig. Ausschalten, wenn der PC direkt nach dem Spielstart träge wird."
+    L"Erstellt die gespeicherten Shader auf mehreren CPU-Threads gleichzeitig. Ausschalten, wenn der PC direkt nach dem Spielstart träge wird.",
+    L"Ladefortschritt anzeigen",
+    L"Ein Hinweis in der Ecke des Spiels zeigt, wie viel der gespeicherten Shader geladen ist, und verschwindet danach. Ausschalten, um ihn auszublenden; das Laden bleibt gleich. Wirkt sofort."
 };
 static_assert(sizeof k_str_de / sizeof k_str_de[0] == S_COUNT, "k_str_de: one text per StrId");
 
@@ -894,7 +906,9 @@ static const wchar_t* const k_str_it[] = {
     L"Compila i nuovi shader in background",
     L"Meno scatti nelle nuove aree: il gioco continua mentre i nuovi shader vengono compilati. Un oggetto può apparire un istante dopo. Disattiva se qualcosa continua a mancare.",
     L"Caricamento rapido della cache degli shader (parallelo)",
-    L"Crea gli shader salvati su più thread della CPU contemporaneamente. Disattiva se il computer rallenta subito dopo l'avvio del gioco."
+    L"Crea gli shader salvati su più thread della CPU contemporaneamente. Disattiva se il computer rallenta subito dopo l'avvio del gioco.",
+    L"Mostra l’avanzamento del caricamento",
+    L"Una nota nell'angolo del gioco mostra quanto degli shader salvati è stato caricato e scompare alla fine. Disattiva per nasconderla; il caricamento resta uguale. Effetto immediato."
 };
 static_assert(sizeof k_str_it / sizeof k_str_it[0] == S_COUNT, "k_str_it: one text per StrId");
 
@@ -1045,7 +1059,9 @@ static const wchar_t* const k_str_pl[] = {
     L"Kompiluj nowe shadery w tle",
     L"Mniej przycięć w nowych obszarach: gra działa dalej, gdy kompilują się nowe shadery. Obiekt może pojawić się chwilę później. Wyłącz, jeśli czegoś wciąż brakuje.",
     L"Szybkie wczytywanie pamięci shaderów (równoległe)",
-    L"Buduje zapisane shadery na wielu wątkach procesora jednocześnie. Wyłącz, jeśli komputer zwalnia tuż po uruchomieniu gry."
+    L"Buduje zapisane shadery na wielu wątkach procesora jednocześnie. Wyłącz, jeśli komputer zwalnia tuż po uruchomieniu gry.",
+    L"Pokazuj postęp wczytywania",
+    L"Notka w rogu gry pokazuje, ile zapisanych shaderów już się wczytało, i znika po zakończeniu. Wyłącz, aby jej nie widzieć; wczytywanie działa tak samo. Zmienia się od razu."
 };
 static_assert(sizeof k_str_pl / sizeof k_str_pl[0] == S_COUNT, "k_str_pl: one text per StrId");
 
@@ -1196,7 +1212,9 @@ static const wchar_t* const k_str_tr[] = {
     L"Yeni gölgelendiricileri arka planda derle",
     L"Yeni bölgelerde daha az takılma: yeni gölgelendiriciler derlenirken oyun devam eder. Bir nesne bir an sonra görünebilir. Bir şey eksik kalmaya devam ederse kapatın.",
     L"Gölgelendirici önbelleğini hızlı yükleme (paralel)",
-    L"Kaydedilen gölgelendiricileri aynı anda birden çok CPU iş parçacığında oluşturur. Oyun açıldıktan hemen sonra bilgisayar yavaşlarsa kapatın."
+    L"Kaydedilen gölgelendiricileri aynı anda birden çok CPU iş parçacığında oluşturur. Oyun açıldıktan hemen sonra bilgisayar yavaşlarsa kapatın.",
+    L"Yükleme ilerlemesini göster",
+    L"Oyunun köşesindeki bir not, kaydedilmiş gölgelendiricilerin ne kadarının yüklendiğini gösterir ve bitince kaybolur. Gizlemek için kapatın; yükleme aynı şekilde sürer. Hemen uygulanır."
 };
 static_assert(sizeof k_str_tr / sizeof k_str_tr[0] == S_COUNT, "k_str_tr: one text per StrId");
 
@@ -1347,7 +1365,9 @@ static const wchar_t* const k_str_ar[] = {
     L"ترجمة المظللات الجديدة في الخلفية",
     L"تقطّع أقل في المناطق الجديدة: تستمر اللعبة أثناء ترجمة المظللات الجديدة. قد يظهر جسم ما بعد لحظة. أوقفه إذا ظل شيء مفقودًا.",
     L"تحميل سريع لذاكرة التظليل المؤقتة (متوازٍ)",
-    L"ينشئ المظللات المحفوظة على عدة خيوط من المعالج في الوقت نفسه. أوقفه إذا أصبح الحاسوب بطيئًا بعد فتح اللعبة مباشرة."
+    L"ينشئ المظللات المحفوظة على عدة خيوط من المعالج في الوقت نفسه. أوقفه إذا أصبح الحاسوب بطيئًا بعد فتح اللعبة مباشرة.",
+    L"عرض تقدم التحميل",
+    L"تعرض ملاحظة في زاوية اللعبة مقدار ما حُمِّل من المظللات المحفوظة وتختفي عند الانتهاء. أوقفه لإخفائها؛ يستمر التحميل كما هو. يُطبَّق فورًا."
 };
 static_assert(sizeof k_str_ar / sizeof k_str_ar[0] == S_COUNT, "k_str_ar: one text per StrId");
 
@@ -1498,7 +1518,9 @@ static const wchar_t* const k_str_zh[] = {
     L"在后台编译新着色器",
     L"在新区域卡顿更少：新着色器编译期间游戏继续运行。某个物体可能会稍晚出现。如果仍有东西缺失，请关闭。",
     L"快速加载着色器缓存（并行）",
-    L"同时在多个 CPU 线程上创建已保存的着色器。如果游戏启动后电脑变得卡顿，请关闭。"
+    L"同时在多个 CPU 线程上创建已保存的着色器。如果游戏启动后电脑变得卡顿，请关闭。",
+    L"显示加载进度",
+    L"游戏角落里的提示会显示已保存着色器的加载进度，完成后自动消失。关闭后不显示提示，加载照常进行。立即生效。"
 };
 static_assert(sizeof k_str_zh / sizeof k_str_zh[0] == S_COUNT, "k_str_zh: one text per StrId");
 
@@ -1649,7 +1671,9 @@ static const wchar_t* const k_str_ko[] = {
     L"새 셰이더를 백그라운드에서 컴파일",
     L"새 지역에서 끊김이 줄어듭니다. 새 셰이더를 컴파일하는 동안에도 게임이 계속됩니다. 물체가 잠시 늦게 나타날 수 있습니다. 계속 무언가가 보이지 않으면 끄세요.",
     L"셰이더 캐시 빠른 불러오기 (병렬)",
-    L"저장된 셰이더를 여러 CPU 스레드에서 동시에 만듭니다. 게임 실행 직후 PC가 느려지면 끄세요."
+    L"저장된 셰이더를 여러 CPU 스레드에서 동시에 만듭니다. 게임 실행 직후 PC가 느려지면 끄세요.",
+    L"불러오기 진행 상황 표시",
+    L"저장된 셰이더를 얼마나 불러왔는지 게임 화면 구석에 표시하고, 끝나면 사라집니다. 끄면 표시되지 않지만 불러오기는 똑같이 진행됩니다. 바로 적용됩니다."
 };
 static_assert(sizeof k_str_ko / sizeof k_str_ko[0] == S_COUNT, "k_str_ko: one text per StrId");
 
@@ -1800,7 +1824,9 @@ static const wchar_t* const k_str_ru[] = {
     L"Компилировать новые шейдеры в фоне",
     L"Меньше подтормаживаний в новых местах: игра продолжается, пока компилируются новые шейдеры. Объект может появиться на мгновение позже. Отключите, если что-то по-прежнему пропадает.",
     L"Быстрая загрузка кэша шейдеров (параллельно)",
-    L"Создаёт сохранённые шейдеры сразу в нескольких потоках процессора. Отключите, если компьютер тормозит сразу после запуска игры."
+    L"Создаёт сохранённые шейдеры сразу в нескольких потоках процессора. Отключите, если компьютер тормозит сразу после запуска игры.",
+    L"Показывать ход загрузки",
+    L"Заметка в углу игры показывает, сколько сохранённых шейдеров уже загружено, и исчезает по окончании. Отключите, чтобы её скрыть; загрузка идёт так же. Применяется сразу."
 };
 static_assert(sizeof k_str_ru / sizeof k_str_ru[0] == S_COUNT, "k_str_ru: one text per StrId");
 

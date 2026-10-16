@@ -24,8 +24,14 @@
 enum { OV_FPS = 1, OV_MS = 2, OV_CPU = 4, OV_GPU = 8, OV_RAM = 16, OV_VRAM = 32, OV_SHADERS = 64 };
 
 /* The shader preload (rsx_d3d12_backend.c): 1 while it runs. Its progress
- * shows here whether or not the overlay is on. */
+ * shows here whether or not the overlay is on, unless SHADER_PRELOAD_NOTE=0
+ * (read every refresh, like PERF_OVERLAY). */
 extern int rsx_shader_preload_progress(int* done, int* total);
+static int preload_note_on(void)
+{
+    const char* e = getenv("SHADER_PRELOAD_NOTE");
+    return !(e && e[0] == '0');
+}
 
 static unsigned overlay_items(void)
 {
@@ -279,7 +285,8 @@ const rsx_ui_quad* perf_overlay_quads(uint32_t w, uint32_t h, uint32_t* count)
     static HANDLE gpu;
     *count = 0;
     int pl_done = 0, pl_total = 0;
-    const unsigned items = overlay_items() | (rsx_shader_preload_progress(&pl_done, &pl_total) ? OV_SHADERS : 0);
+    const unsigned items = overlay_items() |
+        (preload_note_on() && rsx_shader_preload_progress(&pl_done, &pl_total) ? OV_SHADERS : 0);
     if (!items || !s_qpf.QuadPart) { last_items = 0; return NULL; }
     if ((items & OV_GPU) && !gpu) gpu = CreateThread(NULL, 0, gpu_thread, NULL, 0, NULL);
     const ULONGLONG now = GetTickCount64();
