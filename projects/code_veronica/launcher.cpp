@@ -60,7 +60,10 @@ void  rsx_d3d12_set_saturation(int saturation);
 void  rsx_d3d12_close(void);
 void* rsx_d3d12_window(void);
 extern void (*g_rsx_menu_hook)(void);
+extern void (*g_rsx_key_hook)(unsigned vk);
 extern int g_pad_block;
+void  perf_overlay_toast(const wchar_t* text, int on);
+void  texpack_flags_changed(void);
 void  cellpad_set_map(const int* btn, const int* key);
 void  ps3_patch_set(const char* name, int on);
 int   ps3_patch_writes(const char* id, const char* spec, int on);
@@ -541,7 +544,7 @@ struct UI {
     int pad_kind = 0;              /* PAD_KIND_* of the first connected pad */
     bool running = false;          /* Jogar pressed: the window stays as the options menu */
     int applied_mode = -1, applied_res = -1, applied_aa = -1;
-    uint32_t combo_prev = 0;
+    uint32_t combo_prev = 0, tex_combo_prev = 0;
     std::string eboot;
     std::wstring cache_msg;        /* result of the last "clear shader cache" */
     int tex_rep = -1, tex_dumped = 0;   /* PNGs in the texture folder (-1: not counted yet) */
@@ -1511,6 +1514,8 @@ void draw_mods(Graphics& gr, const Font& head, const Font& body, const Font& fsm
     y += 104;
     option_card(gr, x, y, w, 92, g.s.tex_dump, ID_TEX_DUMP, T(S_TEX_DUMP_T), T(S_TEX_DUMP_D), body, fsm);
     y += 108;
+    text(gr, T(S_TEX_HOTKEY), x, y, fsm, C_TEXT, StringAlignmentNear, w, 20);
+    y += 26;
     const std::wstring howto = g_lang == LANG_AR ? L"\u202B" + std::wstring(T(S_TEX_HOWTO)) + L"\u202C" : T(S_TEX_HOWTO);
     StringFormat sf; sf.SetAlignment(StringAlignmentNear); sf.SetLineAlignment(StringAlignmentNear);
     SolidBrush hb(C_DIM);
@@ -1676,6 +1681,9 @@ void set_map_env();
 void set_overlay_env();
 void set_env(const char* k, const std::string& v);
 void set_texture_env();
+void set_note_text_env();
+void toggle_textures(const char* by);
+void changed();
 
 void apply_live(bool restore_menu = true)
 {
@@ -1721,6 +1729,20 @@ const UINT WM_PC_SETTINGS_READ = WM_APP + 2;
 const UINT WM_PC_SETTINGS_CHANGE = WM_APP + 3;
 const UINT WM_PC_SETTINGS_READ_SATURATION = WM_APP + 4;
 void menu_hook() { PostMessageW(g.hwnd, WM_TOGGLE_MENU, 0, 0); }   /* game window thread */
+const UINT WM_TOGGLE_TEXTURES = WM_APP + 5;
+void key_hook(unsigned vk) { if (vk == VK_F9) PostMessageW(g.hwnd, WM_TOGGLE_TEXTURES, 0, 0); }   /* game window thread */
+/* F9 in the game or R3+R2 on a controller: texture mods on or off at once,
+ * with a notice in the game's corner. The replacements stay loaded while
+ * off, so going back and forth to compare is immediate. */
+void toggle_textures(const char* by)
+{
+    g.s.tex_replace = !g.s.tex_replace;
+    set_texture_env();
+    texpack_flags_changed();
+    if (g.running) perf_overlay_toast(T(g.s.tex_replace ? S_TEX_TOAST_ON : S_TEX_TOAST_OFF), g.s.tex_replace);
+    changed();
+    fprintf(stderr, "[launcher] texture mods %s (%s)%c", g.s.tex_replace ? "on" : "off", by, 10);
+}
 void quit_game()
 {
     if (rsx_d3d12_window()) rsx_d3d12_close();
@@ -1743,7 +1765,7 @@ void click(int id)
             if (g.open_dd == ID_DD_MODE) g.s.mode = i;
             else if (g.open_dd == ID_DD_RES) g.s.res = i;
             else if (g.open_dd == ID_DD_AA) g.s.aa = i;
-            else set_lang_pick(i == 0 ? -1 : k_lang_order[i - 1]);
+            else { set_lang_pick(i == 0 ? -1 : k_lang_order[i - 1]); set_note_text_env(); }
             g.open_dd = -1; changed(); return;
         }
         g.open_dd = -1; InvalidateRect(g.hwnd, NULL, FALSE); return;
@@ -1825,7 +1847,7 @@ void click(int id)
         open_in_explorer(tex_dump_folder().wstring());
         g.tex_rep = -1;
     }
-    else if (id == ID_TEX_REPLACE) { g.s.tex_replace = !g.s.tex_replace; set_texture_env(); changed(); }
+    else if (id == ID_TEX_REPLACE) toggle_textures("switch");
     else if (id == ID_TEX_DUMP) { g.s.tex_dump = !g.s.tex_dump; set_texture_env(); changed(); }
     else if (id >= ID_FPATCH && id < ID_FPATCH + (int)g.fpatches.size()) {
         const FilePatch& p = g.fpatches[(size_t)(id - ID_FPATCH)];
@@ -1950,6 +1972,13 @@ LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp)
             }
             if (combo & ~g.combo_prev) toggle_menu();
             g.combo_prev = combo;
+            uint32_t tcombo = 0;   /* R3+R2: texture mods on or off */
+            for (int i = 0; i < PAD_PHYS_MAX; i++) {
+                PadPhys p; if (!pad_phys_poll(i, &p)) continue;
+                if ((p.buttons & (1u << PB_R3)) && (p.buttons & (1u << PB_R2))) tcombo |= 1u << i;
+            }
+            if (tcombo & ~g.tex_combo_prev) toggle_textures("R3+R2");
+            g.tex_combo_prev = tcombo;
         }
         /* controller status + button capture */
         std::wstring st; int cnt = 0;
@@ -1986,6 +2015,7 @@ LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp)
     case WM_DESTROY: PostQuitMessage(0); return 0;
     }
     if (m == WM_TOGGLE_MENU) { toggle_menu(); return 0; }
+    if (m == WM_TOGGLE_TEXTURES) { toggle_textures("F9"); return 0; }
     return DefWindowProcW(h, m, wp, lp);
 }
 
@@ -2001,6 +2031,13 @@ void set_icon_env()
     set_env("PAD_360_LAYOUT", g.s.layout >= 2 ? "auto" : g.s.layout == 1 ? "on" : "off");
 }
 void set_env_default(const char* k, const char* v) { if (!getenv(k)) _putenv_s(k, v); }
+
+/* The shader loading note's words, in the launcher's language. The game
+ * reads them as it draws, so a language picked while it runs shows too. */
+void set_note_text_env()
+{
+    set_env("SHADER_NOTE_TEXT", save_utf8(fs::path(std::wstring(T(S_SH_NOTE_LOADING)) + L"|" + T(S_SH_NOTE_LOADED))));
+}
 
 /* Texture mods (rsx_texture_pack.h). The game reads the switches again as it
  * runs, so turning them on or off here acts at once. */
@@ -2151,7 +2188,7 @@ void start_game()
     set_env("SHADER_PRELOAD_PARALLEL", s.shader_opt[3] ? "1" : "0");
     set_env("SHADER_PRELOAD_NOTE", s.shader_opt[4] ? "1" : "0");
     set_texture_env();
-    set_env("SHADER_NOTE_TEXT", save_utf8(fs::path(std::wstring(T(S_SH_NOTE_LOADING)) + L"|" + T(S_SH_NOTE_LOADED))));
+    set_note_text_env();
     {   /* file patches: applied by the runtime once the game is loaded */
         if (g.fpatches.empty()) scan_patch_dir();
         std::string w;
@@ -2175,6 +2212,7 @@ void start_game()
     g.running = true;
     g.applied_mode = s.mode; g.applied_res = s.res; g.applied_aa = s.aa;
     g_rsx_menu_hook = menu_hook;
+    g_rsx_key_hook = key_hook;
     g.page = P_INICIO;
     InvalidateRect(g.hwnd, NULL, FALSE);
     SetEvent(s_play_ev);

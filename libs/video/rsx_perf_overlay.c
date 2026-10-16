@@ -173,7 +173,6 @@ static uint32_t px_argb(const Px* p)
  * extends its quad. */
 static void emit_image(QuadList* l, const Px* img, int W, int H, float ox, float oy)
 {
-    l->n = 0;
     uint32_t* open_prev = (uint32_t*)malloc((size_t)W * sizeof(uint32_t));
     uint32_t* open_cur = (uint32_t*)malloc((size_t)W * sizeof(uint32_t));
     int nprev = 0;
@@ -352,50 +351,23 @@ static void note_texts(wchar_t* loading, wchar_t* loaded)
     wcscpy(loading, a); wcscpy(loaded, b);
 }
 
-static const rsx_ui_quad* note_quads(uint32_t bw, uint32_t bh, uint32_t* count)
+/* One pill, bottom right, raised by `up` pixels: the dark box, an icon, a
+ * label and an optional value. Icons: 0 a spinning ring, 1 a closed green
+ * ring, 2 a green dot (on), 3 a grey ring (off). Returns its height. */
+enum { ICON_SPIN, ICON_DONE, ICON_ON, ICON_OFF };
+static int draw_pill(QuadList* l, uint32_t bw, uint32_t bh, int up, int icon, TextMask* ml, const wchar_t* label,
+                     TextMask* mv, const wchar_t* value, float alpha, ULONGLONG now)
 {
-    enum { MIN_LOADING = 1500, LOADED_HOLD = 1600, FADE = 700, FADE_IN = 200 };
-    static ULONGLONG t0;
-    static int over_for_good;
-    static TextMask m_label, m_pct;
-    *count = 0;
-    int done = 0, total = 0;
-    unsigned long long fin = 0;
-    const int st = rsx_shader_preload_state(&done, &total, &fin);
-    if (over_for_good || !st || !total) return NULL;
-    const char* e = getenv("SHADER_PRELOAD_NOTE");
-    if (e && e[0] == '0') return NULL;
-    const ULONGLONG now = GetTickCount64();
-    if (!t0) t0 = now;
-    float alpha = fminf(1.0f, (float)(now - t0) / FADE_IN);
-    int loaded = 0;
-    if (st == 2) {
-        const ULONGLONG end = fin > t0 + MIN_LOADING ? fin : t0 + MIN_LOADING;
-        if (now >= end) {
-            const ULONGLONG since = now - end;
-            if (since >= LOADED_HOLD + FADE) { over_for_good = 1; return NULL; }
-            loaded = 1;
-            if (since > LOADED_HOLD) alpha = fminf(alpha, 1.0f - (float)(since - LOADED_HOLD) / FADE);
-        }
-    }
-    /* The count climbs over the time the loading phase is held, never ahead of
-     * the real progress: done in 0.1 s, it would otherwise sit on 100%. */
-    int pct = st == 2 ? 100 : (int)((long long)done * 100 / total);
-    { const int shown = (int)((now - t0) * 100 / MIN_LOADING); if (shown < pct) pct = shown; }
-
     const float s = bh / 720.0f < 0.75f ? 0.75f : bh / 720.0f;
     const int font_px = (int)lroundf(15 * s), H = (int)lroundf(40 * s), pad = (int)lroundf(14 * s);
     const int d = (int)lroundf(18 * s), gap = (int)lroundf(10 * s), space = (int)lroundf(8 * s);
     const int margin = (int)lroundf(18 * s);
-    wchar_t loading_t[80], loaded_t[80], pct_t[16];
-    note_texts(loading_t, loaded_t);
-    swprintf(pct_t, 16, L"%d%%", pct);
-    text_mask(&m_label, loaded ? loaded_t : loading_t, font_px, H);
-    text_mask(&m_pct, pct_t, font_px, H);
-    const int lx = pad + d + gap, px0 = lx + m_label.w + space;
-    const int W = (loaded ? lx + m_label.w : px0 + m_pct.w) + pad;
+    text_mask(ml, label, font_px, H);
+    if (value) text_mask(mv, value, font_px, H);
+    const int lx = pad + d + gap, vx = lx + ml->w + space;
+    const int W = (value ? vx + mv->w : lx + ml->w) + pad;
     Px* img = (Px*)calloc((size_t)W * H, sizeof(Px));
-    if (!img) return NULL;
+    if (!img) return H;
     /* the box: dark, translucent, a faint rim (the panel's look) */
     const float rr = 8 * s;
     for (int y = 0; y < H; y++)
@@ -406,33 +378,110 @@ static const rsx_ui_quad* note_quads(uint32_t bw, uint32_t bh, uint32_t* count)
             Px* p = &img[(size_t)y * W + x];
             p->r = 16 * af + 255 * ar; p->g = 17 * af + 255 * ar; p->b = 20 * af + 255 * ar; p->a = af + ar;
         }
-    /* the ring: a faint track, and a red arc with a fading tail going round;
-     * closed and green once the shaders are in */
+    /* the icon */
     const float cx = pad + d * 0.5f, cy = H * 0.5f, th = fmaxf(2.0f, 2.6f * s), R = d * 0.5f - th * 0.5f;
     const float head = (float)fmod((double)now * 0.0069, 6.283185307);
     for (int y = (int)(cy - d); y <= (int)(cy + d); y++)
         for (int x = (int)(cx - d); x <= (int)(cx + d); x++) {
             if (x < 0 || y < 0 || x >= W || y >= H) continue;
-            const float dx = x + 0.5f - cx, dy = y + 0.5f - cy;
-            const float cov = fminf(1.0f, fmaxf(0.0f, th * 0.5f - fabsf(sqrtf(dx * dx + dy * dy) - R) + 0.5f));
-            if (cov <= 0) continue;
+            const float dx = x + 0.5f - cx, dy = y + 0.5f - cy, r = sqrtf(dx * dx + dy * dy);
             Px* p = &img[(size_t)y * W + x];
-            if (loaded) { over(p, 120, 196, 112, cov); continue; }
-            over(p, 255, 255, 255, cov * 0.18f);
+            if (icon == ICON_ON) {   /* a filled dot */
+                const float cov = fminf(1.0f, fmaxf(0.0f, d * 0.36f - r + 0.5f));
+                if (cov > 0) over(p, 120, 196, 112, cov);
+                continue;
+            }
+            const float cov = fminf(1.0f, fmaxf(0.0f, th * 0.5f - fabsf(r - R) + 0.5f));
+            if (cov <= 0) continue;
+            if (icon == ICON_DONE) { over(p, 120, 196, 112, cov); continue; }
+            if (icon == ICON_OFF) { over(p, 150, 150, 156, cov); continue; }
+            over(p, 255, 255, 255, cov * 0.18f);   /* the spinner: a faint track, a red arc with a fading tail */
             float delta = head - atan2f(dy, dx);
             delta = fmodf(delta, 6.283185307f);
             if (delta < 0) delta += 6.283185307f;
             const float tail = 4.712389f;   /* three quarters of a turn */
             if (delta < tail) over(p, 226, 52, 60, cov * (1.0f - delta / tail));
         }
-    put_mask(img, W, H, &m_label, lx, 214, 217, 224);
-    if (!loaded) put_mask(img, W, H, &m_pct, px0, 255, 255, 255);
+    put_mask(img, W, H, ml, lx, 214, 217, 224);
+    if (value) put_mask(img, W, H, mv, vx, 255, 255, 255);
     if (alpha < 1.0f)
         for (int i = 0; i < W * H; i++) { img[i].r *= alpha; img[i].g *= alpha; img[i].b *= alpha; img[i].a *= alpha; }
-    emit_image(&s_note, img, W, H, (float)bw - margin - W, (float)bh - margin - H);
+    emit_image(l, img, W, H, (float)bw - margin - W, (float)bh - margin - H - up);
     free(img);
+    return H + (int)lroundf(8 * s);
+}
+
+/* The shader loading note. Returns the height it takes (0 when hidden). */
+static int shader_note(uint32_t bw, uint32_t bh, ULONGLONG now)
+{
+    enum { MIN_LOADING = 1500, LOADED_HOLD = 1600, FADE = 700, FADE_IN = 200 };
+    static ULONGLONG t0;
+    static int over_for_good;
+    static TextMask m_label, m_pct;
+    int done = 0, total = 0;
+    unsigned long long fin = 0;
+    const int st = rsx_shader_preload_state(&done, &total, &fin);
+    if (over_for_good || !st || !total) return 0;
+    const char* e = getenv("SHADER_PRELOAD_NOTE");
+    if (e && e[0] == '0') return 0;
+    if (!t0) t0 = now;
+    float alpha = fminf(1.0f, (float)(now - t0) / FADE_IN);
+    int loaded = 0;
+    if (st == 2) {
+        const ULONGLONG end = fin > t0 + MIN_LOADING ? fin : t0 + MIN_LOADING;
+        if (now >= end) {
+            const ULONGLONG since = now - end;
+            if (since >= LOADED_HOLD + FADE) { over_for_good = 1; return 0; }
+            loaded = 1;
+            if (since > LOADED_HOLD) alpha = fminf(alpha, 1.0f - (float)(since - LOADED_HOLD) / FADE);
+        }
+    }
+    /* The count climbs over the time the loading phase is held, never ahead of
+     * the real progress: done in 0.1 s, it would otherwise sit on 100%. */
+    int pct = st == 2 ? 100 : (int)((long long)done * 100 / total);
+    { const int shown = (int)((now - t0) * 100 / MIN_LOADING); if (shown < pct) pct = shown; }
+    wchar_t loading_t[80], loaded_t[80], pct_t[16];
+    note_texts(loading_t, loaded_t);
+    swprintf(pct_t, 16, L"%d%%", pct);
+    return draw_pill(&s_note, bw, bh, 0, loaded ? ICON_DONE : ICON_SPIN, &m_label, loaded ? loaded_t : loading_t,
+                     &m_pct, loaded ? NULL : pct_t, alpha, now);
+}
+
+/* A short notice (perf_overlay_toast): above the shader note when both show. */
+static SRWLOCK s_toast_lock = SRWLOCK_INIT;
+static wchar_t s_toast_text[96];
+static int s_toast_on;
+static ULONGLONG s_toast_t0;
+void perf_overlay_toast(const wchar_t* text, int on)
+{
+    AcquireSRWLockExclusive(&s_toast_lock);
+    wcsncpy(s_toast_text, text ? text : L"", 95); s_toast_text[95] = 0;
+    s_toast_on = on; s_toast_t0 = GetTickCount64();
+    ReleaseSRWLockExclusive(&s_toast_lock);
+}
+static void toast_note(uint32_t bw, uint32_t bh, int up, ULONGLONG now)
+{
+    enum { FADE_IN = 150, HOLD = 1800, FADE = 500 };
+    static TextMask m_label;
+    wchar_t text[96]; int on; ULONGLONG t0;
+    AcquireSRWLockShared(&s_toast_lock);
+    wcscpy(text, s_toast_text); on = s_toast_on; t0 = s_toast_t0;
+    ReleaseSRWLockShared(&s_toast_lock);
+    if (!t0 || !text[0] || now - t0 >= FADE_IN + HOLD + FADE) return;
+    const ULONGLONG t = now - t0;
+    float alpha = fminf(1.0f, (float)t / FADE_IN);
+    if (t > FADE_IN + HOLD) alpha = 1.0f - (float)(t - FADE_IN - HOLD) / FADE;
+    draw_pill(&s_note, bw, bh, up, on ? ICON_ON : ICON_OFF, &m_label, text, NULL, NULL, alpha, now);
+}
+
+static const rsx_ui_quad* note_quads(uint32_t bw, uint32_t bh, uint32_t* count)
+{
+    const ULONGLONG now = GetTickCount64();
+    s_note.n = 0;
+    const int up = shader_note(bw, bh, now);
+    toast_note(bw, bh, up, now);
     *count = s_note.n;
-    return s_note.q;
+    return s_note.n ? s_note.q : NULL;
 }
 
 const rsx_ui_quad* perf_overlay_quads(uint32_t w, uint32_t h, uint32_t* count)

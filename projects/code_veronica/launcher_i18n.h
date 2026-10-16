@@ -56,6 +56,7 @@ enum StrId {
     S_SH_TITLE, S_SH_HINT, S_SH_PSO_T, S_SH_PSO_D, S_SH_LOAD_T, S_SH_LOAD_D, S_SH_BUILD_T, S_SH_BUILD_D, S_SH_PAR_T, S_SH_PAR_D, S_SH_NOTE_T, S_SH_NOTE_D, S_SH_NOTE_LOADING, S_SH_NOTE_LOADED,
     S_MODS_TITLE, S_MODS_HINT, S_TEX_FOLDER, S_TEX_COUNT_FMT, S_TEX_REPLACE_T, S_TEX_REPLACE_D, S_TEX_DUMP_T, S_TEX_DUMP_D, S_TEX_HOWTO,
     S_TEX_DUMP_FOLDER, S_TEX_DUMP_COUNT_FMT,
+    S_TEX_TOAST_ON, S_TEX_TOAST_OFF, S_TEX_HOTKEY,
     S_COUNT
 };
 
@@ -167,7 +168,10 @@ static const wchar_t* const k_str_pt[] = {
     L"Salva em PNG cada textura nova que aparece enquanto você joga, na pasta das extraídas escolhida acima. Passe pelos mapas para extrair as texturas deles.",
     L"Para criar um mod: ligue Extrair, passe pelos mapas, edite os PNGs (pode aumentar a resolução) mantendo o código do começo do nome e coloque-os na pasta da versão. As duas chaves valem na hora, também com o jogo aberto.",
     L"Pasta das extraídas",
-    L"%d texturas extraídas até agora"
+    L"%d texturas extraídas até agora",
+    L"Texturas do mod ligadas",
+    L"Texturas do mod desligadas",
+    L"Atalho no jogo: F9 no teclado ou R3+R2 no controle liga e desliga a substituição na hora."
 };
 static_assert(sizeof k_str_pt / sizeof k_str_pt[0] == S_COUNT, "k_str_pt: one text per StrId");
 
@@ -279,7 +283,10 @@ static const wchar_t* const k_str_en[] = {
     L"Saves each new texture that shows up as you play as a PNG, in the dump folder chosen above. Go through the maps to dump their textures.",
     L"To make a mod: turn on Dump, go through the maps, edit the PNGs (a higher resolution is fine) keeping the code at the start of the name, and put them in the version's folder. Both switches act at once, even with the game open.",
     L"Dump folder",
-    L"%d textures dumped so far"
+    L"%d textures dumped so far",
+    L"Mod textures on",
+    L"Mod textures off",
+    L"In game: F9 on the keyboard or R3+R2 on a controller turns replacement on and off at once."
 };
 static_assert(sizeof k_str_en / sizeof k_str_en[0] == S_COUNT, "k_str_en: one text per StrId");
 
@@ -391,7 +398,10 @@ static const wchar_t* const k_str_es[] = {
     L"Guarda en PNG cada textura nueva que aparece mientras juegas, en la carpeta de extraídas elegida arriba. Recorre los mapas para extraer sus texturas.",
     L"Para crear un mod: activa Extraer, recorre los mapas, edita los PNG (puedes subir la resolución) manteniendo el código del inicio del nombre y colócalos en la carpeta de la versión. Los dos interruptores actúan al instante, incluso con el juego abierto.",
     L"Carpeta de extraídas",
-    L"%d texturas extraídas hasta ahora"
+    L"%d texturas extraídas hasta ahora",
+    L"Texturas del mod activadas",
+    L"Texturas del mod desactivadas",
+    L"En el juego: F9 en el teclado o R3+R2 en el mando activa y desactiva el reemplazo al instante."
 };
 static_assert(sizeof k_str_es / sizeof k_str_es[0] == S_COUNT, "k_str_es: one text per StrId");
 
@@ -503,7 +513,10 @@ static const wchar_t* const k_str_ja[] = {
     L"プレイ中に新しく現れたテクスチャを PNG として、上で選んだ抽出先フォルダーに保存します。各マップを回ってテクスチャを抽出してください。",
     L"Mod の作り方：抽出をオンにしてマップを回り、名前の先頭のコードを残したまま PNG を編集し（高解像度にしても構いません）、バージョンのフォルダーに入れます。どちらのスイッチもゲーム中でもすぐに反映されます。",
     L"抽出先フォルダー",
-    L"これまでに抽出したテクスチャ: %d 枚"
+    L"これまでに抽出したテクスチャ: %d 枚",
+    L"Mod テクスチャ：オン",
+    L"Mod テクスチャ：オフ",
+    L"ゲーム中：キーボードの F9 またはコントローラーの R3+R2 で置き換えをすぐにオン/オフできます。"
 };
 static_assert(sizeof k_str_ja / sizeof k_str_ja[0] == S_COUNT, "k_str_ja: one text per StrId");
 
@@ -669,7 +682,10 @@ static const wchar_t* const k_str_fr[] = {
     L"Enregistre en PNG chaque nouvelle texture qui apparaît pendant que vous jouez, dans le dossier d'extraction choisi ci-dessus. Parcourez les cartes pour en extraire les textures.",
     L"Pour créer un mod : activez Extraire, parcourez les cartes, modifiez les PNG (la résolution peut être augmentée) en gardant le code au début du nom, puis placez-les dans le dossier de la version. Les deux interrupteurs agissent tout de suite, même jeu ouvert.",
     L"Dossier d'extraction",
-    L"%d textures extraites jusqu’ici"
+    L"%d textures extraites jusqu’ici",
+    L"Textures du mod activées",
+    L"Textures du mod désactivées",
+    L"En jeu : F9 au clavier ou R3+R2 à la manette active et désactive le remplacement tout de suite."
 };
 static_assert(sizeof k_str_fr / sizeof k_str_fr[0] == S_COUNT, "k_str_fr: one text per StrId");
 
@@ -835,7 +851,10 @@ static const wchar_t* const k_str_de[] = {
     L"Speichert jede neue Textur, die beim Spielen erscheint, als PNG im oben gewählten Extraktionsordner. Geh durch die Karten, um ihre Texturen zu extrahieren.",
     L"So entsteht ein Mod: Extrahieren einschalten, durch die Karten gehen, die PNGs bearbeiten (höhere Auflösung ist erlaubt), dabei den Code am Namensanfang behalten und sie in den Ordner der Version legen. Beide Schalter wirken sofort, auch bei laufendem Spiel.",
     L"Extraktionsordner",
-    L"Bisher %d Texturen extrahiert"
+    L"Bisher %d Texturen extrahiert",
+    L"Mod-Texturen an",
+    L"Mod-Texturen aus",
+    L"Im Spiel: F9 auf der Tastatur oder R3+R2 am Controller schaltet das Ersetzen sofort ein und aus."
 };
 static_assert(sizeof k_str_de / sizeof k_str_de[0] == S_COUNT, "k_str_de: one text per StrId");
 
@@ -1001,7 +1020,10 @@ static const wchar_t* const k_str_it[] = {
     L"Salva in PNG ogni nuova texture che appare mentre giochi, nella cartella delle estratte scelta qui sopra. Percorri le mappe per estrarne le texture.",
     L"Per creare una mod: attiva Estrai, percorri le mappe, modifica i PNG (puoi aumentare la risoluzione) mantenendo il codice all'inizio del nome e mettili nella cartella della versione. Entrambi gli interruttori agiscono subito, anche a gioco aperto.",
     L"Cartella estratte",
-    L"%d texture estratte finora"
+    L"%d texture estratte finora",
+    L"Texture della mod attive",
+    L"Texture della mod disattivate",
+    L"In gioco: F9 sulla tastiera o R3+R2 sul controller attiva e disattiva subito la sostituzione."
 };
 static_assert(sizeof k_str_it / sizeof k_str_it[0] == S_COUNT, "k_str_it: one text per StrId");
 
@@ -1167,7 +1189,10 @@ static const wchar_t* const k_str_pl[] = {
     L"Zapisuje jako PNG każdą nową teksturę, która pojawi się podczas gry, w folderze wyodrębnionych wybranym powyżej. Przejdź przez mapy, aby wyodrębnić ich tekstury.",
     L"Jak zrobić moda: włącz Wyodrębniaj, przejdź przez mapy, edytuj pliki PNG (można zwiększyć rozdzielczość), zachowując kod na początku nazwy, i umieść je w folderze wersji. Oba przełączniki działają od razu, także przy uruchomionej grze.",
     L"Folder wyodrębnionych",
-    L"Dotąd wyodrębniono %d tekstur"
+    L"Dotąd wyodrębniono %d tekstur",
+    L"Tekstury moda włączone",
+    L"Tekstury moda wyłączone",
+    L"W grze: F9 na klawiaturze lub R3+R2 na padzie od razu włącza i wyłącza zastępowanie."
 };
 static_assert(sizeof k_str_pl / sizeof k_str_pl[0] == S_COUNT, "k_str_pl: one text per StrId");
 
@@ -1333,7 +1358,10 @@ static const wchar_t* const k_str_tr[] = {
     L"Oynarken beliren her yeni dokuyu PNG olarak yukarıda seçilen çıkarma klasörüne kaydeder. Dokularını çıkarmak için haritaları dolaşın.",
     L"Mod yapmak için: Çıkar'ı açın, haritaları dolaşın, adın başındaki kodu koruyarak PNG'leri düzenleyin (çözünürlüğü artırabilirsiniz) ve sürümün klasörüne koyun. İki anahtar da oyun açıkken bile hemen etki eder.",
     L"Çıkarma klasörü",
-    L"Şimdiye kadar %d doku çıkarıldı"
+    L"Şimdiye kadar %d doku çıkarıldı",
+    L"Mod dokuları açık",
+    L"Mod dokuları kapalı",
+    L"Oyunda: klavyede F9 veya kumandada R3+R2, değiştirmeyi anında açıp kapatır."
 };
 static_assert(sizeof k_str_tr / sizeof k_str_tr[0] == S_COUNT, "k_str_tr: one text per StrId");
 
@@ -1499,7 +1527,10 @@ static const wchar_t* const k_str_ar[] = {
     L"يحفظ كل خامة جديدة تظهر أثناء اللعب بصيغة PNG في مجلد الاستخراج المختار أعلاه. تجوّل في الخرائط لاستخراج خاماتها.",
     L"لإنشاء تعديل: فعّل الاستخراج، وتجوّل في الخرائط، وعدّل ملفات PNG (يمكن رفع الدقة) مع إبقاء الرمز في بداية الاسم، ثم ضعها في مجلد النسخة. يعمل المفتاحان فورًا حتى واللعبة مفتوحة.",
     L"مجلد الاستخراج",
-    L"استُخرجت %d خامة حتى الآن"
+    L"استُخرجت %d خامة حتى الآن",
+    L"خامات التعديل مفعّلة",
+    L"خامات التعديل معطّلة",
+    L"داخل اللعبة: F9 على لوحة المفاتيح أو R3+R2 على وحدة التحكم يفعّل الاستبدال ويعطّله فورًا."
 };
 static_assert(sizeof k_str_ar / sizeof k_str_ar[0] == S_COUNT, "k_str_ar: one text per StrId");
 
@@ -1665,7 +1696,10 @@ static const wchar_t* const k_str_zh[] = {
     L"游戏时把每个新出现的纹理保存为 PNG，放在上面选择的提取文件夹中。走遍各个地图即可提取它们的纹理。",
     L"制作模组：打开提取，走遍地图，编辑 PNG（可以提高分辨率）并保留文件名开头的代码，然后放入该版本的文件夹。两个开关都会立即生效，游戏运行时也一样。",
     L"提取文件夹",
-    L"目前已提取 %d 张纹理"
+    L"目前已提取 %d 张纹理",
+    L"模组纹理：开",
+    L"模组纹理：关",
+    L"游戏中：按键盘 F9 或手柄 R3+R2 可立即开关纹理替换。"
 };
 static_assert(sizeof k_str_zh / sizeof k_str_zh[0] == S_COUNT, "k_str_zh: one text per StrId");
 
@@ -1831,7 +1865,10 @@ static const wchar_t* const k_str_ko[] = {
     L"플레이 중 새로 나타나는 텍스처를 PNG로 위에서 고른 추출 폴더에 저장합니다. 맵을 돌아다니며 텍스처를 추출하세요.",
     L"모드 만드는 법: 추출을 켜고 맵을 돌아다닌 뒤, 이름 앞의 코드를 유지한 채 PNG를 편집하고(해상도를 높여도 됩니다) 버전 폴더에 넣으세요. 두 스위치 모두 게임 중에도 바로 적용됩니다.",
     L"추출 폴더",
-    L"지금까지 추출한 텍스처 %d개"
+    L"지금까지 추출한 텍스처 %d개",
+    L"모드 텍스처 켜짐",
+    L"모드 텍스처 꺼짐",
+    L"게임 중: 키보드 F9 또는 컨트롤러 R3+R2로 교체를 바로 켜고 끌 수 있습니다."
 };
 static_assert(sizeof k_str_ko / sizeof k_str_ko[0] == S_COUNT, "k_str_ko: one text per StrId");
 
@@ -1997,7 +2034,10 @@ static const wchar_t* const k_str_ru[] = {
     L"Сохраняет в PNG каждую новую текстуру, появившуюся во время игры, в папку извлечённых, выбранную выше. Пройдите по картам, чтобы извлечь их текстуры.",
     L"Как сделать мод: включите извлечение, пройдите по картам, отредактируйте PNG (можно повысить разрешение), сохранив код в начале имени, и положите их в папку версии. Оба переключателя действуют сразу, даже при запущенной игре.",
     L"Папка извлечённых",
-    L"Извлечено текстур: %d"
+    L"Извлечено текстур: %d",
+    L"Текстуры мода включены",
+    L"Текстуры мода выключены",
+    L"В игре: F9 на клавиатуре или R3+R2 на геймпаде сразу включает и выключает замену."
 };
 static_assert(sizeof k_str_ru / sizeof k_str_ru[0] == S_COUNT, "k_str_ru: one text per StrId");
 

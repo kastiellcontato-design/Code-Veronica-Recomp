@@ -246,7 +246,10 @@ typedef struct {
     int used;           /* referenced this frame */
     u64 stamp;          /* render frame it was last referenced in (eviction age) */
     u64 thash;          /* texture mods: the contents' hash (rsx_texture_pack.h) */
-    int thash_ok;       /* thash is set: a moddable format, not animating */
+    int thash_ok;       /* thash is set */
+    int thash_can;      /* a moddable format, not animating: thash can be taken */
+    u32 thash_bytes;    /* the guest bytes it is taken over */
+    int dump_seen;      /* texture dumping has looked at these contents */
     u64 upload_frame;   /* render frame its contents were last uploaded */
 } VPTexSlot;
 static u64 s_tex_frame = 1;   /* render frames, for VPTexSlot.stamp */
@@ -823,6 +826,7 @@ static int  s_wmode;
 static HWND s_backdrop;
 static u32  s_win_w = 1280, s_win_h = 720;   /* render size, for the framed window */
 void (*g_rsx_menu_hook)(void);               /* Insert: the title's options menu */
+void (*g_rsx_key_hook)(unsigned vk);         /* any other key pressed (not repeats): the title's hotkeys */
 
 static void window_apply_mode(HWND hwnd, int mode)
 {
@@ -908,6 +912,7 @@ static LRESULT CALLBACK d3d12_wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             DestroyWindow(hwnd);
         }
         if (wp == VK_INSERT && !(lp & (1 << 30)) && g_rsx_menu_hook) g_rsx_menu_hook();
+        else if (!(lp & (1 << 30)) && g_rsx_key_hook) g_rsx_key_hook((unsigned)wp);
         if (wp == VK_F12 && !(lp & (1 << 30))) {   /* F12: rsxcap the next frame */
             extern volatile int g_rsx_cap_request;
             g_rsx_cap_request = 1;
@@ -5028,7 +5033,8 @@ static void rep_drop(RepEntry* e)
 }
 /* Render thread, with the command list open: upload what finished decoding
  * (up to 48 MB a frame, so a burst does not stall one), and keep within the
- * budget. Switched off, every replacement is let go. */
+ * budget. Switched off, the replacements stay loaded (only the budget lets
+ * them go), so switching back with the hotkey is immediate. */
 static void texrep_frame(void)
 {
     if (!s_rep_budget) {
@@ -5036,12 +5042,11 @@ static void texrep_frame(void)
         const u64 mb = e && atoi(e) > 0 ? (u64)atoi(e) : 3072u;
         s_rep_budget = mb << 20;
     }
-    const int on = texpack_replace_on();
     uint64_t h; texpack_image* im = NULL; int r;
     u64 used = 0;
     while (used < (48ull << 20) && (r = texpack_next(&h, &im)) != 0) {
         RepEntry* e = rep_find(h, 0);
-        if (r > 0 && on && e && e->state == REP_LOADING) {
+        if (r > 0 && e && e->state == REP_LOADING) {
             ID3D12Resource* res = rep_upload(im);
             if (res) { e->res = res; e->state = REP_READY; e->bytes = im->bytes; e->last = s_tex_frame;
                        s_rep_bytes += im->bytes; used += im->bytes; }
@@ -5049,12 +5054,7 @@ static void texrep_frame(void)
         } else if (e && e->state == REP_LOADING) e->state = r < 0 ? REP_NONE : REP_DROPPED;
         texpack_free(im); im = NULL;
     }
-    if (!s_rep || !s_rep_bytes) return;
-    if (!on) {
-        for (u32 i = 0; i < REP_CAP; i++) if (s_rep[i].state == REP_READY) rep_drop(&s_rep[i]);
-        return;
-    }
-    if (s_rep_bytes <= s_rep_budget) return;
+    if (!s_rep || s_rep_bytes <= s_rep_budget) return;
     /* Over budget: let go of the least recently used, and whatever went unused
      * within half a second of it -- never one this frame or the last used. */
     u64 oldest = ~0ull;
@@ -5065,12 +5065,64 @@ static void texrep_frame(void)
         if (s_rep[i].state == REP_READY && s_rep[i].last + 1 < s_tex_frame && s_rep[i].last <= oldest + 30)
             rep_drop(&s_rep[i]);
 }
+/* TEXTURE_DUMP: the decoded image (map0, rows pitch bytes apart, in the
+ * upload layout) as RGBA8 with the channels the shader sees, so a PNG edited
+ * and put back goes through the same remap. */
+static void tex_dump_image(u64 hash, const u8* map0, u32 pitch, u32 w, u32 h, u32 basef)
+{
+    u8* rgba = (u8*)malloc((size_t)w * h * 4);
+    if (!rgba) return;
+    const char* name = basef == 0x85 ? "ARGB" : basef == 0x8B ? "G8B8" : basef == 0x81 ? "B8"
+                     : basef == 0x86 ? "DXT1" : basef == 0x87 ? "DXT3" : "DXT5";
+    if (basef >= 0x86 && basef <= 0x88) texpack_decode_bc((int)(basef - 0x85), map0, pitch, w, h, rgba);
+    else
+        for (u32 y = 0; y < h; y++) {
+            const u8* s = map0 + (u64)y * pitch;
+            u8* d = rgba + (size_t)y * w * 4;
+            for (u32 x = 0; x < w; x++, d += 4) {
+                if (basef == 0x85) memcpy(d, s + x * 4, 4);
+                else if (basef == 0x8B) { d[0] = s[x * 2]; d[1] = s[x * 2 + 1]; d[2] = 0; d[3] = 255; }
+                else { d[0] = d[1] = d[2] = s[x]; d[3] = 255; }
+            }
+        }
+    texpack_dump(hash, w, h, name, rgba);
+}
+/* A texture uploaded while dumping was off: written the first time it is
+ * bound after dumping is switched on, from its upload buffer. */
+static void texdump_for_slot(int ts)
+{
+    VPTexSlot* t = &s_d3d.vp_tex[ts];
+    if (t->dump_seen || !t->thash_can || !t->up || !texpack_dump_on()) return;
+    t->dump_seen = 1;
+    if (!t->thash_ok) {
+        extern uint8_t* vm_base;
+        if (!vm_base) return;
+        t->thash = texpack_hash(vm_base + t->off, t->thash_bytes, t->w, t->h, t->fmt & 0x9F);
+        t->thash_ok = 1;
+    }
+    if (!texpack_dump_wanted(t->thash)) return;
+    rsx_tex_layout tl;
+    rsx_texture_layout(t->fmt, t->w, t->h, &tl);
+    const u32 pitch = (tl.dst_row_bytes + 255) & ~255u;
+    D3D12_RANGE rr = { 0, (SIZE_T)pitch * (tl.compressed ? tl.rows : t->h) }, nr = { 0, 0 };
+    void* m = NULL;
+    if (SUCCEEDED(t->up->lpVtbl->Map(t->up, 0, &rr, &m)) && m) {
+        tex_dump_image(t->thash, (const u8*)m, pitch, t->w, t->h, t->fmt & 0x9F);
+        t->up->lpVtbl->Unmap(t->up, 0, &nr);
+    }
+}
 /* The replacement to draw a texture slot with, if one is loaded; asks for it
  * the first time the texture is seen. */
 static ID3D12Resource* texrep_for_slot(int ts)
 {
-    const VPTexSlot* t = &s_d3d.vp_tex[ts];
-    if (!t->thash_ok || !texpack_replace_on()) return NULL;
+    VPTexSlot* t = &s_d3d.vp_tex[ts];
+    if (!texpack_replace_on()) return NULL;
+    if (!t->thash_ok) {   /* uploaded while replacement was off (the hotkey turned it on since) */
+        extern uint8_t* vm_base;
+        if (!t->thash_can || !vm_base) return NULL;
+        t->thash = texpack_hash(vm_base + t->off, t->thash_bytes, t->w, t->h, t->fmt & 0x9F);
+        t->thash_ok = 1;
+    }
     RepEntry* e = rep_find(t->thash, 0);
     if (!e) {
         const int has = texpack_lookup(t->thash);
@@ -5357,9 +5409,10 @@ static int vp_upload_tex_slot_impl(u32 off, u32 w, u32 h, u32 fmt, int cube, u32
      * within a second (a video, an animated surface) is left alone: its every
      * frame would be a new texture. */
     t->thash_ok = 0;
-    if (!cube && texrep_eligible(basef) && (texpack_replace_on() || texpack_dump_on()) &&
-        !(restale && s_tex_frame - t->upload_frame < 60)) {
-        t->thash = texpack_hash(vm_base + off, dxt ? blkrow * blkrows : w * h * bpp, w, h, basef);
+    t->thash_can = !cube && texrep_eligible(basef) && !(restale && s_tex_frame - t->upload_frame < 60);
+    t->thash_bytes = dxt ? blkrow * blkrows : w * h * bpp;
+    if (t->thash_can && (texpack_replace_on() || texpack_dump_on())) {
+        t->thash = texpack_hash(vm_base + off, t->thash_bytes, w, h, basef);
         t->thash_ok = 1;
     }
 
@@ -5675,26 +5728,11 @@ static int vp_upload_tex_slot_impl(u32 off, u32 w, u32 h, u32 fmt, int cube, u32
       } }
     }   /* end per-face conversion */
     off = _off0; mapped = _map0;
-    /* TEXTURE_DUMP: the decoded image as the shader sees its channels, so a
-     * PNG edited and put back goes through the same remap. */
-    if (t->thash_ok && texpack_dump_on() && texpack_dump_wanted(t->thash)) {
-        u8* rgba = (u8*)malloc((size_t)w * h * 4);
-        if (rgba) {
-            const char* name = basef == 0x85 ? "ARGB" : basef == 0x8B ? "G8B8" : basef == 0x81 ? "B8"
-                             : basef == 0x86 ? "DXT1" : basef == 0x87 ? "DXT3" : "DXT5";
-            if (dxt) texpack_decode_bc((int)(basef - 0x85), _map0, pitch, w, h, rgba);
-            else
-                for (u32 y = 0; y < h; y++) {
-                    const u8* s = _map0 + (u64)y * pitch;
-                    u8* d = rgba + (size_t)y * w * 4;
-                    for (u32 x = 0; x < w; x++, d += 4) {
-                        if (basef == 0x85) memcpy(d, s + x * 4, 4);
-                        else if (basef == 0x8B) { d[0] = s[x * 2]; d[1] = s[x * 2 + 1]; d[2] = 0; d[3] = 255; }
-                        else { d[0] = d[1] = d[2] = s[x]; d[3] = 255; }
-                    }
-                }
-            texpack_dump(t->thash, w, h, name, rgba);
-        }
+    /* TEXTURE_DUMP: written now, or at its next bind if dumping is switched on later. */
+    t->dump_seen = 0;
+    if (t->thash_ok && texpack_dump_on()) {
+        t->dump_seen = 1;
+        if (texpack_dump_wanted(t->thash)) tex_dump_image(t->thash, _map0, pitch, w, h, basef);
     }
     t->up->lpVtbl->Unmap(t->up, 0, NULL);
 
@@ -8201,6 +8239,7 @@ static void render_frame_impl(void)
                                             DXGI_FORMAT_R8_UNORM;
                         /* A texture mod's image, once loaded: RGBA8 with the
                          * same channels, so the guest's remap still applies. */
+                        texdump_for_slot(ts);
                         ID3D12Resource* _tr = texrep_for_slot(ts);
                         if (_tr) sf = DXGI_FORMAT_R8G8B8A8_UNORM;
                         else _tr = s_d3d.vp_tex[ts].res;

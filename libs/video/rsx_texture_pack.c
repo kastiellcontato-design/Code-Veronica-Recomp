@@ -32,6 +32,7 @@ static void flags_refresh(void)
     s_dump_on = d && d[0] == '1';
 }
 int texpack_replace_on(void) { flags_refresh(); return s_rep_on; }
+void texpack_flags_changed(void) { s_flags_at = 0; }
 int texpack_dump_on(void) { flags_refresh(); return s_dump_on; }
 
 static wchar_t s_dir[PATH_CAP], s_root[PATH_CAP], s_dump_dir[PATH_CAP];
