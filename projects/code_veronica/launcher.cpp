@@ -177,6 +177,7 @@ struct Settings {
     int layout = 2;        /* button icons: 0 PlayStation, 1 Xbox, 2 automatic, 3 keyboard */
     bool overlay = false;  /* the performance overlay (rsx_perf_overlay.h) */
     int overlay_items = 3; /* bits of k_overlay_items: FPS and frame time */
+    int overlay_corner = 1, overlay_layout = 0;   /* 0 tl, 1 tr, 2 bl, 3 br; 0 a row, 1 a column */
     bool shader_opt[5] = { true, true, true, true, true };   /* k_shader_opts, Desempenho page */
     std::wstring tex_dir;              /* texture mods (Mods page); empty: "textures" beside the exe */
     std::wstring tex_dump_dir;         /* where dumps go; empty: <tex_dir>\<version>\dump */
@@ -357,6 +358,8 @@ Settings load_settings()
     s.tex_replace = _wtoi(ini_get(L"texturas", L"substituir", L"0").c_str()) != 0;
     s.tex_dump = _wtoi(ini_get(L"texturas", L"extrair", L"0").c_str()) != 0;
     s.overlay_items = _wtoi(ini_get(L"overlay", L"itens", L"3").c_str()) & ((1 << NOVERLAY) - 1);
+    s.overlay_corner = std::clamp(_wtoi(ini_get(L"overlay", L"posicao", L"1").c_str()), 0, 3);
+    s.overlay_layout = std::clamp(_wtoi(ini_get(L"overlay", L"disposicao", L"0").c_str()), 0, 1);
     s.patch_dir = ini_get(L"pastas", L"patches", L"");
     {
         const std::wstring on = ini_get(L"patches", L"arquivos", L"");
@@ -412,6 +415,8 @@ void save_settings(const Settings& s)
     ini_set(L"srt",L"opacidade",std::to_wstring(s.srt_opacity));
     ini_set(L"overlay", L"mostrar", s.overlay ? L"1" : L"0");
     ini_set(L"overlay", L"itens", std::to_wstring(s.overlay_items));
+    ini_set(L"overlay", L"posicao", std::to_wstring(s.overlay_corner));
+    ini_set(L"overlay", L"disposicao", std::to_wstring(s.overlay_layout));
     for (int i = 0; i < NSHADER_OPTS; i++)
         ini_set(L"shaders", k_shader_opts[i].key, s.shader_opt[i] ? L"1" : L"0");
     ini_set(L"texturas", L"pasta", s.tex_dir);
@@ -593,6 +598,7 @@ enum {
     ID_LOG_VIEW = 2100, ID_LOG_COPY, ID_LOG_SAVE, ID_LOG_FOLDER,
     ID_SHADER_OPT = 2200,                                          /* + k_shader_opts index */
     ID_SRT=2400, ID_SRT_PART=2410, ID_DD_SRT_ENEMIES=2420, ID_DD_SRT_CORNER, ID_DD_SRT_LANGUAGE, ID_SRT_SCALE, ID_SRT_OPACITY,
+    ID_DD_OV_CORNER = 2450, ID_DD_OV_LAYOUT,
     ID_TEX_BROWSE = 2300, ID_TEX_OPEN, ID_TEX_REPLACE, ID_TEX_DUMP, ID_TEX_DUMP_BROWSE, ID_TEX_DUMP_OPEN,
 };
 
@@ -1369,7 +1375,7 @@ void draw_avancado(Graphics& gr, const Font& head, const Font& body, const Font&
     text(gr, T(S_LANG), x, y, body, C_TEXT, StringAlignmentNear, 240, 30);
     dropdown(gr, RectF(x + 250, y, 260, 30), lang_choice_name(), ID_DD_LANG, body);
     text(gr, T(S_LANG_HINT), x, y + 28, fsm, C_DIM, StringAlignmentNear, 240, 20);
-    y += 90;
+    y += 76;
     section(gr, T(S_ADV_FILES), x, y, w, head);
     y += 46;
     button(gr, RectF(x, y, 280, 34), T(S_CLEAR_CACHE), ID_CACHE_CLEAR, body, false, !g.running);
@@ -1385,7 +1391,7 @@ void draw_avancado(Graphics& gr, const Font& head, const Font& body, const Font&
     text(gr, st, x, y, body, g.running ? C_RED_HI : C_TEXT, StringAlignmentNear, w, 24);
     text(gr, cache_dir().wstring(), x, y + 26, fsm, C_DIM, StringAlignmentNear, w, 20);
     text(gr, T(S_CACHE_HINT), x, y + 48, fsm, C_DIM, StringAlignmentNear, w, 20);
-    y += 92;
+    y += 80;
     /* The performance overlay: a switch, then what it shows */
     section(gr, T(S_OV_TITLE), x, y, w, head);
     y += 46;
@@ -1424,6 +1430,23 @@ void draw_avancado(Graphics& gr, const Font& head, const Font& body, const Font&
         text(gr, name, cx + 24, y, body, ink, StringAlignmentNear, m.Width + 8, 28);
         hit(cx, y, 24 + m.Width + 8, 28, ID_OVERLAY_ITEM + i);
         cx += 24 + m.Width + 26;
+    }
+    y += 40;
+    /* where it sits, and its numbers side by side or one under the other:
+     * one row, each name followed by its list */
+    {
+        const float col = (w - 24) / 2;
+        const int layouts[] = { S_OV_ROW, S_OV_COLUMN };
+        const std::wstring names[] = { T(S_OV_POSITION), T(S_OV_LAYOUT) };
+        const std::wstring values[] = { T(S_SRT_TL + g.s.overlay_corner), T(layouts[g.s.overlay_layout]) };
+        const int ids[] = { ID_DD_OV_CORNER, ID_DD_OV_LAYOUT };
+        for (int i = 0; i < 2; i++) {
+            const float cx0 = x + i * (col + 24);
+            RectF m; gr.MeasureString(names[i].c_str(), -1, &body, PointF(0, 0), &sf, &m);
+            const float lw = std::min(m.Width + 12, col * 0.55f);
+            text(gr, names[i], cx0, y, body, C_TEXT, StringAlignmentNear, lw, 32);
+            dropdown(gr, RectF(cx0 + lw, y, col - lw, 32), values[i], ids[i], body);
+        }
     }
     y += 50;
     /* The game's log: view it live, copy it, save a copy */
@@ -1625,6 +1648,8 @@ void paint(HDC hdc)
         else if (g.open_dd == ID_DD_AA) { for (int i = 0; i < 3; i++) items.push_back(aa_name(i)); sel = g.s.aa; }
         else if (g.open_dd == ID_DD_SRT_ENEMIES) { for(int i=0;i<=5;i++)items.push_back(srt_enemy_value(i));items.push_back(T(S_SRT_ALL));sel=g.s.srt_enemies==99?6:g.s.srt_enemies; }
         else if (g.open_dd == ID_DD_SRT_CORNER) {for(int i=0;i<4;i++)items.push_back(T(S_SRT_TL+i));sel=g.s.srt_corner;}
+        else if (g.open_dd == ID_DD_OV_CORNER) { for (int i = 0; i < 4; i++) items.push_back(T(S_SRT_TL + i)); sel = g.s.overlay_corner; }
+        else if (g.open_dd == ID_DD_OV_LAYOUT) { items = { T(S_OV_ROW), T(S_OV_COLUMN) }; sel = g.s.overlay_layout; }
         else if (g.open_dd == ID_DD_SRT_LANGUAGE) {
             items={T(S_SRT_FOLLOW),k_lang_name[LANG_EN],k_lang_name[LANG_PT]};item_lang={g_lang,LANG_EN,LANG_PT};
             for(int lang=2;lang<LANG_COUNT;lang++) {items.push_back(k_lang_name[lang]);item_lang.push_back(lang);}
@@ -1867,6 +1892,8 @@ void click(int id)
             else if(g.open_dd==ID_DD_SRT_ENEMIES)g.s.srt_enemies=i==6?99:i;
             else if(g.open_dd==ID_DD_SRT_CORNER)g.s.srt_corner=i;
             else if(g.open_dd==ID_DD_SRT_LANGUAGE)g.s.srt_language=i;
+            else if (g.open_dd == ID_DD_OV_CORNER) { g.s.overlay_corner = i; set_overlay_env(); }
+            else if (g.open_dd == ID_DD_OV_LAYOUT) { g.s.overlay_layout = i; set_overlay_env(); }
             else { set_lang_pick(i == 0 ? -1 : k_lang_order[i - 1]); set_note_text_env(); }
             set_srt_env();
             g.open_dd = -1; changed(); return;
@@ -1880,7 +1907,7 @@ void click(int id)
         if (g.page == P_MODS) g.tex_rep = -1;        /* count the textures again */
     }
     else if (id >= ID_PATCH && id < ID_PATCH + NPATCHES) { g.s.patch[id - ID_PATCH] ^= true; changed(); }
-    else if (id == ID_DD_MODE || id == ID_DD_RES || id == ID_DD_AA || id == ID_DD_LANG || id==ID_DD_SRT_ENEMIES || id==ID_DD_SRT_CORNER || id==ID_DD_SRT_LANGUAGE) {
+    else if (id == ID_DD_MODE || id == ID_DD_RES || id == ID_DD_AA || id == ID_DD_LANG || id==ID_DD_SRT_ENEMIES || id==ID_DD_SRT_CORNER || id==ID_DD_SRT_LANGUAGE || id == ID_DD_OV_CORNER || id == ID_DD_OV_LAYOUT) {
         g.open_dd = id; g.dd_scroll = 0;
         if (id == ID_DD_LANG && g_lang_pick >= 0)   /* open with the chosen language in view */
             for (int i = 0; i < LANG_COUNT; i++)
@@ -2212,6 +2239,9 @@ void set_overlay_env()
         for (int i = 0; i < NOVERLAY; i++)
             if ((g.s.overlay_items >> i) & 1) items += (items.empty() ? "" : ",") + std::string(k_overlay_items[i].id);
     set_env("PERF_OVERLAY", items);
+    const char* corners[] = { "tl", "tr", "bl", "br" };
+    set_env("PERF_OVERLAY_CORNER", corners[g.s.overlay_corner]);
+    set_env("PERF_OVERLAY_LAYOUT", g.s.overlay_layout ? "column" : "row");
 }
 
 /* PAD_BTNMAP / PAD_KEYMAP from the settings: read by the pad at start, and by

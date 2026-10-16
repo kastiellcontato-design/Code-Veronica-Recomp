@@ -199,28 +199,58 @@ static void emit_image(QuadList* l, const Px* img, int W, int H, float ox, float
     free(open_prev); free(open_cur);
 }
 
-static void build(uint32_t bw, uint32_t bh, unsigned items, const Seg* segs, int nseg)
+/* PERF_OVERLAY_CORNER: tl, tr (default), bl or br. PERF_OVERLAY_LAYOUT: row
+ * (default, side by side) or column (one under the other). Read every refresh. */
+static int overlay_corner(void)
 {
-    s_panel.n = 0;
+    const char* e = getenv("PERF_OVERLAY_CORNER");
+    if (!e) return 1;
+    return !_stricmp(e, "tl") ? 0 : !_stricmp(e, "bl") ? 2 : !_stricmp(e, "br") ? 3 : 1;
+}
+static int overlay_column(void)
+{
+    const char* e = getenv("PERF_OVERLAY_LAYOUT");
+    return e && !_stricmp(e, "column");
+}
+
+static int s_panel_h;   /* the panel's height and margin in pixels, 0 when none */
+
+static void build(uint32_t bw, uint32_t bh, int corner, int column, const Seg* segs, int nseg)
+{
+    s_panel.n = 0; s_panel_h = 0;
     const float s = bh / 720.0f < 0.75f ? 0.75f : bh / 720.0f;
     const int font_px = (int)lroundf(16 * s), pad = (int)lroundf(12 * s), gap = (int)lroundf(16 * s), lgap = (int)lroundf(5 * s);
-    const int H = (int)lroundf(32 * s), margin = (int)lroundf(14 * s);
-    (void)items;
+    const int row_h = (int)lroundf(24 * s), vpad = (int)lroundf(6 * s), margin = (int)lroundf(14 * s);
+    const int H = column ? 2 * vpad + nseg * row_h : (int)lroundf(32 * s);
 
     HDC dc = CreateCompatibleDC(NULL);
     HFONT font = CreateFontW(-font_px, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
                              CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY, DEFAULT_PITCH, L"Segoe UI");
     HGDIOBJ old_font = SelectObject(dc, font);
-    /* where each piece goes */
-    int lx[8], vx[8], W = pad;
-    for (int i = 0; i < nseg; i++) {
-        SIZE sz;
-        if (i) W += gap;
-        if (segs[i].label[0]) { lx[i] = W; GetTextExtentPoint32W(dc, segs[i].label, (int)wcslen(segs[i].label), &sz); W += sz.cx + lgap; }
-        else lx[i] = -1;
-        vx[i] = W; GetTextExtentPoint32W(dc, segs[i].value, (int)wcslen(segs[i].value), &sz); W += sz.cx;
+    /* where each piece goes: a row of label/value pairs, or a column with the
+     * names on the left and the numbers lined up on the right */
+    int lx[8], vx[8], ly[8], W = pad;
+    if (column) {
+        int lw = 0, vw = 0, vws[8];
+        for (int i = 0; i < nseg; i++) {
+            SIZE sz;
+            GetTextExtentPoint32W(dc, segs[i].label, (int)wcslen(segs[i].label), &sz); if (sz.cx > lw) lw = sz.cx;
+            GetTextExtentPoint32W(dc, segs[i].value, (int)wcslen(segs[i].value), &sz); vws[i] = sz.cx; if (sz.cx > vw) vw = sz.cx;
+        }
+        W = pad + lw + gap + vw + pad;
+        for (int i = 0; i < nseg; i++) { lx[i] = pad; vx[i] = W - pad - vws[i]; ly[i] = vpad + i * row_h; }
+    } else {
+        for (int i = 0; i < nseg; i++) {
+            SIZE sz;
+            if (i) W += gap;
+            if (segs[i].label[0]) { lx[i] = W; GetTextExtentPoint32W(dc, segs[i].label, (int)wcslen(segs[i].label), &sz); W += sz.cx + lgap; }
+            else lx[i] = -1;
+            vx[i] = W; GetTextExtentPoint32W(dc, segs[i].value, (int)wcslen(segs[i].value), &sz); W += sz.cx;
+            ly[i] = 0;
+        }
+        W += pad;
     }
-    W += pad;
+    const int line_h = column ? row_h : H;
 
     /* two masks: names (grey) and numbers (white) */
     BITMAPINFO bi = { { sizeof(BITMAPINFOHEADER), W, -H, 1, 32, BI_RGB } };
@@ -233,10 +263,10 @@ static void build(uint32_t bw, uint32_t bh, unsigned items, const Seg* segs, int
         memset(bits, 0, (size_t)W * H * 4);
         SetBkMode(dc, TRANSPARENT); SetTextColor(dc, RGB(255, 255, 255));
         TEXTMETRICW tm; GetTextMetricsW(dc, &tm);
-        const int ty = (H - tm.tmHeight) / 2;
+        const int ty = (line_h - tm.tmHeight) / 2;
         for (int i = 0; i < nseg; i++) {
-            if (pass == 0 && lx[i] >= 0) TextOutW(dc, lx[i], ty, segs[i].label, (int)wcslen(segs[i].label));
-            if (pass == 1) TextOutW(dc, vx[i], ty, segs[i].value, (int)wcslen(segs[i].value));
+            if (pass == 0 && lx[i] >= 0) TextOutW(dc, lx[i], ly[i] + ty, segs[i].label, (int)wcslen(segs[i].label));
+            if (pass == 1) TextOutW(dc, vx[i], ly[i] + ty, segs[i].value, (int)wcslen(segs[i].value));
         }
         GdiFlush();
         if (pass == 0) {   /* the box first: dark, translucent, a faint rim */
@@ -268,7 +298,10 @@ static void build(uint32_t bw, uint32_t bh, unsigned items, const Seg* segs, int
     DeleteDC(dc);
     if (!img) return;
 
-    emit_image(&s_panel, img, W, H, (float)bw - margin - W, (float)margin);
+    const float ox = (corner & 1) ? (float)bw - margin - W : (float)margin;
+    const float oy = (corner & 2) ? (float)bh - margin - H : (float)margin;
+    emit_image(&s_panel, img, W, H, ox, oy);
+    s_panel_h = H + margin;
     free(img);
 }
 
@@ -412,7 +445,7 @@ static int draw_pill(QuadList* l, uint32_t bw, uint32_t bh, int up, int icon, Te
 }
 
 /* The shader loading note. Returns the height it takes (0 when hidden). */
-static int shader_note(uint32_t bw, uint32_t bh, ULONGLONG now)
+static int shader_note(uint32_t bw, uint32_t bh, int up, ULONGLONG now)
 {
     enum { MIN_LOADING = 1500, LOADED_HOLD = 1600, FADE = 700, FADE_IN = 200 };
     static ULONGLONG t0;
@@ -443,7 +476,7 @@ static int shader_note(uint32_t bw, uint32_t bh, ULONGLONG now)
     wchar_t loading_t[80], loaded_t[80], pct_t[16];
     note_texts(loading_t, loaded_t);
     swprintf(pct_t, 16, L"%d%%", pct);
-    return draw_pill(&s_note, bw, bh, 0, loaded ? ICON_DONE : ICON_SPIN, &m_label, loaded ? loaded_t : loading_t,
+    return draw_pill(&s_note, bw, bh, up, loaded ? ICON_DONE : ICON_SPIN, &m_label, loaded ? loaded_t : loading_t,
                      &m_pct, loaded ? NULL : pct_t, alpha, now);
 }
 
@@ -474,11 +507,11 @@ static void toast_note(uint32_t bw, uint32_t bh, int up, ULONGLONG now)
     draw_pill(&s_note, bw, bh, up, on ? ICON_ON : ICON_OFF, &m_label, text, NULL, NULL, alpha, now);
 }
 
-static const rsx_ui_quad* note_quads(uint32_t bw, uint32_t bh, uint32_t* count)
+static const rsx_ui_quad* note_quads(uint32_t bw, uint32_t bh, int base, uint32_t* count)
 {
     const ULONGLONG now = GetTickCount64();
     s_note.n = 0;
-    const int up = shader_note(bw, bh, now);
+    const int up = base + shader_note(bw, bh, base, now);
     toast_note(bw, bh, up, now);
     *count = s_note.n;
     return s_note.n ? s_note.q : NULL;
@@ -487,43 +520,51 @@ static const rsx_ui_quad* note_quads(uint32_t bw, uint32_t bh, uint32_t* count)
 const rsx_ui_quad* perf_overlay_quads(uint32_t w, uint32_t h, uint32_t* count)
 {
     static unsigned last_items;
+    static int last_corner = -1, last_column = -1;
     static uint32_t last_w, last_h;
     static ULONGLONG last_build;
     static HANDLE gpu;
     *count = 0;
-    uint32_t nn = 0;
-    const rsx_ui_quad* nq = note_quads(w, h, &nn);
     const unsigned items = overlay_items();
-    if (!items || !s_qpf.QuadPart) { last_items = 0; *count = nn; return nq; }
-    if ((items & OV_GPU) && !gpu) gpu = CreateThread(NULL, 0, gpu_thread, NULL, 0, NULL);
-    const ULONGLONG now = GetTickCount64();
-    if (items != last_items || w != last_w || h != last_h || now - last_build >= 500) {
-        LARGE_INTEGER t; QueryPerformanceCounter(&t);
-        const double secs = (double)(t.QuadPart - s_win_start.QuadPart) / (double)s_qpf.QuadPart;
-        static double fps, ms;
-        if (s_win_frames && secs > 0.2) {
-            fps = s_win_frames / secs; ms = secs * 1000.0 / s_win_frames;
-            s_win_frames = 0; s_win_start = t;
+    const int corner = overlay_corner(), column = overlay_column();
+    if (!items || !s_qpf.QuadPart) { last_items = 0; s_panel.n = 0; s_panel_h = 0; }
+    else {
+        if ((items & OV_GPU) && !gpu) gpu = CreateThread(NULL, 0, gpu_thread, NULL, 0, NULL);
+        const ULONGLONG now = GetTickCount64();
+        if (items != last_items || corner != last_corner || column != last_column || w != last_w || h != last_h || now - last_build >= 500) {
+            LARGE_INTEGER t; QueryPerformanceCounter(&t);
+            const double secs = (double)(t.QuadPart - s_win_start.QuadPart) / (double)s_qpf.QuadPart;
+            static double fps, ms;
+            if (s_win_frames && secs > 0.2) {
+                fps = s_win_frames / secs; ms = secs * 1000.0 / s_win_frames;
+                s_win_frames = 0; s_win_start = t;
+            }
+            static int cpu = -1;
+            const int c = cpu_pct();
+            if (c >= 0) cpu = c;
+            Seg segs[6]; int n = 0;
+            memset(segs, 0, sizeof segs);
+            /* in a column every line has a name: FPS and frame time get one */
+            if (items & OV_FPS) { if (column) { wcscpy(segs[n].label, L"FPS"); swprintf(segs[n++].value, 24, L"%.0f", fps); }
+                                  else swprintf(segs[n++].value, 24, L"%.0f FPS", fps); }
+            if (items & OV_MS)  { if (column) wcscpy(segs[n].label, L"Frame"); swprintf(segs[n++].value, 24, L"%.1f ms", ms); }
+            if (items & OV_CPU) { wcscpy(segs[n].label, L"CPU"); if (cpu >= 0) swprintf(segs[n].value, 24, L"%d%%", cpu); else wcscpy(segs[n].value, L"-"); n++; }
+            if (items & OV_GPU) { const LONG g = s_gpu_pct; wcscpy(segs[n].label, L"GPU");
+                                  if (g >= 0) swprintf(segs[n].value, 24, L"%ld%%", g); else wcscpy(segs[n].value, L"-"); n++; }
+            if (items & OV_RAM) { PROCESS_MEMORY_COUNTERS pmc; wcscpy(segs[n].label, L"RAM");
+                                  if (GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof pmc))
+                                      swprintf(segs[n].value, 24, L"%.2f GB", pmc.WorkingSetSize / 1073741824.0);
+                                  else wcscpy(segs[n].value, L"-");
+                                  n++; }
+            if (items & OV_VRAM) { wcscpy(segs[n].label, L"VRAM"); swprintf(segs[n].value, 24, L"%.2f GB", vram_used() / 1073741824.0); n++; }
+            build(w, h, corner, column, segs, n);
+            last_items = items; last_corner = corner; last_column = column; last_w = w; last_h = h; last_build = now;
         }
-        static int cpu = -1;
-        const int c = cpu_pct();
-        if (c >= 0) cpu = c;
-        Seg segs[6]; int n = 0;
-        memset(segs, 0, sizeof segs);
-        if (items & OV_FPS) { swprintf(segs[n++].value, 24, L"%.0f FPS", fps); }
-        if (items & OV_MS)  { swprintf(segs[n++].value, 24, L"%.1f ms", ms); }
-        if (items & OV_CPU) { wcscpy(segs[n].label, L"CPU"); if (cpu >= 0) swprintf(segs[n].value, 24, L"%d%%", cpu); else wcscpy(segs[n].value, L"-"); n++; }
-        if (items & OV_GPU) { const LONG g = s_gpu_pct; wcscpy(segs[n].label, L"GPU");
-                              if (g >= 0) swprintf(segs[n].value, 24, L"%ld%%", g); else wcscpy(segs[n].value, L"-"); n++; }
-        if (items & OV_RAM) { PROCESS_MEMORY_COUNTERS pmc; wcscpy(segs[n].label, L"RAM");
-                              if (GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof pmc))
-                                  swprintf(segs[n].value, 24, L"%.2f GB", pmc.WorkingSetSize / 1073741824.0);
-                              else wcscpy(segs[n].value, L"-");
-                              n++; }
-        if (items & OV_VRAM) { wcscpy(segs[n].label, L"VRAM"); swprintf(segs[n].value, 24, L"%.2f GB", vram_used() / 1073741824.0); n++; }
-        build(w, h, items, segs, n);
-        last_items = items; last_w = w; last_h = h; last_build = now;
     }
+    /* the notes sit bottom right: above the panel when it is there too */
+    uint32_t nn = 0;
+    const rsx_ui_quad* nq = note_quads(w, h, s_panel.n && corner == 3 ? s_panel_h : 0, &nn);
+    if (!s_panel.n) { *count = nn; return nq; }
     if (!nn) { *count = s_panel.n; return s_panel.q; }
     /* both: the panel, then the note */
     s_both.n = 0;

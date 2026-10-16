@@ -59,6 +59,7 @@ enum StrId {
     S_TEX_TOAST_ON, S_TEX_TOAST_OFF, S_TEX_HOTKEY,
     S_SRT_TITLE, S_SRT_INTRO, S_SRT_ENABLE, S_SRT_NAME, S_SRT_HEALTH, S_SRT_TIME, S_SRT_STATS, S_SRT_ENEMIES, S_SRT_INVENTORY, S_SRT_CORNER, S_SRT_SCALE, S_SRT_LANGUAGE, S_SRT_FOLLOW, S_SRT_TL, S_SRT_TR, S_SRT_BL, S_SRT_BR, S_SRT_ALL, S_SRT_HOTKEY, S_SRT_ON, S_SRT_OFF, S_SRT_WAIT, S_SRT_SAVE, S_SRT_RETRY, S_SRT_EQUIPPED, S_SRT_FINE, S_SRT_CAUTION, S_SRT_DANGER, S_SRT_POISON, S_SRT_GAS, S_SRT_DEAD, S_SRT_EMPTY,
     S_SRT_OPACITY,
+    S_OV_POSITION, S_OV_LAYOUT, S_OV_ROW, S_OV_COLUMN,
     S_COUNT
 };
 
@@ -107,7 +108,7 @@ static const wchar_t* const k_str_pt[] = {
     L"Sistema",
     L"OVERLAY DE DESEMPENHO",
     L"Mostrar overlay de desempenho",
-    L"FPS, tempo de quadro e uso do PC no canto superior direito do jogo. Marque o que aparece:",
+    L"FPS, tempo de quadro e uso do PC por cima do jogo. Marque o que aparece:",
     L"Tempo de quadro (ms)",
     L"Pasta de patches",
     L"Arquivos .yml no formato do RPCS3 (patch.yml); os patches desta versão do jogo aparecem abaixo.",
@@ -207,6 +208,10 @@ static const wchar_t* const k_str_pt[] = {
     L"Morto",
     L"Vazio",
     L"Opacidade do fundo",
+    L"Posição na tela",
+    L"Disposição",
+    L"Em linha",
+    L"Em coluna",
 };
 static_assert(sizeof k_str_pt / sizeof k_str_pt[0] == S_COUNT, "k_str_pt: one text per StrId");
 
@@ -255,7 +260,7 @@ static const wchar_t* const k_str_en[] = {
     L"System",
     L"PERFORMANCE OVERLAY",
     L"Show performance overlay",
-    L"FPS, frame time and PC usage in the game's top-right corner. Tick what it shows:",
+    L"FPS, frame time and PC usage over the game. Tick what it shows:",
     L"Frame time (ms)",
     L"Patch folder",
     L".yml files in RPCS3's format (patch.yml); the patches for this version of the game are listed below.",
@@ -355,6 +360,10 @@ static const wchar_t* const k_str_en[] = {
     L"Dead",
     L"Empty",
     L"Background opacity",
+    L"Position on screen",
+    L"Layout",
+    L"Row",
+    L"Column",
 };
 static_assert(sizeof k_str_en / sizeof k_str_en[0] == S_COUNT, "k_str_en: one text per StrId");
 
@@ -403,7 +412,7 @@ static const wchar_t* const k_str_es[] = {
     L"Sistema",
     L"SUPERPOSICIÓN DE RENDIMIENTO",
     L"Mostrar superposición de rendimiento",
-    L"FPS, tiempo de fotograma y uso del PC en la esquina superior derecha del juego. Marca lo que muestra:",
+    L"FPS, tiempo de fotograma y uso del PC sobre el juego. Marca lo que muestra:",
     L"Tiempo de fotograma (ms)",
     L"Carpeta de parches",
     L"Archivos .yml en el formato de RPCS3 (patch.yml); abajo aparecen los parches de esta versión del juego.",
@@ -503,6 +512,10 @@ static const wchar_t* const k_str_es[] = {
     L"Muerto",
     L"Vacío",
     L"Opacidad del fondo",
+    L"Posición en pantalla",
+    L"Disposición",
+    L"En fila",
+    L"En columna",
 };
 static_assert(sizeof k_str_es / sizeof k_str_es[0] == S_COUNT, "k_str_es: one text per StrId");
 
@@ -551,7 +564,7 @@ static const wchar_t* const k_str_ja[] = {
     L"システム",
     L"パフォーマンスオーバーレイ",
     L"パフォーマンスオーバーレイを表示",
-    L"ゲーム画面の右上に FPS、フレーム時間、PC の使用状況を表示します。表示する項目:",
+    L"ゲーム画面に FPS、フレーム時間、PC の使用状況を表示します。表示する項目:",
     L"フレーム時間 (ms)",
     L"パッチフォルダー",
     L"RPCS3 形式 (patch.yml) の .yml ファイル。このバージョンのゲーム用パッチが下に表示されます。",
@@ -651,6 +664,10 @@ static const wchar_t* const k_str_ja[] = {
     L"死亡",
     L"空き",
     L"背景の不透明度",
+    L"画面上の位置",
+    L"レイアウト",
+    L"横並び",
+    L"縦並び",
 };
 static_assert(sizeof k_str_ja / sizeof k_str_ja[0] == S_COUNT, "k_str_ja: one text per StrId");
 
@@ -753,7 +770,7 @@ static const wchar_t* const k_str_fr[] = {
     L"Système",
     L"OVERLAY DE PERFORMANCES",
     L"Afficher l'overlay de performances",
-    L"FPS, temps d'image et utilisation du PC en haut à droite du jeu. Cochez ce qu'il affiche :",
+    L"FPS, temps d'image et utilisation du PC par-dessus le jeu. Cochez ce qu'il affiche :",
     L"Temps d'image (ms)",
     L"Dossier de patchs",
     L"Fichiers .yml au format de RPCS3 (patch.yml) ; les patchs de cette version du jeu s'affichent ci-dessous.",
@@ -853,6 +870,10 @@ static const wchar_t* const k_str_fr[] = {
     L"Mort",
     L"Vide",
     L"Opacité du fond",
+    L"Position à l'écran",
+    L"Disposition",
+    L"En ligne",
+    L"En colonne",
 };
 static_assert(sizeof k_str_fr / sizeof k_str_fr[0] == S_COUNT, "k_str_fr: one text per StrId");
 
@@ -955,7 +976,7 @@ static const wchar_t* const k_str_de[] = {
     L"System",
     L"LEISTUNGS-OVERLAY",
     L"Leistungs-Overlay anzeigen",
-    L"FPS, Frametime und PC-Auslastung oben rechts im Spiel. Wähle aus, was angezeigt wird:",
+    L"FPS, Frametime und PC-Auslastung über dem Spiel. Wähle aus, was angezeigt wird:",
     L"Frametime (ms)",
     L"Patch-Ordner",
     L".yml-Dateien im Format von RPCS3 (patch.yml); die Patches für diese Spielversion stehen unten.",
@@ -1055,6 +1076,10 @@ static const wchar_t* const k_str_de[] = {
     L"Tot",
     L"Leer",
     L"Hintergrunddeckkraft",
+    L"Position auf dem Bildschirm",
+    L"Anordnung",
+    L"Nebeneinander",
+    L"Untereinander",
 };
 static_assert(sizeof k_str_de / sizeof k_str_de[0] == S_COUNT, "k_str_de: one text per StrId");
 
@@ -1157,7 +1182,7 @@ static const wchar_t* const k_str_it[] = {
     L"Sistema",
     L"OVERLAY PRESTAZIONI",
     L"Mostra overlay prestazioni",
-    L"FPS, tempo per fotogramma e uso del PC in alto a destra nel gioco. Scegli cosa mostrare:",
+    L"FPS, tempo per fotogramma e uso del PC sopra il gioco. Scegli cosa mostrare:",
     L"Tempo per fotogramma (ms)",
     L"Cartella delle patch",
     L"File .yml nel formato di RPCS3 (patch.yml); qui sotto compaiono le patch di questa versione del gioco.",
@@ -1257,6 +1282,10 @@ static const wchar_t* const k_str_it[] = {
     L"Morto",
     L"Vuoto",
     L"Opacità dello sfondo",
+    L"Posizione sullo schermo",
+    L"Disposizione",
+    L"In riga",
+    L"In colonna",
 };
 static_assert(sizeof k_str_it / sizeof k_str_it[0] == S_COUNT, "k_str_it: one text per StrId");
 
@@ -1359,7 +1388,7 @@ static const wchar_t* const k_str_pl[] = {
     L"System",
     L"NAKŁADKA WYDAJNOŚCI",
     L"Pokaż nakładkę wydajności",
-    L"FPS, czas klatki i użycie komputera w prawym górnym rogu gry. Zaznacz, co pokazywać:",
+    L"FPS, czas klatki i użycie komputera na ekranie gry. Zaznacz, co pokazywać:",
     L"Czas klatki (ms)",
     L"Folder z łatkami",
     L"Pliki .yml w formacie RPCS3 (patch.yml); łatki do tej wersji gry są widoczne poniżej.",
@@ -1459,6 +1488,10 @@ static const wchar_t* const k_str_pl[] = {
     L"Śmierć",
     L"Puste",
     L"Krycie tła",
+    L"Położenie na ekranie",
+    L"Układ",
+    L"W poziomie",
+    L"W pionie",
 };
 static_assert(sizeof k_str_pl / sizeof k_str_pl[0] == S_COUNT, "k_str_pl: one text per StrId");
 
@@ -1561,7 +1594,7 @@ static const wchar_t* const k_str_tr[] = {
     L"Sistem",
     L"PERFORMANS KATMANI",
     L"Performans katmanını göster",
-    L"Oyunun sağ üst köşesinde FPS, kare süresi ve PC kullanımı. Gösterilecekleri seçin:",
+    L"Oyunun üzerinde FPS, kare süresi ve PC kullanımı. Gösterilecekleri seçin:",
     L"Kare süresi (ms)",
     L"Yama klasörü",
     L"RPCS3 biçiminde (patch.yml) .yml dosyaları; oyunun bu sürümüne ait yamalar aşağıda listelenir.",
@@ -1661,6 +1694,10 @@ static const wchar_t* const k_str_tr[] = {
     L"Ölü",
     L"Boş",
     L"Arka plan opaklığı",
+    L"Ekrandaki konum",
+    L"Düzen",
+    L"Yatay",
+    L"Dikey",
 };
 static_assert(sizeof k_str_tr / sizeof k_str_tr[0] == S_COUNT, "k_str_tr: one text per StrId");
 
@@ -1763,7 +1800,7 @@ static const wchar_t* const k_str_ar[] = {
     L"النظام",
     L"طبقة الأداء",
     L"إظهار طبقة الأداء",
-    L"عدد الإطارات وزمن الإطار واستخدام الحاسوب في الزاوية العلوية اليمنى من اللعبة. اختر ما يُعرض:",
+    L"عدد الإطارات وزمن الإطار واستخدام الحاسوب فوق اللعبة. اختر ما يُعرض:",
     L"زمن الإطار (ms)",
     L"مجلد التصحيحات",
     L"ملفات .yml بصيغة RPCS3 (patch.yml)؛ تظهر أدناه تصحيحات هذا الإصدار من اللعبة.",
@@ -1863,6 +1900,10 @@ static const wchar_t* const k_str_ar[] = {
     L"ميت",
     L"فارغ",
     L"عتامة الخلفية",
+    L"الموضع على الشاشة",
+    L"التخطيط",
+    L"أفقي",
+    L"عمودي",
 };
 static_assert(sizeof k_str_ar / sizeof k_str_ar[0] == S_COUNT, "k_str_ar: one text per StrId");
 
@@ -1965,7 +2006,7 @@ static const wchar_t* const k_str_zh[] = {
     L"系统",
     L"性能浮层",
     L"显示性能浮层",
-    L"在游戏右上角显示 FPS、帧时间和电脑占用。勾选要显示的项目：",
+    L"在游戏画面上显示 FPS、帧时间和电脑占用。勾选要显示的项目：",
     L"帧时间 (ms)",
     L"补丁文件夹",
     L"RPCS3 格式 (patch.yml) 的 .yml 文件；下方列出适用于此游戏版本的补丁。",
@@ -2065,6 +2106,10 @@ static const wchar_t* const k_str_zh[] = {
     L"死亡",
     L"空",
     L"背景不透明度",
+    L"屏幕位置",
+    L"排列",
+    L"横向",
+    L"纵向",
 };
 static_assert(sizeof k_str_zh / sizeof k_str_zh[0] == S_COUNT, "k_str_zh: one text per StrId");
 
@@ -2167,7 +2212,7 @@ static const wchar_t* const k_str_ko[] = {
     L"시스템",
     L"성능 오버레이",
     L"성능 오버레이 표시",
-    L"게임 화면 오른쪽 위에 FPS, 프레임 시간, PC 사용량을 표시합니다. 표시할 항목을 선택하세요:",
+    L"게임 화면에 FPS, 프레임 시간, PC 사용량을 표시합니다. 표시할 항목을 선택하세요:",
     L"프레임 시간 (ms)",
     L"패치 폴더",
     L"RPCS3 형식(patch.yml)의 .yml 파일. 이 버전의 게임용 패치가 아래에 표시됩니다.",
@@ -2267,6 +2312,10 @@ static const wchar_t* const k_str_ko[] = {
     L"사망",
     L"빈칸",
     L"배경 불투명도",
+    L"화면 위치",
+    L"배치",
+    L"가로",
+    L"세로",
 };
 static_assert(sizeof k_str_ko / sizeof k_str_ko[0] == S_COUNT, "k_str_ko: one text per StrId");
 
@@ -2369,7 +2418,7 @@ static const wchar_t* const k_str_ru[] = {
     L"Система",
     L"ОВЕРЛЕЙ ПРОИЗВОДИТЕЛЬНОСТИ",
     L"Показывать оверлей производительности",
-    L"FPS, время кадра и загрузка ПК в правом верхнем углу игры. Отметьте, что показывать:",
+    L"FPS, время кадра и загрузка ПК поверх игры. Отметьте, что показывать:",
     L"Время кадра (мс)",
     L"Папка с патчами",
     L"Файлы .yml в формате RPCS3 (patch.yml); ниже — патчи для этой версии игры.",
@@ -2469,6 +2518,10 @@ static const wchar_t* const k_str_ru[] = {
     L"Смерть",
     L"Пусто",
     L"Непрозрачность фона",
+    L"Положение на экране",
+    L"Расположение",
+    L"В строку",
+    L"В столбец",
 };
 static_assert(sizeof k_str_ru / sizeof k_str_ru[0] == S_COUNT, "k_str_ru: one text per StrId");
 
