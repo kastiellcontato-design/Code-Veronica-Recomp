@@ -38,12 +38,13 @@ constexpr uint32_t kDialog=CV_MENU_DIALOG;
 constexpr uint32_t kUp=0x10, kDown=0x40, kLeft=0x80, kRight=0x20;
 constexpr uint32_t kConfirm=0xC000, kCancel=0x2001;
 bool pc_selected=false, pc_open=false, drawing_main=false;
-/* The menu returned "leaving" (0xFF): the game fades it out over the next
- * frames, still calling the menu each frame, with its own dark overlay on top
- * of its rows. The PC SETTINGS label is our overlay, drawn after everything,
- * so it stays hidden from then until the menu takes input again (back from a
- * sub-screen) or is opened anew -- it stayed lit about half a second longer
- * than the rows. */
+/* The menu returned non-zero: it is closing (0xFF) or opening a sub-screen
+ * (MONITOR TUNING, SCREEN SETTINGS). The game fades it out over the next
+ * frames, still calling the menu each frame -- through the sub-screen too --
+ * with its own dark overlay on top of its rows. The PC SETTINGS label is our
+ * overlay, drawn after everything, so it fades out with the rows and stays
+ * hidden until the menu takes input again or is opened anew; it stayed lit
+ * over the fade and over the sub-screen itself. */
 bool leaving=false;
 int pc_row=0;
 constexpr int kSettingCount=6, kResetColorsRow=kSettingCount;
@@ -182,8 +183,20 @@ uint32_t selected_color(bool selected) {
     const uint32_t pulse=vm_read32(CV_MENU_PULSE)&255;
     return ((pulse?pulse:255)<<24)|0xFFFFFF;
 }
-void draw_entry(const ppu_context* caller) {
-    TextBatch batch; batch.text("PC SETTINGS",32,310,selected_color(pc_selected)); batch.submit(caller);
+/* opacity: 1 normally, less while the menu fades out (see leaving). */
+void draw_entry(const ppu_context* caller,float opacity=1.f) {
+    TextBatch batch; batch.text("PC SETTINGS",32,310,selected_color(pc_selected));
+    /* A confirmation box (RESET GAME) is open: the game draws it over its rows,
+     * which show through faintly at their first letters and fade out under it.
+     * Ours is drawn over everything, so it takes that look itself to sit
+     * behind the box instead of covering it. */
+    const bool boxed=vm_read32(kDialog)!=0;
+    if(opacity<1.f || boxed)
+        for(auto& q:batch.quads) {
+            const float under=boxed?std::clamp((95.f-q.x)/55.f,0.f,1.f)*.5f:1.f;
+            q.argb=(uint32_t(float(q.argb>>24)*opacity*under)<<24)|(q.argb&0xFFFFFFu);
+        }
+    batch.submit(caller);
 }
 void draw_settings(const ppu_context* caller) {
     static const char* resolution[]={"480P","720P (NATIVE)","1080P","1440P","4K"};
@@ -274,8 +287,14 @@ void CV_FN_MENU_INPUT(ppu_context* ctx) {
         consume(input_address,repeat_address);draw_settings(ctx);ctx->gpr[3]=0;return;
     }
     drawing_main=true;CV_OG_MENU_INPUT(ctx);finish(ctx);drawing_main=false;
-    if((ctx->gpr[3]&255)==255)leaving=true;
-    if(leaving)rsx_d3d12_set_ui_quads(nullptr,0);
+    /* Leaving (closing the menu or opening a sub-screen): the game's rows do
+     * not fade, the next screen is drawn over them. Ours cannot be covered, so
+     * it stays as it is for the 0.1 s the cover takes and then goes at once
+     * (hidden at the press it went a beat early; faded, it looked unlike the
+     * rows), and stays hidden. */
+    static ULONGLONG left_at=0;
+    if((ctx->gpr[3]&255) && !leaving) { leaving=true;left_at=GetTickCount64(); }
+    if(leaving && GetTickCount64()-left_at>=100)rsx_d3d12_set_ui_quads(nullptr,0);
     else draw_entry(ctx);
 }
 extern "C" int cv_native_pc_menu_selftest(void) {
