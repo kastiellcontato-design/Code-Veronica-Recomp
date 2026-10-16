@@ -457,12 +457,21 @@ static D3D12State s_d3d;
  * Unset or 1: nothing changes. */
 static float s_rs = 1.0f;
 static u32 rs_dim(u32 v, float sc) { return sc == 1.0f ? v : (u32)((float)v * sc + 0.5f); }
-/* Submitted by the game thread; consumed only on the render thread. */
+/* Submitted by the game thread; consumed only on the render thread.
+ * A batch belongs to the guest frame it was submitted in -- the one ended by
+ * the title's next flip -- and is drawn over that frame only. The game's own
+ * frame reaches the screen a variable time after it is built, so a batch
+ * drawn on whatever present came next ran ahead of the game's layers (a
+ * fade it should darken with) or lingered after its submitter stopped (a
+ * menu the game no longer runs). A few slots, by flip, so the game can
+ * build the next frame's batch while this one is still being rendered. */
 #define UI_MAX_QUADS 131072u
+#define UI_SLOTS 4u
+u32 cellGcm_flip_submit_count(void);
 static SRWLOCK s_ui_lock = SRWLOCK_INIT;
-static rsx_ui_quad s_ui_quads[UI_MAX_QUADS];
-static u32 s_ui_count;
-static ULONGLONG s_ui_updated;
+static rsx_ui_quad s_ui_quads[UI_SLOTS][UI_MAX_QUADS];
+static u32 s_ui_count[UI_SLOTS], s_ui_frame[UI_SLOTS];
+static u32 s_ui_render_flip;   /* the frame being rendered: s_rb's, set by render_frame */
 /* A per-frame upload buffer of quad vertices, grown on demand. */
 typedef struct QuadVb { ID3D12Resource* vb[FRAME_COUNT]; void* mapped[FRAME_COUNT]; u32 quads[FRAME_COUNT]; } QuadVb;
 static QuadVb s_ui_vbs, s_ov_vbs;   /* the game's UI batch; the performance overlay */
@@ -470,9 +479,10 @@ typedef struct UiVertex { float x,y,z,r,g,b,a,u,v; } UiVertex;
 void rsx_d3d12_set_ui_quads(const rsx_ui_quad* quads,u32 count)
 {
     if (!quads || count > UI_MAX_QUADS) count=0;
+    const u32 frame=cellGcm_flip_submit_count()+1, slot=frame%UI_SLOTS;
     AcquireSRWLockExclusive(&s_ui_lock);
-    if(count) memcpy(s_ui_quads,quads,(size_t)count*sizeof(*quads));
-    s_ui_count=count;s_ui_updated=GetTickCount64();
+    if(count) memcpy(s_ui_quads[slot],quads,(size_t)count*sizeof(*quads));
+    s_ui_count[slot]=count;s_ui_frame[slot]=frame;
     ReleaseSRWLockExclusive(&s_ui_lock);
 }
 /* Draw `count` quads into back buffer `fi` with the flat UI pipeline, `mvp`
@@ -545,14 +555,15 @@ static void quad_batch_draw(u32 fi, const rsx_ui_quad* quads, u32 count, const f
 /* The game's UI batch: logical 640x480, centred at 4:3. */
 static void ui_batch_draw(u32 fi)
 {
+    const u32 flip=s_ui_render_flip, slot=flip%UI_SLOTS;
     AcquireSRWLockShared(&s_ui_lock);
-    u32 count=s_ui_count;
-    if(count && GetTickCount64()-s_ui_updated<=250) {
+    u32 count=s_ui_frame[slot]==flip?s_ui_count[slot]:0;
+    if(count) {
         u32 w=rs_dim(s_d3d.width,s_rs),h=rs_dim(s_d3d.height,s_rs);
         float mvp[16]={0};
         mvp[0]=2.f*(float)h/(480.f*(float)w);mvp[5]=-2.f/480.f;
         mvp[10]=mvp[15]=1;mvp[12]=-640.f*(float)h/(480.f*(float)w);mvp[13]=1;
-        quad_batch_draw(fi,s_ui_quads,count,mvp,&s_ui_vbs);
+        quad_batch_draw(fi,s_ui_quads[slot],count,mvp,&s_ui_vbs);
     }
     ReleaseSRWLockShared(&s_ui_lock);
 }
@@ -9541,6 +9552,8 @@ static void render_frame(void)
     s_rb.fp_arena   = s_fp_arena;
     s_rb.vtex_arena = s_vtex_arena;
     s_rb.present    = s_present_this_frame;
+    { extern unsigned cellGcm_flip_done_count(void);
+      s_ui_render_flip = cellGcm_flip_done_count(); }   /* the flip that ended it */
 
     /* ...and point recording at the other buffers. */
     s_d3d.draws = (s_d3d.draws == s_draw_bufs[0]) ? s_draw_bufs[1] : s_draw_bufs[0];

@@ -25,6 +25,7 @@ int cv_pc_settings_read() {
 }
 int cv_pc_settings_saturation_read() { return settings[5]; }
 void cv_pc_settings_change(int which,int value) { settings[which]=value;changes.emplace_back(which,value); }
+uint32_t cellGcm_flip_submit_count() { static uint32_t frame;return ++frame; }   // one frame per menu call
 void rsx_d3d12_set_ui_quads(const rsx_ui_quad* q,uint32_t count) {
     largest_batch=std::max(largest_batch,count);
     assert(count<131072);

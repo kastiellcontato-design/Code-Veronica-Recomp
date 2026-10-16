@@ -341,6 +341,21 @@ u32 cellGcm_flip_request_count(void)
 {
     return s_flip_request_count;
 }
+/* Flips the title has asked for, counted on its own thread when it asks:
+ * work it does before its Nth request belongs to the frame of request N,
+ * which the drain counts in s_flip_done_count when it reaches it. */
+static volatile u32 s_flip_submit_count = 0;
+u32 cellGcm_flip_submit_count(void)
+{
+    return s_flip_submit_count;
+}
+/* Those same requests as the drain carries them out, one for one (unlike
+ * s_flip_request_count, which SetPrepareFlip also bumps at call time). */
+static volatile u32 s_flip_done_count = 0;
+u32 cellGcm_flip_done_count(void)
+{
+    return s_flip_done_count;
+}
 static u32  s_debug_level = CELL_GCM_DEBUG_LEVEL0;
 
 /* Display buffers */
@@ -1947,6 +1962,7 @@ static void gcm_rsx_process_fifo_unlocked(void)
                 ps3_ft('D');
                 s_flip_pending = 1;
                 s_flip_request_count++;
+                s_flip_done_count++;
             } else {
                 cellGcmSetFlipCommand(w & 0xFFu);
             }
@@ -2598,12 +2614,14 @@ static s32 gcm_flip_request(u32 bufferId, int in_fifo)
         return CELL_GCM_ERROR_INVALID_VALUE;
 
 
+    s_flip_submit_count++;
     /* in_fifo: the flip sits in the command stream as a GCM_FLIP_MARKER, and
      * the drain does this half when it reaches it (see the 0xFEAD case). */
     if (!in_fifo) {
         s_current_display_buffer_id = bufferId;
         s_flip_pending = 1;   /* ticker: present BEFORE the next drain */
         s_flip_request_count++;
+        s_flip_done_count++;
     }
     /* Flip requested but not yet shown: a subsequent cellGcmSetWaitFlip blocks
      * until the present thread's cellGcmTickFlip marks it done (vsync). */
