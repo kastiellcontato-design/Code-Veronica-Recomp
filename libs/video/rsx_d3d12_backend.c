@@ -474,7 +474,7 @@ static u32 s_ui_count[UI_SLOTS], s_ui_frame[UI_SLOTS];
 static u32 s_ui_render_flip;   /* the frame being rendered: s_rb's, set by render_frame */
 /* A per-frame upload buffer of quad vertices, grown on demand. */
 typedef struct QuadVb { ID3D12Resource* vb[FRAME_COUNT]; void* mapped[FRAME_COUNT]; u32 quads[FRAME_COUNT]; } QuadVb;
-static QuadVb s_ui_vbs, s_ov_vbs;   /* the game's UI batch; the performance overlay */
+static QuadVb s_ui_vbs, s_ov_vbs, s_srt_vbs;   /* the game's UI batch; the performance overlay */
 typedef struct UiVertex { float x,y,z,r,g,b,a,u,v; } UiVertex;
 void rsx_d3d12_set_ui_quads(const rsx_ui_quad* quads,u32 count)
 {
@@ -570,15 +570,22 @@ static void ui_batch_draw(u32 fi)
 
 /* The performance overlay (rsx_perf_overlay.h): back-buffer pixels, over the
  * finished frame, so anti-aliasing and the colour controls leave it alone. */
+/* Optional port-owned, read-only telemetry overlay. Independent GPU buffers
+ * keep its vertices alive alongside the performance panel in the same frame. */
+const rsx_ui_quad* (*g_rsx_srt_hook)(uint32_t,uint32_t,uint32_t*);
 static void perf_overlay_draw(u32 fi)
 {
     u32 w=rs_dim(s_d3d.width,s_rs),h=rs_dim(s_d3d.height,s_rs),count=0;
-    const rsx_ui_quad* quads=perf_overlay_quads(w,h,&count);
-    if(!count)return;
     float mvp[16]={0};
     mvp[0]=2.f/(float)w;mvp[5]=-2.f/(float)h;mvp[10]=mvp[15]=1;mvp[12]=-1;mvp[13]=1;
-    quad_batch_draw(fi,quads,count,mvp,&s_ov_vbs);
+    if(g_rsx_srt_hook) {
+        const rsx_ui_quad* srt=g_rsx_srt_hook(w,h,&count);
+        if(count)quad_batch_draw(fi,srt,count,mvp,&s_srt_vbs);
+    }
+    const rsx_ui_quad* quads=perf_overlay_quads(w,h,&count);
+    if(count)quad_batch_draw(fi,quads,count,mvp,&s_ov_vbs);
 }
+
 static float rs_for(u32 w, u32 h) { return (s_rs != 1.0f && (u64)w * h > 16384u) ? s_rs : 1.0f; }
 static void rs_set_vp(float sc, const D3D12_VIEWPORT* vp, const D3D12_RECT* rc)
 {
@@ -11409,6 +11416,7 @@ void rsx_d3d12_backend_shutdown(void)
     for(u32 i=0;i<FRAME_COUNT;i++) {
         if(s_ui_vbs.vb[i])s_ui_vbs.vb[i]->lpVtbl->Release(s_ui_vbs.vb[i]);
         if(s_ov_vbs.vb[i])s_ov_vbs.vb[i]->lpVtbl->Release(s_ov_vbs.vb[i]);
+        if(s_srt_vbs.vb[i])s_srt_vbs.vb[i]->lpVtbl->Release(s_srt_vbs.vb[i]);
     }
     if (s_d3d.depth_buffer) s_d3d.depth_buffer->lpVtbl->Release(s_d3d.depth_buffer);
     if (s_d3d.dsv_heap)     s_d3d.dsv_heap->lpVtbl->Release(s_d3d.dsv_heap);

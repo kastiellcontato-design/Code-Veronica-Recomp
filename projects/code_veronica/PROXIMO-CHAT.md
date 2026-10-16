@@ -1,3 +1,64 @@
+# Último ajuste — nomes completos, 16/10/2026
+
+Quebra de nomes de todos os itens, inclusive munição; quantidade em linha
+separada, altura compartilhada da fileira calculada e equipado ajustável.
+Não reduz fonte. Ícones de armas largas maiores (56×25 na grade), célula
+única ocupando dois slots. Prévias reais do desenho com estado sintético em
+`codex_diag_srt/srt-NPEB00553-two-slots-{pt-BR,en}.png` e
+`srt-NPEB00553-wrapped-ammo-{pt-BR,en}.png`. EU/JP/US compiladas e testes
+aprovados em `build-release/srt-wrap-build.log`. Conferência visual no jogo
+pendente; preferências preservadas. Sem commit/push. Leia última seção de
+SRT-NATIVO.md; o restante deste arquivo é histórico.
+
+---
+
+# Última revisão SRT — ícones e espelhamento, 16/10/2026
+
+Branch autorizada: **code-veronica**, sem commit/push. Painel principal agora
+fica contra a borda também em TR/BR; inventário voltado para o centro e ECG
+na coluna correta. Ícones pequenos/translúcidos lidos do `subtx_tex.arc` da
+cópia selecionada, sem depender do dump. 127 IDs mapeados, demais mantêm nome.
+EU/JP/US contêm as mesmas duas folhas; fontes e preferências preservadas.
+Leitor/cache próprio em cv_srt_icons.cpp/.h. Leia a última seção de
+SRT-NATIVO.md para caminhos, fallback, limites e testes. Log:
+`build-release/srt-icons-build.log`. Prévias são sintéticas, revisão aguarda
+conferência visual no jogo. Sem alteração de shader, FXC/DXC ou save.
+
+---
+
+# Atualização SRT — 16/10/2026
+
+Trabalho atual na branch **code-veronica**, autorizado explicitamente pelo
+usuário. Sem commit/push nesta sessão. Última revisão: sliders de tamanho/fundo com precisão de 1%, crédito completo
+localizado (Feito por Kastiel), SRT em L3+R1+○ e launcher em L2+R3+R1.
+Dicas nas 13 línguas; testes de cada percentual e dos três botões. Log:
+`build-release/srt-sliders-build.log`. Leia a última seção de SRT-NATIVO.md.
+
+Revisão anterior: sombras de textos/barras/ECG, textos 2x com cache limitado,
+Segoe UI Semibold nos títulos, barras dos inimigos grossas, sem ~ e crédito
+por/by Kastiel no rodapé. Builds/testes EU/JP/US aprovados em
+`build-release/srt-shadow-build.log`. Preferências do usuário 90%/10% preservadas.
+Validação visual desta revisão ainda pendente. Ver seção final de SRT-NATIVO.md.
+
+Refinamento anterior: fontes Georgia/Segoe UI, maiúsculas acentuadas
+Unicode, opacidade do fundo (0–100%, padrão 70%), layout compacto, ECG mais
+lento com bordas suavizadas, espera reduzida e saves ativados. Build/testes
+EU/JP/US aprovados em `build-release/srt-refinement-build.log`; falta a
+conferência visual desta revisão pelo usuário.
+
+Leia primeiro **SRT-NATIVO.md** e
+**PLANO-SRT.md**; o histórico abaixo descreve estados anteriores.
+
+Implementação própria do leitor/painel e da página SRT, F8/L3+R1, tamanho,
+idiomas e blocos configuráveis. Build/testes EU/JP/US aprovados. Usuário confirmou leitura e inventário na EU;
+revisão visual posterior: inventário lateral, fontes em resolução final e ECG
+animado sem redesenhar texto. Gameplay completo/regressão de todas as regiões
+e ícones originais ainda pendentes. Não confundir prévias sintéticas
+com capturas de gameplay. Não houve troca de compilador FXC/DXC ou alteração
+dos patches/controles/PC SETTINGS existentes para implementar o painel.
+
+---
+
 # Where we left off (Code Veronica, branch fmv-av-pacing)
 
 Updated 2026-10-14. All code is committed and pushed; latest commit `267510f`.

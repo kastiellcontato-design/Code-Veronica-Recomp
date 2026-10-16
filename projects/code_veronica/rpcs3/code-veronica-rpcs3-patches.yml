@@ -1,0 +1,134 @@
+PPU-df822d7d47de09c5672201db8cc633009037f54f: # RESIDENT EVIL CODE: Veronica X (EU)
+  "Skip Logos and Intro":
+    Games:
+      "RESIDENT EVIL CODE: Veronica X":
+        NPEB00553: [ 01.00 ]
+    Author: "Kastiel"
+    Notes: "EN: Skips the CAPCOM and MT FRAMEWORK logos and the intro movie, so the game opens straight on the title screen. PT-BR: Pula os logos da CAPCOM e da MT FRAMEWORK e o vídeo de introdução: o jogo abre direto na tela de título."
+    Patch Version: 1.0
+    Patch:
+      - [ be32, 0x00201444, 0x60000000 ] # logos: end as soon as they start
+      - [ be32, 0x0002b450, 0x60000000 ] # intro movie: not started
+      - [ be32, 0x0002b454, 0x3860ffff ] # title: straight to PRESS START
+
+  "Start with Sniper Rifle":
+    Games:
+      "RESIDENT EVIL CODE: Veronica X":
+        NPEB00553: [ 01.00 ]
+    Author: "Kastiel"
+    Notes: "EN: A New Game starts with the Sniper Rifle in your inventory, plus 100 rounds of its ammo. Enable it before starting a New Game; saved games are not changed. PT-BR: Um Novo Jogo começa com o Sniper Rifle no inventário e 100 balas para ele. Ative antes de começar um Novo Jogo; jogos salvos não mudam."
+    Patch Version: 1.0
+    Patch:
+      - [ be32, 0x001ac3f0, 0x60000000 ] # always write the starting slots
+      - [ be32, 0x001ac408, 0x38e00008 ] # eight slots
+      - [ be32, 0x001ac40c, 0x4801c3f8 ] # to the added routine
+      - [ be32, 0x001c8804, 0x3cc00099 ] # address of the item list
+      - [ be32, 0x001c8808, 0x60c60b60 ]
+      - [ be32, 0x001c880c, 0x7ce903a6 ] # eight repetitions
+      - [ be32, 0x001c8810, 0x80e60000 ] # read this slot's item
+      - [ be32, 0x001c8814, 0x90e80000 ] # write it to the inventory
+      - [ be32, 0x001c8818, 0x4bfff7dc ] # continue
+      - [ be32, 0x001c7ff4, 0x38c60004 ] # next item in the list
+      - [ be32, 0x001c7ff8, 0x39080004 ] # next inventory slot
+      - [ be32, 0x001c7ffc, 0x42000814 ] # repeat while slots remain
+      - [ be32, 0x001c8000, 0x38e00002 ] # restore the register
+      - [ be32, 0x001c8004, 0x4bfe440c ] # back to the game
+      # Starting slots: 00 ITEM 00 COUNT (0x00000000 = empty). SLOT 1 Sniper Rifle, SLOT 2 its ammo.
+      - [ be32, 0x00990b60, 0x00030007 ] # SLOT 1
+      - [ be32, 0x00990b64, 0x00280064 ] # SLOT 2
+      - [ be32, 0x00990b68, 0x00000000 ] # SLOT 3
+      - [ be32, 0x00990b6c, 0x00000000 ] # SLOT 4
+      - [ be32, 0x00990b70, 0x00000000 ] # SLOT 5
+      - [ be32, 0x00990b74, 0x00000000 ] # SLOT 6
+      - [ be32, 0x00990b78, 0x00000000 ] # SLOT 7
+      - [ be32, 0x00990b7c, 0x00000000 ] # SLOT 8
+
+PPU-b4b1ebe7a069782537a13d5bdbc15d6e900ceb25: # RESIDENT EVIL CODE: Veronica X (US)
+  "Skip Logos and Intro":
+    Games:
+      "RESIDENT EVIL CODE: Veronica X":
+        NPUB30467: [ 01.00 ]
+    Author: "Kastiel"
+    Notes: "EN: Skips the CAPCOM and MT FRAMEWORK logos and the intro movie, so the game opens straight on the title screen. PT-BR: Pula os logos da CAPCOM e da MT FRAMEWORK e o vídeo de introdução: o jogo abre direto na tela de título."
+    Patch Version: 1.0
+    Patch:
+      - [ be32, 0x001ff4a4, 0x60000000 ] # logos: end as soon as they start
+      - [ be32, 0x0002afe0, 0x60000000 ] # intro movie: not started
+      - [ be32, 0x0002afe4, 0x3860ffff ] # title: straight to PRESS START
+
+  "Start with Sniper Rifle":
+    Games:
+      "RESIDENT EVIL CODE: Veronica X":
+        NPUB30467: [ 01.00 ]
+    Author: "Kastiel"
+    Notes: "EN: A New Game starts with the Sniper Rifle in your inventory, plus 100 rounds of its ammo. Enable it before starting a New Game; saved games are not changed. PT-BR: Um Novo Jogo começa com o Sniper Rifle no inventário e 100 balas para ele. Ative antes de começar um Novo Jogo; jogos salvos não mudam."
+    Patch Version: 1.0
+    Patch:
+      - [ be32, 0x001aa998, 0x60000000 ] # always write the starting slots
+      - [ be32, 0x001aa9b0, 0x38e00008 ] # eight slots
+      - [ be32, 0x001aa9b4, 0x4801c030 ] # to the added routine
+      - [ be32, 0x001c69e4, 0x3cc00098 ] # address of the item list
+      - [ be32, 0x001c69e8, 0x60c6e160 ]
+      - [ be32, 0x001c69ec, 0x7ce903a6 ] # eight repetitions
+      - [ be32, 0x001c69f0, 0x80e60000 ] # read this slot's item
+      - [ be32, 0x001c69f4, 0x90e80000 ] # write it to the inventory
+      - [ be32, 0x001c69f8, 0x4bfff7dc ] # continue
+      - [ be32, 0x001c61d4, 0x38c60004 ] # next item in the list
+      - [ be32, 0x001c61d8, 0x39080004 ] # next inventory slot
+      - [ be32, 0x001c61dc, 0x42000814 ] # repeat while slots remain
+      - [ be32, 0x001c61e0, 0x38e00002 ] # restore the register
+      - [ be32, 0x001c61e4, 0x4bfe47d4 ] # back to the game
+      # Starting slots: 00 ITEM 00 COUNT (0x00000000 = empty). SLOT 1 Sniper Rifle, SLOT 2 its ammo.
+      - [ be32, 0x0098e160, 0x00030007 ] # SLOT 1
+      - [ be32, 0x0098e164, 0x00280064 ] # SLOT 2
+      - [ be32, 0x0098e168, 0x00000000 ] # SLOT 3
+      - [ be32, 0x0098e16c, 0x00000000 ] # SLOT 4
+      - [ be32, 0x0098e170, 0x00000000 ] # SLOT 5
+      - [ be32, 0x0098e174, 0x00000000 ] # SLOT 6
+      - [ be32, 0x0098e178, 0x00000000 ] # SLOT 7
+      - [ be32, 0x0098e17c, 0x00000000 ] # SLOT 8
+
+PPU-37f854495138eeb5afdc2db9d4cf6a2d4918beb6: # BIOHAZARD CODE: Veronica 完全版 (JP)
+  "Skip Logos and Intro":
+    Games:
+      "BIOHAZARD CODE: Veronica 完全版":
+        NPJB00135: [ 01.00 ]
+    Author: "Kastiel"
+    Notes: "EN: Skips the CAPCOM and MT FRAMEWORK logos and the intro movie, so the game opens straight on the title screen. PT-BR: Pula os logos da CAPCOM e da MT FRAMEWORK e o vídeo de introdução: o jogo abre direto na tela de título."
+    Patch Version: 1.0
+    Patch:
+      - [ be32, 0x001ff7f8, 0x60000000 ] # logos: end as soon as they start
+      - [ be32, 0x0002afb8, 0x60000000 ] # intro movie: not started
+      - [ be32, 0x0002afbc, 0x3860ffff ] # title: straight to PRESS START
+
+  "Start with Sniper Rifle":
+    Games:
+      "BIOHAZARD CODE: Veronica 完全版":
+        NPJB00135: [ 01.00 ]
+    Author: "Kastiel"
+    Notes: "EN: A New Game starts with the Sniper Rifle in your inventory, plus 100 rounds of its ammo. Enable it before starting a New Game; saved games are not changed. PT-BR: Um Novo Jogo começa com o Sniper Rifle no inventário e 100 balas para ele. Ative antes de começar um Novo Jogo; jogos salvos não mudam."
+    Patch Version: 1.0
+    Patch:
+      - [ be32, 0x001aaa40, 0x60000000 ] # always write the starting slots
+      - [ be32, 0x001aaa58, 0x38e00008 ] # eight slots
+      - [ be32, 0x001aaa5c, 0x4801c108 ] # to the added routine
+      - [ be32, 0x001c6b64, 0x3cc00098 ] # address of the item list
+      - [ be32, 0x001c6b68, 0x60c6ea60 ]
+      - [ be32, 0x001c6b6c, 0x7ce903a6 ] # eight repetitions
+      - [ be32, 0x001c6b70, 0x80e60000 ] # read this slot's item
+      - [ be32, 0x001c6b74, 0x90e80000 ] # write it to the inventory
+      - [ be32, 0x001c6b78, 0x4bfff7dc ] # continue
+      - [ be32, 0x001c6354, 0x38c60004 ] # next item in the list
+      - [ be32, 0x001c6358, 0x39080004 ] # next inventory slot
+      - [ be32, 0x001c635c, 0x42000814 ] # repeat while slots remain
+      - [ be32, 0x001c6360, 0x38e00002 ] # restore the register
+      - [ be32, 0x001c6364, 0x4bfe46fc ] # back to the game
+      # Starting slots: 00 ITEM 00 COUNT (0x00000000 = empty). SLOT 1 Sniper Rifle, SLOT 2 its ammo.
+      - [ be32, 0x0098ea60, 0x00030007 ] # SLOT 1
+      - [ be32, 0x0098ea64, 0x00280064 ] # SLOT 2
+      - [ be32, 0x0098ea68, 0x00000000 ] # SLOT 3
+      - [ be32, 0x0098ea6c, 0x00000000 ] # SLOT 4
+      - [ be32, 0x0098ea70, 0x00000000 ] # SLOT 5
+      - [ be32, 0x0098ea74, 0x00000000 ] # SLOT 6
+      - [ be32, 0x0098ea78, 0x00000000 ] # SLOT 7
+      - [ be32, 0x0098ea7c, 0x00000000 ] # SLOT 8

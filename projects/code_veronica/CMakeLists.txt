@@ -223,6 +223,10 @@ endif()
 add_executable(${PROJECT_NAME}
     main.cpp
     launcher.cpp
+    cv_srt.cpp
+    cv_srt_data.cpp
+    cv_srt_icons.cpp
+    cv_srt_i18n.cpp
     button_icons.cpp
     patch_files.cpp
     log_viewer.cpp
@@ -441,5 +445,20 @@ if(WIN32)
         target_compile_definitions(code_veronica_menu_tests PRIVATE CV_REGION_JP=1)
     elseif(CV_REGION_LC STREQUAL "us")
         target_compile_definitions(code_veronica_menu_tests PRIVATE CV_REGION_US=1)
+    endif()
+endif()
+
+if(WIN32)
+    add_executable(code_veronica_srt_tests EXCLUDE_FROM_ALL
+        tests/test_srt.cpp cv_srt.cpp cv_srt_data.cpp cv_srt_icons.cpp cv_srt_i18n.cpp
+        "${CMAKE_CURRENT_BINARY_DIR}/launcher_art.rc"
+        "${PS3RECOMP_DIR}/libs/filesystem/edat.c")
+    target_compile_options(code_veronica_srt_tests PRIVATE /UNDEBUG)
+    target_link_libraries(code_veronica_srt_tests PRIVATE gdi32 user32 gdiplus ole32)
+    set_target_properties(code_veronica_srt_tests PROPERTIES OUTPUT_NAME "cv_srt_tests_${CV_REGION_LC}")
+    if(CV_REGION_LC STREQUAL "jp")
+        target_compile_definitions(code_veronica_srt_tests PRIVATE CV_REGION_JP=1)
+    elseif(CV_REGION_LC STREQUAL "us")
+        target_compile_definitions(code_veronica_srt_tests PRIVATE CV_REGION_US=1)
     endif()
 endif()

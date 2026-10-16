@@ -23,6 +23,21 @@
 
 #if defined(CV_REGION_JP)
 #define CV_TITLE_ID        "NPJB00135"
+/* SRT: read-only guest state. Source of address facts: Kapdap (MIT). */
+#define CV_SRT_TIME          0x00BB3E38u
+#define CV_SRT_ROOM          0x00BB3E4Cu
+#define CV_SRT_STATUS        0x00BDE709u
+#define CV_SRT_HEALTH        0x00BDEA9Cu
+#define CV_SRT_CHARACTER     0x00BB361Cu
+#define CV_SRT_INVENTORY     0x00BB3808u
+#define CV_SRT_ENEMIES       0x00BDEBF8u
+#define CV_SRT_ENEMY_COUNT   0x00BDE318u
+#define CV_SRT_DIFFICULTY    0x00BB3624u
+#define CV_SRT_SAVES         0x00BB3618u
+#define CV_SRT_RETRY         0x00BB3E42u
+#define CV_SRT_FAS           0x00BB3E40u
+#define CV_SRT_RDX           0x00BDE16Cu
+
 #define CV_TOC             0x00A7AE70u
 /* OPTION menu (native_pc_menu.cpp) */
 #define CV_MENU_CURSOR     0x00BAE690u
@@ -49,6 +64,21 @@
 #define CV_DOOR_SKIP_SITE  0x001AE304u
 #elif defined(CV_REGION_US)
 #define CV_TITLE_ID        "NPUB30467"
+/* SRT: read-only guest state. Source of address facts: Kapdap (MIT). */
+#define CV_SRT_TIME          0x00BB3DB8u
+#define CV_SRT_ROOM          0x00BB3DCCu
+#define CV_SRT_STATUS        0x00BDE689u
+#define CV_SRT_HEALTH        0x00BDEA1Cu
+#define CV_SRT_CHARACTER     0x00BB359Cu
+#define CV_SRT_INVENTORY     0x00BB3788u
+#define CV_SRT_ENEMIES       0x00BDEB78u
+#define CV_SRT_ENEMY_COUNT   0x00BDE298u
+#define CV_SRT_DIFFICULTY    0x00BB35A4u
+#define CV_SRT_SAVES         0x00BB3598u
+#define CV_SRT_RETRY         0x00BB3DC2u
+#define CV_SRT_FAS           0x00BB3DC0u
+#define CV_SRT_RDX           0x00BDE0ECu
+
 #define CV_TOC             0x00A7AE70u
 #define CV_MENU_CURSOR     0x00BAE610u
 #define CV_MENU_INPUT      0x00BB3070u
@@ -72,6 +102,21 @@
 #define CV_DOOR_SKIP_SITE  0x001AE25Cu
 #else
 #define CV_TITLE_ID        "NPEB00553"
+/* SRT: read-only guest state. Source of address facts: Kapdap (MIT). */
+#define CV_SRT_TIME          0x00BC40B8u
+#define CV_SRT_ROOM          0x00BC40CCu
+#define CV_SRT_STATUS        0x00BEE989u
+#define CV_SRT_HEALTH        0x00BEED1Cu
+#define CV_SRT_CHARACTER     0x00BC389Cu
+#define CV_SRT_INVENTORY     0x00BC3A88u
+#define CV_SRT_ENEMIES       0x00BEEE78u
+#define CV_SRT_ENEMY_COUNT   0x00BEE598u
+#define CV_SRT_DIFFICULTY    0x00BC38A4u
+#define CV_SRT_SAVES         0x00BC3898u
+#define CV_SRT_RETRY         0x00BC40C2u
+#define CV_SRT_FAS           0x00BC40C0u
+#define CV_SRT_RDX           0x00BEE3ECu
+
 #define CV_TOC             0x00A8AE70u
 #define CV_MENU_CURSOR     0x00BBE910u
 #define CV_MENU_INPUT      0x00BC3370u

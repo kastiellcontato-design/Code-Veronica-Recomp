@@ -109,3 +109,27 @@ The Game page also allows choosing a **Saves folder**. Leaving it unset keeps
 the existing `gamedata/dev_hdd0/home/00000001/savedata` path. Changes take effect
 on the next game start and do not move existing saves. Details, ELF identity,
 regeneration and validation: [SAVES-E-VERSAO-AMERICANA.md](SAVES-E-VERSAO-AMERICANA.md).
+
+
+### Native SRT overlay
+
+The new **SRT** launcher page controls a native, optional overlay with character
+name, HP/percentage/status, game timer, counters, enemies and inventory names with small original item icons.
+Toggle it in game with **F8** or **L3+R1+Circle**. It supports EU/JP/US builds, four
+corners, 50–200% scale and English/PT-BR panel language. Current implementation,
+validation limits and item-icon fallback: [SRT-NATIVO.md](SRT-NATIVO.md).
+
+Memory addresses and game-state rules were studied in
+[re-cvx-srt-provider, by Kapdap (MIT)](https://github.com/kapdap/re-cvx-srt-provider).
+The C++ reader and native layout are independently implemented in this port.
+
+SRT size/background opacity are draggable 1% sliders. The in-game launcher
+controller shortcut is **L2+R3+R1** (keyboard Insert); the SRT shortcut is
+**L3+R1+Circle/B** (keyboard F8). All three buttons must be on one controller.
+The SRT author credit is localized to all 13 launcher languages.
+
+The main SRT column stays against the selected screen edge; on right corners
+inventory appears to its left. Item icons are read once from the selected
+game's own `subtx_tex.arc` (identical sheets in EU/JP/US), keyed transparent
+and cached. There are 127 mapped IDs; unrecognized or missing art falls back
+to names. No game images or texture dumps are bundled or required separately.

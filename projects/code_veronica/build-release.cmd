@@ -71,3 +71,17 @@ if "%CV_BUILD_US%"=="1" (
  )
  cmake --build build-release-us -j 6 || exit /b 1
 )
+
+rem SRT memory/layout regression tests, isolated from real saves/settings.
+if "%CV_SRT_TESTS%"=="1" (
+ cmake --build build-release --target code_veronica_srt_tests -j 6 || exit /b 1
+ build-release\bin\cv_srt_tests_eu.exe codex_diag_srt || exit /b 1
+ if "%CV_BUILD_JP%"=="1" (
+  cmake --build build-release-jp --target code_veronica_srt_tests -j 6 || exit /b 1
+  build-release\bin\cv_srt_tests_jp.exe || exit /b 1
+ )
+ if "%CV_BUILD_US%"=="1" (
+  cmake --build build-release-us --target code_veronica_srt_tests -j 6 || exit /b 1
+  build-release\bin\cv_srt_tests_us.exe || exit /b 1
+ )
+)

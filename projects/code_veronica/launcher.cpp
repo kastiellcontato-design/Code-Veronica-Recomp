@@ -36,6 +36,9 @@
 #include "launcher_i18n.h"
 #include "patch_files.h"
 #include "cv_version.h"
+#include "cv_srt.h"
+#include "cv_srt_i18n.h"
+#include "cv_launcher_controls.h"
 #include "log_viewer.h"
 
 /* button_icons.cpp: the keycaps' short labels and font, shared with the game. */
@@ -178,6 +181,9 @@ struct Settings {
     std::wstring tex_dir;              /* texture mods (Mods page); empty: "textures" beside the exe */
     std::wstring tex_dump_dir;         /* where dumps go; empty: <tex_dir>\<version>\dump */
     bool tex_replace = false, tex_dump = false;
+    bool srt=false;
+    bool srt_parts[5]={true,true,true,true,false}; // name, health, time, stats, inventory
+    int srt_enemies=3, srt_corner=0, srt_scale=100, srt_language=0, srt_opacity=70; // 0 follow, 1 EN, 2 PT-BR; 3..13 other launcher languages
     std::wstring game, rap, fw, saves;
     std::wstring patch_dir;                 /* patch files (patch_files.h) */
     std::vector<std::string> patch_files_on; /* ids of the file patches turned on */
@@ -334,6 +340,15 @@ Settings load_settings()
             { def_game = g.wstring(); break; }
         }
     }
+    s.srt = _wtoi(ini_get(L"srt", L"mostrar", L"0").c_str()) != 0;
+    { const wchar_t* keys[]={L"nome",L"vida",L"tempo",L"contadores",L"inventario"};
+      for(int i=0;i<5;i++)s.srt_parts[i]=_wtoi(ini_get(L"srt",keys[i],i<4?L"1":L"0").c_str())!=0; }
+    s.srt_enemies=std::clamp(_wtoi(ini_get(L"srt",L"inimigos",L"3").c_str()),0,99);
+    if(s.srt_enemies>5&&s.srt_enemies!=99)s.srt_enemies=5;
+    s.srt_corner=std::clamp(_wtoi(ini_get(L"srt",L"posicao",L"0").c_str()),0,3);
+    s.srt_scale=std::clamp(_wtoi(ini_get(L"srt",L"tamanho",L"100").c_str()),50,200);
+    s.srt_opacity=std::clamp(_wtoi(ini_get(L"srt",L"opacidade",L"70").c_str()),0,100);
+    s.srt_language=std::clamp(_wtoi(ini_get(L"srt",L"idioma",L"0").c_str()),0,int(LANG_COUNT));
     s.overlay = _wtoi(ini_get(L"overlay", L"mostrar", L"0").c_str()) != 0;
     for (int i = 0; i < NSHADER_OPTS; i++)
         s.shader_opt[i] = _wtoi(ini_get(L"shaders", k_shader_opts[i].key, L"1").c_str()) != 0;
@@ -387,6 +402,14 @@ void save_settings(const Settings& s)
     ini_set(L"launcher", L"idioma", g_lang_pick < 0 ? std::wstring(L"system") : widen(k_lang_id[g_lang_pick]));
     for (int i = 0; i < NPATCHES; i++)
         ini_set(L"patches", widen(k_patches[i].id).c_str(), s.patch[i] ? L"1" : L"0");
+    ini_set(L"srt", L"mostrar",s.srt?L"1":L"0");
+    { const wchar_t* keys[]={L"nome",L"vida",L"tempo",L"contadores",L"inventario"};
+      for(int i=0;i<5;i++)ini_set(L"srt",keys[i],s.srt_parts[i]?L"1":L"0"); }
+    ini_set(L"srt",L"inimigos",std::to_wstring(s.srt_enemies));
+    ini_set(L"srt",L"posicao",std::to_wstring(s.srt_corner));
+    ini_set(L"srt",L"tamanho",std::to_wstring(s.srt_scale));
+    ini_set(L"srt",L"idioma",std::to_wstring(s.srt_language));
+    ini_set(L"srt",L"opacidade",std::to_wstring(s.srt_opacity));
     ini_set(L"overlay", L"mostrar", s.overlay ? L"1" : L"0");
     ini_set(L"overlay", L"itens", std::to_wstring(s.overlay_items));
     for (int i = 0; i < NSHADER_OPTS; i++)
@@ -520,7 +543,7 @@ Bitmap* load_png(const char* name)
 }
 
 /* ---------------------------------------------------------------- UI state */
-enum Page { P_INICIO, P_JOGO, P_CONTROLES, P_PATCHES, P_MODS, P_DESEMPENHO, P_AVANCADO, P_COUNT };
+enum Page { P_INICIO, P_JOGO, P_CONTROLES, P_PATCHES, P_MODS, P_SRT, P_DESEMPENHO, P_AVANCADO, P_COUNT };
 enum Capture { CAP_NONE, CAP_KEY, CAP_BTN };
 
 struct Hit { RectF r; int id; };
@@ -529,6 +552,7 @@ struct UI {
     Settings s;
     Page page = P_INICIO;
     int hover = -1;
+    int srt_drag = -1; bool srt_drag_dirty = false;
     int open_dd = -1;            /* open dropdown id */
     Capture cap = CAP_NONE; int cap_action = -1, cap_slot = 0; ULONGLONG cap_since = 0;
     std::vector<FilePatch> fpatches;   /* read from s.patch_dir when it changes or the page opens */
@@ -544,7 +568,7 @@ struct UI {
     int pad_kind = 0;              /* PAD_KIND_* of the first connected pad */
     bool running = false;          /* Jogar pressed: the window stays as the options menu */
     int applied_mode = -1, applied_res = -1, applied_aa = -1;
-    uint32_t combo_prev = 0, tex_combo_prev = 0;
+    uint32_t combo_prev = 0, tex_combo_prev = 0, srt_combo_prev = 0;
     std::string eboot;
     std::wstring cache_msg;        /* result of the last "clear shader cache" */
     int tex_rep = -1, tex_dumped = 0;   /* PNGs in the texture folder (-1: not counted yet) */
@@ -568,6 +592,7 @@ enum {
     ID_PATCH_DIR_BROWSE = 1500, ID_PATCH_DIR_OPEN, ID_FPATCH = 1600,  /* + file patch index */
     ID_LOG_VIEW = 2100, ID_LOG_COPY, ID_LOG_SAVE, ID_LOG_FOLDER,
     ID_SHADER_OPT = 2200,                                          /* + k_shader_opts index */
+    ID_SRT=2400, ID_SRT_PART=2410, ID_DD_SRT_ENEMIES=2420, ID_DD_SRT_CORNER, ID_DD_SRT_LANGUAGE, ID_SRT_SCALE, ID_SRT_OPACITY,
     ID_TEX_BROWSE = 2300, ID_TEX_OPEN, ID_TEX_REPLACE, ID_TEX_DUMP, ID_TEX_DUMP_BROWSE, ID_TEX_DUMP_OPEN,
 };
 
@@ -1444,6 +1469,47 @@ void option_card(Graphics& gr, float x, float y, float w, float h, bool on, int 
     hit(x, y, w, h, id);
 }
 
+std::wstring srt_enemy_value(int n) {return n==0?T(S_AA_OFF):n==99?T(S_SRT_ALL):std::to_wstring(n);}
+std::wstring srt_language_value() {return g.s.srt_language?k_lang_name[cv_srt_i18n::selection(g.s.srt_language,g_lang)]:T(S_SRT_FOLLOW);}
+RectF srt_slider_rect(int id) {
+    const float w=W-SIDE-64.f,col=(w-24)/2,right=SIDE+32.f+col+24;
+    return RectF(right,id==ID_SRT_SCALE?434.f:519.f,col-72,32);
+}
+void srt_slider(Graphics& gr,int id,int value,int minimum,int maximum,const Font& body) {
+    const RectF r=srt_slider_rect(id);const float left=r.X+8,span=r.Width-16,cy=r.Y+16;
+    const float thumb=left+span*cv_launcher_controls::slider_fraction(value,minimum,maximum);
+    Pen track(C_FIELD_BD,5);track.SetStartCap(LineCapRound);track.SetEndCap(LineCapRound);
+    gr.DrawLine(&track,left,cy,left+span,cy);
+    Pen progress(C_RED,5);progress.SetStartCap(LineCapRound);progress.SetEndCap(LineCapRound);
+    if(thumb>left)gr.DrawLine(&progress,left,cy,thumb,cy);
+    if(g.srt_drag==id||g.hover==id) {SolidBrush glow(Color(45,230,50,50));gr.FillEllipse(&glow,thumb-11,cy-11,22.f,22.f);}
+    SolidBrush fill(C_TEXT);Pen border(C_RED,2);
+    gr.FillEllipse(&fill,thumb-7,cy-7,14.f,14.f);gr.DrawEllipse(&border,thumb-7,cy-7,14.f,14.f);
+    text(gr,std::to_wstring(value)+L"%",r.X+r.Width+8,r.Y,body,C_TEXT,StringAlignmentFar,64,32);
+    hit(r.X,r.Y,r.Width,r.Height,id);
+}
+void draw_srt(Graphics& gr,const Font& head,const Font& body,const Font& fsm)
+{
+    const float x=SIDE+32.f,w=W-SIDE-64.f,col=(w-24)/2,right=x+col+24;
+    section(gr,T(S_SRT_TITLE),x,34,w,head);
+    text(gr,T(S_SRT_INTRO),x,70,fsm,C_DIM,StringAlignmentNear,w,24);
+    option_card(gr,x,104,w,58,g.s.srt,ID_SRT,T(S_SRT_ENABLE),L"",body,fsm);
+    const int names[]={S_SRT_NAME,S_SRT_HEALTH,S_SRT_TIME,S_SRT_STATS,S_SRT_INVENTORY};
+    for(int i=0;i<5;i++)option_card(gr,i%2?right:x,180+(i/2)*70.f,col,58,g.s.srt_parts[i],ID_SRT_PART+i,T(names[i]),L"",body,fsm);
+    text(gr,T(S_SRT_ENEMIES),right,318,body,C_TEXT,StringAlignmentNear,col,24);
+    dropdown(gr,RectF(right,347,col,32),srt_enemy_value(g.s.srt_enemies),ID_DD_SRT_ENEMIES,body);
+    text(gr,T(S_SRT_CORNER),x,404,body,C_TEXT,StringAlignmentNear,col,24);
+    dropdown(gr,RectF(x,434,col,32),T(S_SRT_TL+g.s.srt_corner),ID_DD_SRT_CORNER,body);
+    text(gr,T(S_SRT_SCALE)+std::wstring(L"  (50–200%)"),right,404,body,C_TEXT,StringAlignmentNear,col,24);
+    srt_slider(gr,ID_SRT_SCALE,g.s.srt_scale,50,200,body);
+    text(gr,T(S_SRT_LANGUAGE),x,490,body,C_TEXT,StringAlignmentNear,col,24);
+    dropdown(gr,RectF(x,519,col,32),srt_language_value(),ID_DD_SRT_LANGUAGE,body);
+    text(gr,T(S_SRT_OPACITY)+std::wstring(L"  (0–100%)"),right,490,body,C_TEXT,StringAlignmentNear,col,24);
+    srt_slider(gr,ID_SRT_OPACITY,g.s.srt_opacity,0,100,body);
+    StringFormat sf;sf.SetLineAlignment(StringAlignmentNear);SolidBrush brush(C_DIM);
+    gr.DrawString(T(S_SRT_HOTKEY),-1,&fsm,RectF(x,577,w,42),&sf,&brush);
+}
+
 void draw_desempenho(Graphics& gr, const Font& head, const Font& body, const Font& fsm)
 {
     float x = SIDE + 32.0f, y = 34;
@@ -1545,6 +1611,7 @@ void paint(HDC hdc)
     else if (g.page == P_PATCHES) draw_patches(gr, fHead, fBody, fSmall);
     else if (g.page == P_DESEMPENHO) draw_desempenho(gr, fHead, fBody, fSmall);
     else if (g.page == P_MODS) draw_mods(gr, fHead, fBody, fSmall);
+    else if (g.page == P_SRT) draw_srt(gr, fHead, fBody, fSmall);
     else draw_avancado(gr, fHead, fBody, fSmall);
     draw_sidebar(gr, fTitle, fTitle2, fNav, fSmall);
     draw_play(gr, fBig, fSmall);
@@ -1552,10 +1619,17 @@ void paint(HDC hdc)
     /* open dropdown list on top */
     if (g.open_dd >= 0) {
         std::vector<std::wstring> items; std::vector<int> item_lang; int sel = 0;
-        const float x = g_dd_anchor.X, y = g_dd_anchor.Y + g_dd_anchor.Height, bw = g_dd_anchor.Width;
+        const float x=g_dd_anchor.X,bw=g_dd_anchor.Width;float y=g_dd_anchor.Y+g_dd_anchor.Height;
         if (g.open_dd == ID_DD_MODE) { for (int i = 0; i < 3; i++) items.push_back(mode_name(i)); sel = g.s.mode; }
         else if (g.open_dd == ID_DD_RES) { for (int i = 0; i < 5; i++) items.push_back(res_name(i)); sel = g.s.res; }
         else if (g.open_dd == ID_DD_AA) { for (int i = 0; i < 3; i++) items.push_back(aa_name(i)); sel = g.s.aa; }
+        else if (g.open_dd == ID_DD_SRT_ENEMIES) { for(int i=0;i<=5;i++)items.push_back(srt_enemy_value(i));items.push_back(T(S_SRT_ALL));sel=g.s.srt_enemies==99?6:g.s.srt_enemies; }
+        else if (g.open_dd == ID_DD_SRT_CORNER) {for(int i=0;i<4;i++)items.push_back(T(S_SRT_TL+i));sel=g.s.srt_corner;}
+        else if (g.open_dd == ID_DD_SRT_LANGUAGE) {
+            items={T(S_SRT_FOLLOW),k_lang_name[LANG_EN],k_lang_name[LANG_PT]};item_lang={g_lang,LANG_EN,LANG_PT};
+            for(int lang=2;lang<LANG_COUNT;lang++) {items.push_back(k_lang_name[lang]);item_lang.push_back(lang);}
+            sel=g.s.srt_language;
+        }
         else {   /* Sistema, then each language in its own name and script */
             items.push_back(T(S_LANG_SYSTEM)); item_lang.push_back(g_lang);
             for (int i = 0; i < LANG_COUNT; i++) {
@@ -1564,6 +1638,7 @@ void paint(HDC hdc)
             }
         }
         const int n = (int)items.size(), vis = std::min(n, DD_VISIBLE);
+        if(y+vis*28>H-12)y=std::max(12.f,g_dd_anchor.Y-vis*28.f);
         g.dd_scroll = std::max(0, std::min(g.dd_scroll, n - vis));
         const bool scroll = n > vis;
         const float iw = scroll ? bw - 16 : bw;
@@ -1679,11 +1754,13 @@ void open_in_explorer(const std::wstring& p)
 /* While the game runs: display mode, resolution and controls apply at once. */
 void set_map_env();
 void set_overlay_env();
+void set_srt_env();
 void set_env(const char* k, const std::string& v);
 void set_texture_env();
 void set_note_text_env();
 void toggle_textures(const char* by);
 void changed();
+void finish_srt_drag();
 
 void apply_live(bool restore_menu = true)
 {
@@ -1716,6 +1793,7 @@ void show_menu()
 }
 void hide_menu()
 {
+    finish_srt_drag();
     g.cap = CAP_NONE; g.open_dd = -1;
     SetWindowPos(g.hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
     if (HWND gw = (HWND)rsx_d3d12_window()) {
@@ -1730,7 +1808,9 @@ const UINT WM_PC_SETTINGS_CHANGE = WM_APP + 3;
 const UINT WM_PC_SETTINGS_READ_SATURATION = WM_APP + 4;
 void menu_hook() { PostMessageW(g.hwnd, WM_TOGGLE_MENU, 0, 0); }   /* game window thread */
 const UINT WM_TOGGLE_TEXTURES = WM_APP + 5;
-void key_hook(unsigned vk) { if (vk == VK_F9) PostMessageW(g.hwnd, WM_TOGGLE_TEXTURES, 0, 0); }   /* game window thread */
+const UINT WM_TOGGLE_SRT = WM_APP + 6;
+void key_hook(unsigned vk) { if (vk == VK_F9) PostMessageW(g.hwnd, WM_TOGGLE_TEXTURES, 0, 0);
+    else if(vk==VK_F8)PostMessageW(g.hwnd,WM_TOGGLE_SRT,0,0); }   /* game window thread */
 /* F9 in the game or R3+R2 on a controller: texture mods on or off at once,
  * with a notice in the game's corner. The replacements stay loaded while
  * off, so going back and forth to compare is immediate. */
@@ -1742,6 +1822,12 @@ void toggle_textures(const char* by)
     if (g.running) perf_overlay_toast(T(g.s.tex_replace ? S_TEX_TOAST_ON : S_TEX_TOAST_OFF), g.s.tex_replace);
     changed();
     fprintf(stderr, "[launcher] texture mods %s (%s)%c", g.s.tex_replace ? "on" : "off", by, 10);
+}
+void toggle_srt()
+{
+    g.s.srt=!g.s.srt;set_srt_env();
+    if(g.running)perf_overlay_toast(T(g.s.srt?S_SRT_ON:S_SRT_OFF),g.s.srt);
+    changed();
 }
 void quit_game()
 {
@@ -1755,6 +1841,19 @@ void set_icon_env();
 
 void changed() { save_settings(g.s); g.play_msg.clear(); apply_live(); InvalidateRect(g.hwnd, NULL, FALSE); }
 
+void update_srt_slider(int id,int x) {
+    const RectF r=srt_slider_rect(id);int& value=id==ID_SRT_SCALE?g.s.srt_scale:g.s.srt_opacity;
+    const int next=cv_launcher_controls::slider_value(float(x),r.X+8,r.Width-16,id==ID_SRT_SCALE?50:0,id==ID_SRT_SCALE?200:100);
+    if(next==value)return;
+    value=next;g.srt_drag_dirty=true;set_srt_env();InvalidateRect(g.hwnd,NULL,FALSE);
+}
+void finish_srt_drag() {
+    if(g.srt_drag<0)return;
+    const bool dirty=g.srt_drag_dirty;g.srt_drag=-1;g.srt_drag_dirty=false;
+    if(GetCapture()==g.hwnd)ReleaseCapture();
+    if(dirty)changed();else InvalidateRect(g.hwnd,NULL,FALSE);
+}
+
 void click(int id)
 {
     if (g.open_dd >= 0) {
@@ -1765,7 +1864,11 @@ void click(int id)
             if (g.open_dd == ID_DD_MODE) g.s.mode = i;
             else if (g.open_dd == ID_DD_RES) g.s.res = i;
             else if (g.open_dd == ID_DD_AA) g.s.aa = i;
+            else if(g.open_dd==ID_DD_SRT_ENEMIES)g.s.srt_enemies=i==6?99:i;
+            else if(g.open_dd==ID_DD_SRT_CORNER)g.s.srt_corner=i;
+            else if(g.open_dd==ID_DD_SRT_LANGUAGE)g.s.srt_language=i;
             else { set_lang_pick(i == 0 ? -1 : k_lang_order[i - 1]); set_note_text_env(); }
+            set_srt_env();
             g.open_dd = -1; changed(); return;
         }
         g.open_dd = -1; InvalidateRect(g.hwnd, NULL, FALSE); return;
@@ -1777,11 +1880,12 @@ void click(int id)
         if (g.page == P_MODS) g.tex_rep = -1;        /* count the textures again */
     }
     else if (id >= ID_PATCH && id < ID_PATCH + NPATCHES) { g.s.patch[id - ID_PATCH] ^= true; changed(); }
-    else if (id == ID_DD_MODE || id == ID_DD_RES || id == ID_DD_AA || id == ID_DD_LANG) {
+    else if (id == ID_DD_MODE || id == ID_DD_RES || id == ID_DD_AA || id == ID_DD_LANG || id==ID_DD_SRT_ENEMIES || id==ID_DD_SRT_CORNER || id==ID_DD_SRT_LANGUAGE) {
         g.open_dd = id; g.dd_scroll = 0;
         if (id == ID_DD_LANG && g_lang_pick >= 0)   /* open with the chosen language in view */
             for (int i = 0; i < LANG_COUNT; i++)
                 if (k_lang_order[i] == g_lang_pick) g.dd_scroll = std::max(0, i + 1 - DD_VISIBLE / 2);
+        if(id==ID_DD_SRT_LANGUAGE)g.dd_scroll=std::max(0,g.s.srt_language-DD_VISIBLE/2);
     }
     else if (id == ID_CACHE_CLEAR && !g.running) g.cache_msg = Tf(S_CACHE_CLEARED_FMT, cache_clear());
     else if (id == ID_CACHE_OPEN) { std::error_code ec; fs::create_directories(cache_dir(), ec); open_in_explorer(cache_dir().wstring()); }
@@ -1858,6 +1962,8 @@ void click(int id)
         if (g.running) ps3_patch_writes(p.id.c_str(), p.spec.c_str(), now);   /* at once, in the running game */
         changed();
     }
+    else if(id==ID_SRT)toggle_srt();
+    else if(id>=ID_SRT_PART&&id<ID_SRT_PART+5) {g.s.srt_parts[id-ID_SRT_PART]^=true;set_srt_env();changed();}
     else if (id == ID_OVERLAY) { g.s.overlay = !g.s.overlay; set_overlay_env(); changed(); }
     else if (id >= ID_SHADER_OPT && id < ID_SHADER_OPT + NSHADER_OPTS) {
         g.s.shader_opt[id - ID_SHADER_OPT] ^= true;
@@ -1916,12 +2022,24 @@ LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp)
     case WM_ERASEBKGND: return 1;
     case WM_PAINT: { PAINTSTRUCT ps; HDC dc = BeginPaint(h, &ps); paint(dc); EndPaint(h, &ps); return 0; }
     case WM_MOUSEMOVE: {
+        if(g.srt_drag>=0) {update_srt_slider(g.srt_drag,GET_X_LPARAM(lp));SetCursor(LoadCursor(NULL,IDC_HAND));return 0;}
         int id = hit_at(GET_X_LPARAM(lp), GET_Y_LPARAM(lp));
         if (id != g.hover) { g.hover = id; InvalidateRect(h, NULL, FALSE); }
         SetCursor(LoadCursor(NULL, id >= 0 ? IDC_HAND : IDC_ARROW));
         TRACKMOUSEEVENT t = { sizeof t, TME_LEAVE, h, 0 }; TrackMouseEvent(&t);
         return 0; }
     case WM_MOUSEWHEEL:
+        if(g.page==P_SRT && g.open_dd<0) {
+            POINT p={GET_X_LPARAM(lp),GET_Y_LPARAM(lp)};ScreenToClient(h,&p);const int id=hit_at(p.x,p.y);
+            if(id==ID_SRT_OPACITY) {
+                const int step=GET_WHEEL_DELTA_WPARAM(wp)>0?1:-1;
+                g.s.srt_opacity=std::clamp(g.s.srt_opacity+step,0,100);set_srt_env();changed();return 0;
+            }
+            if(id==ID_SRT_SCALE) {
+                const int step=GET_WHEEL_DELTA_WPARAM(wp)>0?1:-1;
+                g.s.srt_scale=std::clamp(g.s.srt_scale+step,50,200);set_srt_env();changed();return 0;
+            }
+        }
         if (g.open_dd >= 0) {
             g.dd_scroll += GET_WHEEL_DELTA_WPARAM(wp) > 0 ? -1 : 1;
             InvalidateRect(h, NULL, FALSE);
@@ -1932,7 +2050,17 @@ LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp)
         return 0;
     case WM_MOUSELEAVE: g.hover = -1; InvalidateRect(h, NULL, FALSE); return 0;
     case WM_SETCURSOR: if (LOWORD(lp) == HTCLIENT) return TRUE; break;
-    case WM_LBUTTONDOWN: click(hit_at(GET_X_LPARAM(lp), GET_Y_LPARAM(lp))); return 0;
+    case WM_LBUTTONDOWN: {
+        const int id=hit_at(GET_X_LPARAM(lp),GET_Y_LPARAM(lp));
+        if(g.page==P_SRT&&g.open_dd<0&&(id==ID_SRT_SCALE||id==ID_SRT_OPACITY)) {
+            g.srt_drag=id;g.srt_drag_dirty=false;SetCapture(h);
+            update_srt_slider(id,GET_X_LPARAM(lp));InvalidateRect(h,NULL,FALSE);return 0;
+        }
+        click(id);return 0;
+    }
+    case WM_LBUTTONUP:
+        if(g.srt_drag>=0) {update_srt_slider(g.srt_drag,GET_X_LPARAM(lp));finish_srt_drag();return 0;}break;
+    case WM_CAPTURECHANGED: case WM_CANCELMODE: finish_srt_drag();return 0;
     case WM_KEYDOWN: case WM_SYSKEYDOWN:
         if (g.cap == CAP_KEY) {
             if (wp == VK_ESCAPE) { g.cap = CAP_NONE; InvalidateRect(h, NULL, FALSE); return 0; }
@@ -1947,6 +2075,7 @@ LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp)
         if (m == WM_SYSKEYDOWN) break;
         return 0;
     case WM_ACTIVATE:
+        if(LOWORD(wp)==WA_INACTIVE)finish_srt_drag();
         g_pad_block = g.running && LOWORD(wp) != WA_INACTIVE;   /* the game ignores input under the menu */
         /* However it was activated (taskbar, Alt+Tab, a click), come above a
          * fullscreen game, which is topmost; give that up when the game
@@ -1956,6 +2085,7 @@ LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp)
                          SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
         break;
     case WM_CLOSE:
+        finish_srt_drag();
         if (g.running) { ShowWindow(h, SW_HIDE); quit_game(); return 0; }
         break;
     case WM_TIMER: {
@@ -1964,11 +2094,11 @@ LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp)
             if (GetForegroundWindow() == h || IsWindowVisible(h)) show_menu();
             return 0;
         }
-        if (g.running) {   /* R3+L2 on any controller toggles the menu */
+        if (g.running) {   /* L2+R3+R1, all on the same controller, toggles the menu. */
             uint32_t combo = 0;
             for (int i = 0; i < PAD_PHYS_MAX; i++) {
                 PadPhys p; if (!pad_phys_poll(i, &p)) continue;
-                if ((p.buttons & (1u << PB_R3)) && (p.buttons & (1u << PB_L2))) combo |= 1u << i;
+                if (cv_launcher_controls::chord_active(p.buttons,cv_launcher_controls::menu_chord)) combo |= 1u << i;
             }
             if (combo & ~g.combo_prev) toggle_menu();
             g.combo_prev = combo;
@@ -1979,6 +2109,10 @@ LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp)
             }
             if (tcombo & ~g.tex_combo_prev) toggle_textures("R3+R2");
             g.tex_combo_prev = tcombo;
+            uint32_t scombo=0;
+            for(int i=0;i<PAD_PHYS_MAX;i++) {PadPhys p;if(!pad_phys_poll(i,&p))continue;
+                if(cv_launcher_controls::chord_active(p.buttons,cv_launcher_controls::srt_chord))scombo|=1u<<i;}
+            if(scombo&~g.srt_combo_prev)toggle_srt();g.srt_combo_prev=scombo;
         }
         /* controller status + button capture */
         std::wstring st; int cnt = 0;
@@ -2016,6 +2150,7 @@ LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp)
     }
     if (m == WM_TOGGLE_MENU) { toggle_menu(); return 0; }
     if (m == WM_TOGGLE_TEXTURES) { toggle_textures("F9"); return 0; }
+    if(m==WM_TOGGLE_SRT) {toggle_srt();return 0;}
     return DefWindowProcW(h, m, wp, lp);
 }
 
@@ -2041,6 +2176,24 @@ void set_note_text_env()
 
 /* Texture mods (rsx_texture_pack.h). The game reads the switches again as it
  * runs, so turning them on or off here acts at once. */
+void set_srt_env()
+{
+    const int lang=cv_srt_i18n::selection(g.s.srt_language,g_lang);
+    set_env("SRT",g.s.srt?"1":"0");
+    const char* keys[]={"SRT_NAME","SRT_HEALTH","SRT_TIME","SRT_STATS","SRT_INVENTORY"};
+    for(int i=0;i<5;i++)set_env(keys[i],g.s.srt_parts[i]?"1":"0");
+    set_env("SRT_OPACITY",std::to_string(g.s.srt_opacity));
+    set_env("SRT_ENEMIES",std::to_string(g.s.srt_enemies));set_env("SRT_SCALE",std::to_string(g.s.srt_scale));
+    const char* corners[]={"tl","tr","bl","br"};set_env("SRT_CORNER",corners[g.s.srt_corner]);
+    set_env("SRT_LANGUAGE",k_lang_id[lang]);
+    const std::wstring credit=srt_credit_text(lang);
+    set_env("SRT_CREDIT",save_utf8(fs::path(credit)));
+    const int ids[]={S_SRT_HEALTH,S_SRT_TIME,S_SRT_SAVE,S_SRT_RETRY,S_SRT_ENEMIES,S_SRT_INVENTORY,S_SRT_EQUIPPED,
+        S_SRT_FINE,S_SRT_CAUTION,S_SRT_DANGER,S_SRT_POISON,S_SRT_GAS,S_SRT_DEAD,S_SRT_WAIT,S_SRT_EMPTY};
+    std::wstring words;for(int id:ids) {if(!words.empty())words+=L"|";words+=k_str[lang][id];}
+    set_env("SRT_TEXT",save_utf8(fs::path(words)));cv_srt_configure_env();
+}
+
 void set_texture_env()
 {
     set_env("TEXTURE_DIR", save_utf8(tex_folder()));
@@ -2188,6 +2341,7 @@ void start_game()
     set_env("SHADER_PRELOAD_PARALLEL", s.shader_opt[3] ? "1" : "0");
     set_env("SHADER_PRELOAD_NOTE", s.shader_opt[4] ? "1" : "0");
     set_texture_env();
+    set_srt_env();
     set_note_text_env();
     {   /* file patches: applied by the runtime once the game is loaded */
         if (g.fpatches.empty()) scan_patch_dir();

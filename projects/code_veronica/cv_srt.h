@@ -1,0 +1,26 @@
+#pragma once
+#include <stdint.h>
+#include "../../libs/video/rsx_ui_batch.h"
+#ifdef __cplusplus
+extern "C" {
+#endif
+enum { CV_SRT_MAX_ENEMIES=64, CV_SRT_INVENTORY_SIZE=11 };
+enum { SRT_FINE, SRT_CAUTION, SRT_WARNING, SRT_DANGER, SRT_POISON, SRT_GAS, SRT_DEAD };
+typedef struct { int id, quantity, wide, counted, infinite; } cv_srt_item;
+typedef struct { int type, hp, maximum, estimated; } cv_srt_enemy;
+typedef struct {
+    int valid, character, hp, maximum, condition, room;
+    uint32_t seconds;
+    int saves, retry, fas, equipped, enemy_count;
+    cv_srt_item inventory[CV_SRT_INVENTORY_SIZE];
+    cv_srt_enemy enemies[CV_SRT_MAX_ENEMIES];
+} cv_srt_state;
+/* No writes to guest memory. Called by the render/frame-clock thread only. */
+int cv_srt_sample(cv_srt_state* state);
+void cv_srt_configure_env(void);
+const rsx_ui_quad* cv_srt_quads(uint32_t width,uint32_t height,uint32_t* count);
+/* Native layout, also used by the isolated design/regression test. */
+const rsx_ui_quad* cv_srt_design(const cv_srt_state* state,uint32_t width,uint32_t height,uint32_t* count);
+#ifdef __cplusplus
+}
+#endif
