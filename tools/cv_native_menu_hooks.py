@@ -8,6 +8,7 @@ from pathlib import Path
 # Japanese EBOOT, in the same order (projects/code_veronica/cv_version.h).
 HOOKS_BY_REGION = {
     "eu": ("0002A468", "0002F3D0", "001BD060", "0020140C", "0002B35C"),
+    "us": ("0002A038", "0002EF60", "001BB5E0", "001FF46C", "0002AEEC"),
     "jp": ("0002A038", "0002EF38", "001BB688", "001FF7C0", "0002AEC4"),
 }
 HOOKS = HOOKS_BY_REGION["eu"]

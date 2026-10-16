@@ -81,13 +81,15 @@ struct GameVersion { const wchar_t* code; const char* elf_sha1; const wchar_t* e
 const GameVersion k_versions[] = {
     { L"NPEB00553", "d0c9d3ab3a5ed12c80ab77fe73fa58d464083fa1", L"MyGameRecomp.exe",
       L"Resident Evil Code: Veronica X (PSN)" },
+    { L"NPUB30467", "93d060e5019d877df39cd091c28efff920b98e49", L"MyGameRecomp_US.exe",
+      L"Resident Evil Code: Veronica X (PSN US)" },
     { L"NPJB00135", "ad17bbfadf23937480ba0330616262e595dfaa78", L"MyGameRecomp_JP.exe",
       L"BIOHAZARD CODE: Veronica Kanzenban (PSN)" },
 };
 const wchar_t* GAME_CODE = L"" CV_TITLE_ID;
 /* The text that names the compatible versions in the strings, replaced by
  * the one found where a message is about a particular folder. */
-const wchar_t* CODES_TOKEN = L"NPEB00553 / NPJB00135";
+const wchar_t* CODES_TOKEN = L"NPEB00553 / NPJB00135 / NPUB30467";
 const GameVersion* version_of(const std::wstring& code)
 {
     for (const GameVersion& v : k_versions) if (code == v.code) return &v;
@@ -169,7 +171,7 @@ struct Settings {
     int layout = 2;        /* button icons: 0 PlayStation, 1 Xbox, 2 automatic, 3 keyboard */
     bool overlay = false;  /* the performance overlay (rsx_perf_overlay.h) */
     int overlay_items = 3; /* bits of k_overlay_items: FPS and frame time */
-    std::wstring game, rap, fw;
+    std::wstring game, rap, fw, saves;
     std::wstring patch_dir;                 /* patch files (patch_files.h) */
     std::vector<std::string> patch_files_on; /* ids of the file patches turned on */
     int key[PA_COUNT][PAD_KEY_SLOTS];   /* 0: empty; the first is what the game's icons show */
@@ -235,21 +237,43 @@ std::wstring ini_get(const wchar_t* sec, const wchar_t* key, const std::wstring&
 }
 void ini_set(const wchar_t* sec, const wchar_t* key, const std::wstring& v)
 {
-    WritePrivateProfileStringW(sec, key, v.c_str(), ini_path().c_str());
+    const auto path = ini_path();
+    /* A fresh profile must be Unicode too, otherwise Windows converts a
+     * selected save path to the active code page and can lose characters. */
+    HANDLE file = CreateFileW(path.c_str(), GENERIC_WRITE, FILE_SHARE_READ, NULL,
+                              CREATE_NEW, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (file != INVALID_HANDLE_VALUE) {
+        const wchar_t bom = 0xFEFF; DWORD written = 0;
+        WriteFile(file, &bom, sizeof bom, &written, NULL);
+        CloseHandle(file);
+    }
+    WritePrivateProfileStringW(sec, key, v.c_str(), path.c_str());
 }
 std::wstring widen(const char* s) { return std::wstring(s, s + strlen(s)); }
 std::wstring env_w(const char* n) { const char* e = getenv(n); return e ? fs::path(e).wstring() : L""; }
 
-std::wstring find_rap(const std::wstring& dir)
+std::wstring find_rap(const std::wstring& dir, const std::wstring& code = GAME_CODE)
 {
     std::error_code ec;
     if (dir.empty() || !fs::is_directory(dir, ec)) return L"";
     for (auto& e : fs::directory_iterator(dir, ec)) {
         std::wstring n = e.path().filename().wstring();
-        if (n.find(GAME_CODE) != std::wstring::npos && e.path().extension() == L".rap")
+        if (n.find(code) != std::wstring::npos && e.path().extension() == L".rap")
             return e.path().wstring();
     }
     return L"";
+}
+
+std::wstring rap_for_game(const Settings& s, const std::wstring& code)
+{
+    std::error_code ec;
+    if (!s.rap.empty() && fs::exists(s.rap, ec) && fs::path(s.rap).filename().wstring().find(code) != std::wstring::npos)
+        return s.rap;
+    for (const std::wstring& dir : { fs::path(s.rap).parent_path().wstring(), s.game, env_w("PS3_RAP_DIR") }) {
+        const auto found = find_rap(dir, code);
+        if (!found.empty()) return found;
+    }
+    return s.rap;  /* also allow a manually chosen licence with a renamed file */
 }
 
 Settings load_settings()
@@ -299,6 +323,7 @@ Settings load_settings()
         if (!cur.empty()) s.patch_files_on.push_back(cur);
     }
     s.game = ini_get(L"pastas", L"jogo", def_game);
+    s.saves = ini_get(L"pastas", L"saves", L"");
     s.rap  = ini_get(L"pastas", L"rap", find_rap(env_w("PS3_RAP_DIR")));
     /* No page for it any more: without a firmware tree the runtime serves its
      * own flashATRAC.pic stand-in. A path in the ini still reaches PS3_DEV_FLASH. */
@@ -342,6 +367,7 @@ void save_settings(const Settings& s)
     }
     ini_set(L"pastas", L"jogo", s.game);
     ini_set(L"pastas", L"rap", s.rap);
+    ini_set(L"pastas", L"saves", s.saves);
     ini_set(L"pastas", L"firmware", s.fw);
     for (int a = 0; a < PA_COUNT; a++) {
         for (int k = 0; k < PAD_KEY_SLOTS; k++)
@@ -405,6 +431,10 @@ std::wstring check_game(const std::wstring& g, bool* ok)
 }
 std::wstring check_rap(const std::wstring& r, bool* ok)
 {
+    if (folder_code() == L"NPJB00135") {
+        *ok = true;
+        return T(S_CHK_RAP_NOT_REQUIRED);
+    }
     std::error_code ec; *ok = !r.empty() && fs::is_regular_file(r, ec);
     return T(*ok ? S_CHK_RAP_OK : S_CHK_RAP_BAD);
 }
@@ -491,7 +521,7 @@ enum {
     ID_DD_MODE = 200, ID_DD_RES = 201, ID_DD_AA = 202, ID_DD_LANG = 203, ID_DD_ITEM = 300,  /* + item index */
     ID_DD_UP = 390, ID_DD_DOWN = 391,
     ID_PLAY = 400, ID_RESUME, ID_QUIT,
-    ID_GAME_BROWSE = 500, ID_GAME_OPEN, ID_RAP_BROWSE, ID_RAP_OPEN,
+    ID_GAME_BROWSE = 500, ID_GAME_OPEN, ID_RAP_BROWSE, ID_RAP_OPEN, ID_SAVE_BROWSE, ID_SAVE_OPEN, ID_SAVE_DEFAULT,
     ID_LAYOUT_PS = 600, ID_LAYOUT_XB, ID_LAYOUT_AUTO, ID_LAYOUT_KB,
     ID_KEY = 700, ID_BTN = 800, ID_RESTORE = 900, ID_PATCH = 1000,  /* + index (keys and buttons: action * slots + slot) */
     ID_CACHE_CLEAR = 1100, ID_CACHE_OPEN,
@@ -735,7 +765,7 @@ void section(Graphics& gr, const std::wstring& t, float x, float y, float w, con
 
 
 /* ---------------------------------------------------------------- pages */
-void draw_sidebar(Graphics& gr, const Font& title, const Font& title2, const Font& nav)
+void draw_sidebar(Graphics& gr, const Font& title, const Font& title2, const Font& nav, const Font& footer_font)
 {
     SolidBrush side(C_SIDE); gr.FillRectangle(&side, 0, 0, SIDE, H);
     text(gr, L"RESIDENT EVIL", 22, 26, title, C_TEXT);
@@ -748,6 +778,8 @@ void draw_sidebar(Graphics& gr, const Font& title, const Font& title2, const Fon
         text(gr, T(S_NAV_HOME + i), 24, y, nav, act ? C_RED_HI : C_TEXT, StringAlignmentNear, SIDE - 30, 44);
         hit(0, y, SIDE, 44, ID_NAV + i);
     }
+    text(gr, T(S_CREDIT_KASTIEL), 22, H - 42.0f, footer_font, C_DIM,
+         StringAlignmentNear, SIDE - 44.0f, 22);
 }
 
 void draw_play(Graphics& gr, const Font& big, const Font& fsm)
@@ -767,7 +799,7 @@ void draw_play(Graphics& gr, const Font& big, const Font& fsm)
     if (!msg.empty()) text(gr, msg, SIDE + 32.0f, H - 78.0f, fsm, C_RED_HI, StringAlignmentNear, W - SIDE - 320.0f, 50);
 }
 
-void draw_inicio(Graphics& gr, const Font& head, const Font& body, const Font& code)
+void draw_inicio(Graphics& gr, const Font& head, const Font& body, const Font& code, const Font& fsm)
 {
     const float cx = (float)SIDE, cw = (float)(W - SIDE), bh = 330;
     if (g.banner) {
@@ -810,6 +842,13 @@ void draw_inicio(Graphics& gr, const Font& head, const Font& body, const Font& c
         text(gr, (oks[i] ? L"✔  " : L"✖  ") + *ms[i], x, y + i * 24.0f, body, oks[i] ? C_OK : C_RED_HI,
              StringAlignmentNear, cw - 64, 22);
     }
+    /* Keep the supported releases visible independently of the selected game. */
+    text(gr, T(S_SUPPORTED_VERSIONS), x, H - 162.0f, fsm, C_DIM,
+         StringAlignmentNear, cw - 64, 20);
+    const std::wstring versions = std::wstring(T(S_REGION_EU)) + L": NPEB00553   ·   "
+        + T(S_REGION_JP) + L": NPJB00135   ·   " + T(S_REGION_US) + L": NPUB30467";
+    text(gr, versions, x, H - 136.0f, fsm, C_DIM,
+         StringAlignmentNear, cw - 64, 38);
 }
 
 void path_row(Graphics& gr, float x, float y, const std::wstring& label, const std::wstring& value,
@@ -824,6 +863,43 @@ void path_row(Graphics& gr, float x, float y, const std::wstring& label, const s
     button(gr, RectF(x + 773, y, 80, 32), T(S_OPEN), id_open, body, false, !value.empty());
     text(gr, (ok ? L"✔  " : L"✖  ") + note, x + 175, y + 36, fsm, ok ? C_OK : C_RED_HI,
          StringAlignmentNear, 680, 20);
+}
+
+
+/* This is the existing save root relative to the launch directory, not the
+ * game installation. Picking a folder changes only the next game session. */
+fs::path save_folder()
+{
+    return fs::absolute(g.s.saves.empty()
+        ? fs::path(L"gamedata/dev_hdd0/home/00000001/savedata") : fs::path(g.s.saves));
+}
+std::string save_utf8(const fs::path& path)
+{
+    const auto u8 = path.u8string();
+    return std::string(u8.begin(), u8.end());
+}
+bool prepare_save_folder()
+{
+    const fs::path dir = save_folder();
+    if (save_utf8(dir).size() > 800) return false;
+    std::error_code ec;
+    fs::create_directories(dir, ec);
+    if (ec || !fs::is_directory(dir, ec)) return false;
+    /* An exclusive, automatically deleted probe: never overwrite a save. */
+    const fs::path probe = dir / (L".cv-write-test-" + std::to_wstring(GetCurrentProcessId()) + L"-" + std::to_wstring(GetTickCount64()));
+    HANDLE h = CreateFileW(probe.c_str(), GENERIC_WRITE, 0, NULL, CREATE_NEW,
+                           FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE, NULL);
+    if (h == INVALID_HANDLE_VALUE) return false;
+    CloseHandle(h);
+    return true;
+}
+void save_note(Graphics& gr, const wchar_t* message, float x, float y, const Font& font)
+{
+    StringFormat sf;
+    sf.SetLineAlignment(StringAlignmentNear);
+    if (g_lang == LANG_AR) sf.SetFormatFlags(StringFormatFlagsDirectionRightToLeft);
+    SolidBrush brush(C_DIM);
+    gr.DrawString(message, -1, &font, RectF(x, y, 655, 52), &sf, &brush);
 }
 
 void draw_jogo(Graphics& gr, const Font& head, const Font& body, const Font& fsm)
@@ -841,10 +917,28 @@ void draw_jogo(Graphics& gr, const Font& head, const Font& body, const Font& fsm
     path_row(gr, x, y, T(S_LICENSE), g.s.rap, n, ok, ID_RAP_BROWSE, ID_RAP_OPEN, body, fsm);
     text(gr, T(S_LICENSE_HINT),
          x + 175, y + 58, fsm, C_DIM, StringAlignmentNear, 690, 20);
-    y += 110;
+    /* Keep the regional licence note visible even with EU selected. Wrap
+     * translations rather than truncating the Japanese/no-RAP explanation. */
+    {
+        StringFormat sf;
+        sf.SetLineAlignment(StringAlignmentNear);
+        sf.SetTrimming(StringTrimmingWord);
+        if (g_lang == LANG_AR) sf.SetFormatFlags(StringFormatFlagsDirectionRightToLeft);
+        SolidBrush brush(C_TEXT);
+        gr.DrawString(T(S_LICENSE_JP_NOTICE), -1, &fsm,
+                      RectF(x + 175, y + 84, W - x - 203, 72), &sf, &brush);
+    }
+    y += 170;
+    path_row(gr, x, y, T(S_SAVE_FOLDER), save_folder().wstring(),
+             T(g.s.saves.empty() ? S_SAVE_USING_DEFAULT : S_SAVE_SELECTED), true,
+             ID_SAVE_BROWSE, ID_SAVE_OPEN, body, fsm);
+    save_note(gr, T(S_SAVE_HINT), x + 175, y + 62, fsm);
+    save_note(gr, T(S_SAVE_NO_MOVE), x + 175, y + 114, fsm);
+    button(gr, RectF(x + 175, y + 168, 330, 32), T(S_SAVE_DEFAULT), ID_SAVE_DEFAULT,
+           body, false, !g.s.saves.empty());
     if (g.running)
-        text(gr, T(S_PATHS_RESTART), x, y + 110, body, C_RED_HI,
-             StringAlignmentNear, 690, 24);
+        text(gr, T(S_PATHS_RESTART), x, y + 218, body, C_RED_HI,
+             StringAlignmentNear, 820, 24);
 }
 
 bool file_patch_on(const FilePatch& p)
@@ -1300,12 +1394,12 @@ void paint(HDC hdc)
     Font fCode(&serif, 18, FontStyleBold, UnitPixel), fBig(&serif, 22, FontStyleBold, UnitPixel);
     Font fCol(&serif, 15, FontStyleBold, UnitPixel);
 
-    if (g.page == P_INICIO) draw_inicio(gr, fHead, fBody, fCode);
+    if (g.page == P_INICIO) draw_inicio(gr, fHead, fBody, fCode, fSmall);
     else if (g.page == P_JOGO) draw_jogo(gr, fHead, fBody, fSmall);
     else if (g.page == P_CONTROLES) draw_controles(gr, fHead, fBody, fSmall, fCol);
     else if (g.page == P_PATCHES) draw_patches(gr, fHead, fBody, fSmall);
     else draw_avancado(gr, fHead, fBody, fSmall);
-    draw_sidebar(gr, fTitle, fTitle2, fNav);
+    draw_sidebar(gr, fTitle, fTitle2, fNav, fSmall);
     draw_play(gr, fBig, fSmall);
 
     /* open dropdown list on top */
@@ -1526,6 +1620,9 @@ void click(int id)
     else if (id == ID_CACHE_OPEN) { std::error_code ec; fs::create_directories(cache_dir(), ec); open_in_explorer(cache_dir().wstring()); }
     else if (id == ID_GAME_BROWSE) { auto p = pick(true, g.s.game, nullptr, nullptr); if (!p.empty()) { g.s.game = p; changed(); } }
     else if (id == ID_RAP_BROWSE) { auto p = pick(false, g.s.rap, T(S_RAP_FILTER), L"*.rap"); if (!p.empty()) { g.s.rap = p; changed(); } }
+    else if (id == ID_SAVE_BROWSE) { auto p = pick(true, save_folder().wstring(), nullptr, nullptr); if (!p.empty()) { g.s.saves = p; changed(); } }
+    else if (id == ID_SAVE_DEFAULT) { g.s.saves.clear(); changed(); }
+    else if (id == ID_SAVE_OPEN) { std::error_code ec; fs::create_directories(save_folder(), ec); open_in_explorer(save_folder().wstring()); }
     else if (id == ID_GAME_OPEN) open_in_explorer(g.s.game);
     else if (id == ID_RAP_OPEN) open_in_explorer(g.s.rap);
     else if (id == ID_LAYOUT_PS || id == ID_LAYOUT_XB || id == ID_LAYOUT_AUTO || id == ID_LAYOUT_KB) {
@@ -1587,6 +1684,7 @@ void click(int id)
         bool ok; check_game(g.s.game, &ok);
         if (!ok) { g.page = P_JOGO; g.play_msg = T(S_SET_FOLDER_FIRST); }
         else if (folder_code() != GAME_CODE) { save_settings(g.s); start_other_version(); }
+        else if (!prepare_save_folder()) { g.page = P_JOGO; g.play_msg = T(S_SAVE_ERROR); }
         else if (int e = prepare_eboot()) { g.page = P_JOGO; g.play_msg = with_code(T(e), GAME_CODE); }
         else { save_settings(g.s); start_game(); }
     }
@@ -1801,11 +1899,7 @@ int prepare_eboot()
     }
     /* The licence is per version: the one chosen may be the other version's,
      * so take this version's from the same folder when the name says so. */
-    std::wstring rap = g.s.rap;
-    if (!rap.empty() && fs::path(rap).filename().wstring().find(GAME_CODE) == std::wstring::npos) {
-        const std::wstring mine = find_rap(fs::path(rap).parent_path().wstring());
-        if (!mine.empty()) rap = mine;
-    }
+    const std::wstring rap = rap_for_game(g.s, GAME_CODE);
     wchar_t cwd[MAX_PATH]; GetCurrentDirectoryW(MAX_PATH, cwd);
     const fs::path out = fs::path(cwd) / L"eboot_cache" / GAME_CODE / L"EBOOT.elf";
     g.eboot = narrow(out.wstring());
@@ -1849,7 +1943,9 @@ void start_game()
 {
     const Settings& s = g.s;
     set_env("PS3_VFS_ROOT", narrow(s.game));
-    if (!s.rap.empty()) set_env("PS3_RAP_DIR", narrow(fs::path(s.rap).parent_path().wstring()));
+    set_env("PS3_SAVE_ROOT", s.saves.empty() ? "" : save_utf8(save_folder()));
+    const auto rap = rap_for_game(s, GAME_CODE);
+    if (!rap.empty()) set_env("PS3_RAP_DIR", narrow(fs::path(rap).parent_path().wstring()));
     if (!s.fw.empty()) set_env("PS3_DEV_FLASH", narrow(s.fw));
     set_env("RES_SCALE", k_res[s.res].scale);
     set_env("WINDOW_MODE", k_mode_env[s.mode]);

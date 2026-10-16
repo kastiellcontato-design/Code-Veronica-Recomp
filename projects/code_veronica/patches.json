@@ -20,7 +20,7 @@
           "addr": "0x001AFCCC", "word": "0x38600000", "expect": "0x4BE8BF45" },
         { "title_id": "NPUB30467", "version": "01.00", "region": "US",
           "rpcs3": "PPU-b4b1ebe7a069782537a13d5bdbc15d6e900ceb25",
-          "addr": "0x001AE25C", "word": "0x38600000", "expect_op": "bl" },
+          "addr": "0x001AE25C", "word": "0x38600000", "expect": "0x4BE8D5B5" },
         { "title_id": "NPJB00135", "version": "01.00", "region": "JP",
           "rpcs3": "PPU-5b1fe8f0b8eab817078b6db007de327653bc65dc, PPU-37f854495138eeb5afdc2db9d4cf6a2d4918beb6",
           "addr": "0x001AE304", "word": "0x38600000", "expect_op": "bl" }

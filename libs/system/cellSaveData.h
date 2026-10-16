@@ -14,6 +14,9 @@
 extern "C" {
 #endif
 
+/* UTF-8 save directory, configured before guest execution. Empty = legacy default. */
+s32 cellSaveData_set_root(const char* path);
+
 /* Configure committed callback scratch before guest execution. */
 s32 cellSaveData_set_scratch_region(u32 base, u32 size);
 

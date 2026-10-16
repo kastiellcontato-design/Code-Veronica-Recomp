@@ -191,8 +191,8 @@ endif()
 # Which EBOOT RECOMP_DIR holds: EU (NPEB00553, the default) or JP
 # (NPJB00135). The port's own guest addresses follow it (cv_version.h); the
 # JP build is MyGameRecomp_JP.exe, beside the EU one (build-release-jp.cmd).
-set(CV_REGION "EU" CACHE STRING "Game version of the lift in RECOMP_DIR: EU or JP")
-set_property(CACHE CV_REGION PROPERTY STRINGS EU JP)
+set(CV_REGION "EU" CACHE STRING "Game version of the lift in RECOMP_DIR: EU, JP or US")
+set_property(CACHE CV_REGION PROPERTY STRINGS EU JP US)
 string(TOLOWER "${CV_REGION}" CV_REGION_LC)
 
 # Guest OPTION menu hooks: create a build-local copy of only the affected
@@ -313,8 +313,11 @@ set_target_properties(${PROJECT_NAME} PROPERTIES LINKER_LANGUAGE CXX)
 if(CV_REGION_LC STREQUAL "jp")
     target_compile_definitions(${PROJECT_NAME} PRIVATE CV_REGION_JP=1)
     set_target_properties(${PROJECT_NAME} PROPERTIES OUTPUT_NAME "${PROJECT_NAME}_JP")
+elseif(CV_REGION_LC STREQUAL "us")
+    target_compile_definitions(${PROJECT_NAME} PRIVATE CV_REGION_US=1)
+    set_target_properties(${PROJECT_NAME} PROPERTIES OUTPUT_NAME "${PROJECT_NAME}_US")
 elseif(NOT CV_REGION_LC STREQUAL "eu")
-    message(FATAL_ERROR "CV_REGION must be EU or JP, not ${CV_REGION}")
+    message(FATAL_ERROR "CV_REGION must be EU, JP or US, not ${CV_REGION}")
 endif()
 
 # Windows system import libraries. dbghelp symbolizes crash-handler addresses
@@ -411,3 +414,32 @@ add_executable(code_veronica_fp_tests EXCLUDE_FROM_ALL
     "${PS3RECOMP_DIR}/libs/video/tests/test_fp_decompiler.c"
     "${PS3RECOMP_DIR}/libs/video/rsx_fp_decompiler.c")
 target_include_directories(code_veronica_fp_tests PRIVATE "${PS3RECOMP_DIR}/include")
+if(WIN32)
+    add_executable(code_veronica_dxc_tests EXCLUDE_FROM_ALL
+        "${PS3RECOMP_DIR}/libs/video/tests/test_dxc.cpp"
+        "${PS3RECOMP_DIR}/libs/video/rsx_dxc.cpp")
+    target_link_libraries(code_veronica_dxc_tests PRIVATE d3d12 d3dcompiler dxgi)
+endif()
+
+# Exercises real callback-driven reads/writes in isolated temporary folders.
+add_executable(code_veronica_save_tests EXCLUDE_FROM_ALL
+    "${PS3RECOMP_DIR}/libs/system/tests/test_savedata_io.c")
+target_include_directories(code_veronica_save_tests PRIVATE "${PS3RECOMP_DIR}/include")
+if(MSVC)
+    target_compile_options(code_veronica_save_tests PRIVATE /Gy /UNDEBUG)
+    target_link_options(code_veronica_save_tests PRIVATE /OPT:REF)
+else()
+    target_compile_options(code_veronica_save_tests PRIVATE -UNDEBUG)
+endif()
+
+if(WIN32)
+    add_executable(code_veronica_menu_tests EXCLUDE_FROM_ALL tests/test_pc_menu.cpp)
+    target_include_directories(code_veronica_menu_tests PRIVATE "${RECOMP_DIR}")
+    target_compile_options(code_veronica_menu_tests PRIVATE /UNDEBUG)
+    target_link_libraries(code_veronica_menu_tests PRIVATE gdi32 user32)
+    if(CV_REGION_LC STREQUAL "jp")
+        target_compile_definitions(code_veronica_menu_tests PRIVATE CV_REGION_JP=1)
+    elseif(CV_REGION_LC STREQUAL "us")
+        target_compile_definitions(code_veronica_menu_tests PRIVATE CV_REGION_US=1)
+    endif()
+endif()

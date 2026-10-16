@@ -14,8 +14,18 @@ void spu_lockline_lock(void) {}
 void spu_lockline_unlock(void) {}
 
 ps3_guest_caller_fn g_ps3_guest_caller;
+void ps3_hle_register_ctx(uint32_t nid, const char* name, void (*fn)(ppu_context*))
+{ (void)nid; (void)name; (void)fn; }
 
 
+static int test_rmdir(const char* path)
+{
+#ifdef _WIN32
+    wchar_t w[1024]; return save_wpath(path, w) ? _wrmdir(w) : -1;
+#else
+    return rmdir(path);
+#endif
+}
 static unsigned step;
 static int loading;
 static const char payload[] = "save round trip";
@@ -65,10 +75,11 @@ static void callback(u32 opd, u64 cb, u64 get, u64 set,
         step++; vm_write32(cb + 16, 0xCAFE + step);
     }
 }
-int main(void)
+static void round_trip(const char* chosen)
 {
-    char root[] = "/tmp/ps3recomp-savedata-io-XXXXXX";
-    assert(mkdtemp(root)); strcpy(s_save_root, root);
+    step = 0; loading = 0;
+    assert(cellSaveData_set_root(chosen) == CELL_OK);
+    char root[1024]; strcpy(root, s_save_root);
     vm_base = calloc(1, 0x200000); assert(vm_base);
     assert(cellSaveData_set_scratch_region(0x100000, 0x20000) == CELL_OK);
     strcpy((char*)vm_base + 0x300, "TEST00000");
@@ -79,9 +90,9 @@ int main(void)
     assert(cellSaveDataFixedSave2(0, (void*)0x100, (void*)0x200, (void*)0x800,
                                 (void*)0x900, (void*)0xA00, 0, (void*)7) == CELL_OK);
     assert(step == 3);
-    char path[256], bytes[sizeof(payload)];
+    char path[1024], bytes[sizeof(payload)];
     snprintf(path, sizeof(path), "%s/TEST00000/DATA.BIN", root);
-    FILE* f = fopen(path, "rb"); assert(f);
+    FILE* f = save_fopen(path, "rb"); assert(f);
     assert(fread(bytes, 1, sizeof(bytes), f) == sizeof(bytes)); fclose(f);
     assert(memcmp(bytes, payload, sizeof(payload)) == 0);
     loading = 1; step = 0;
@@ -90,10 +101,50 @@ int main(void)
     assert(step == 3);
     assert(memcmp(vm_base + 0x500, payload, sizeof(payload)) == 0);
     assert(memcmp(vm_base + 0x600, payload, sizeof(payload)) == 0);
-    assert(unlink(path) == 0);
-    snprintf(path, sizeof(path), "%s/TEST00000/ICON0.PNG", root); assert(unlink(path) == 0);
-    snprintf(path, sizeof(path), "%s/TEST00000/PARAM.SFO", root); assert(unlink(path) == 0);
-    snprintf(path, sizeof(path), "%s/TEST00000", root); assert(rmdir(path) == 0);
-    assert(rmdir(root) == 0); free(vm_base);
-    puts("Save/load round trip, callback userdata, metadata, and byte-count checks passed");
+    assert(save_remove(path) == 0);
+    snprintf(path, sizeof(path), "%s/TEST00000/ICON0.PNG", root); assert(save_remove(path) == 0);
+    snprintf(path, sizeof(path), "%s/TEST00000/PARAM.SFO", root); assert(save_remove(path) == 0);
+    snprintf(path, sizeof(path), "%s/TEST00000", root); assert(test_rmdir(path) == 0);
+    assert(test_rmdir(root) == 0); free(vm_base);
+
+}
+
+int main(void)
+{
+#ifdef _WIN32
+    wchar_t temp[MAX_PATH], base[MAX_PATH], previous[1024];
+    assert(GetCurrentDirectoryW(1024, previous));
+    assert(GetTempPathW(MAX_PATH, temp));
+    assert(GetTempFileNameW(temp, L"cvs", 0, base));
+    assert(DeleteFileW(base));
+    assert(CreateDirectoryW(base, NULL));
+    assert(SetCurrentDirectoryW(base));
+#else
+    char base[] = "/tmp/ps3recomp-savedata-io-XXXXXX";
+    char previous[1024]; assert(getcwd(previous, sizeof previous));
+    assert(mkdtemp(base)); assert(chdir(base) == 0);
+#endif
+    /* Real callbacks and file I/O in isolated default and selected roots. */
+    assert(cellSaveData_set_root(NULL) == CELL_OK);
+    assert(!strcmp(s_save_root, "./gamedata/dev_hdd0/home/00000001/savedata"));
+    round_trip("");
+    assert(test_rmdir("gamedata/dev_hdd0/home/00000001") == 0);
+    assert(test_rmdir("gamedata/dev_hdd0/home") == 0);
+    assert(test_rmdir("gamedata/dev_hdd0") == 0);
+    assert(test_rmdir("gamedata") == 0);
+    round_trip("./custom save folder");
+    round_trip("./save \xE6\x97\xA5\xE6\x9C\xAC \xC3\xA1");
+    char before[1024]; strcpy(before, s_save_root);
+    char too_long[802]; memset(too_long, 'a', 801); too_long[801] = 0;
+    assert(cellSaveData_set_root(too_long) == CELL_SAVEDATA_ERROR_PARAM);
+    assert(!strcmp(before, s_save_root));
+#ifdef _WIN32
+    assert(cellSaveData_set_root("bad \xFF") == CELL_SAVEDATA_ERROR_PARAM);
+    assert(!strcmp(before, s_save_root));
+    assert(SetCurrentDirectoryW(previous)); assert(RemoveDirectoryW(base));
+#else
+    assert(chdir(previous) == 0); assert(rmdir(base) == 0);
+#endif
+    puts("Save roots: default, custom, Unicode; real save/load round trips and invalid paths passed");
+    return 0;
 }

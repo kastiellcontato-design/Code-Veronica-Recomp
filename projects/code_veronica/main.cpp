@@ -70,6 +70,7 @@ void     ppu_sysprx_register(void);           /* boot-critical CRT (sys_initiali
 void     ppu_fs_register(void);               /* cellFs over the real game directory */
 void     lv2_init_syscalls(void);             /* the lv2 syscall table */
 void     cellGame_init_from_paramsfo(const char* sfo_path);
+int32_t  cellSaveData_set_root(const char* path);
 int      ppu_run(uint32_t entry_opd, uint32_t stack_top);
 
 /* This project's own: load whatever real system PRX modules the title needs
@@ -477,6 +478,11 @@ int main(int argc, char** argv)
     timeBeginPeriod(1);
     setvbuf(stdout, NULL, _IONBF, 0);   /* unbuffered: do not lose prints on a kill */
 #endif
+
+    if (cellSaveData_set_root(getenv("PS3_SAVE_ROOT")) != 0) {
+        fprintf(stderr, "ERROR: invalid save directory (PS3_SAVE_ROOT)\n");
+        return 2;
+    }
 
     printf("=== ps3recomp game runner ===\n");
 

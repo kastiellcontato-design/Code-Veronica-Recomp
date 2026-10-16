@@ -34,8 +34,6 @@
 #  include <windows.h>
 #  include <io.h>
 #  include <direct.h>
-#  define HOST_MKDIR(p) _mkdir(p)
-#  define HOST_STAT     _stat64
 #  define HOST_STAT_T   struct __stat64
 #else
 #  include <unistd.h>
@@ -51,6 +49,55 @@
  * -----------------------------------------------------------------------*/
 
 static char s_save_root[1024] = "./gamedata/dev_hdd0/home/00000001/savedata";
+
+/* Paths in this module are UTF-8; use wide filesystem APIs on Windows so
+ * a selected folder can contain characters outside the system code page. */
+#ifdef _WIN32
+static int save_wpath(const char* path, wchar_t out[1024])
+{
+    return MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, -1, out, 1024) != 0;
+}
+static int save_mkdir(const char* path)
+{
+    wchar_t w[1024]; return save_wpath(path, w) ? _wmkdir(w) : -1;
+}
+static int save_stat(const char* path, struct __stat64* st)
+{
+    wchar_t w[1024]; return save_wpath(path, w) ? _wstat64(w, st) : -1;
+}
+static FILE* save_fopen(const char* path, const char* mode)
+{
+    wchar_t w[1024], m[16];
+    if (!save_wpath(path, w) || !MultiByteToWideChar(CP_UTF8, 0, mode, -1, m, 16)) return NULL;
+    return _wfopen(w, m);
+}
+static int save_remove(const char* path)
+{
+    wchar_t w[1024]; return save_wpath(path, w) ? _wremove(w) : -1;
+}
+#define HOST_MKDIR(p) save_mkdir(p)
+#define HOST_STAT save_stat
+#else
+#define save_fopen fopen
+#define save_remove remove
+#endif
+
+/* Configure once, before any guest save operation; never switch a live game.
+ * Empty retains exactly the legacy path, with no migration or fallback that
+ * could hide a failed write. Leave space for guest directory/filename suffixes. */
+s32 cellSaveData_set_root(const char* path)
+{
+    const char* chosen = path && *path ? path : "./gamedata/dev_hdd0/home/00000001/savedata";
+    if (strlen(chosen) > 800) return CELL_SAVEDATA_ERROR_PARAM;
+#ifdef _WIN32
+    wchar_t w[1024];
+    if (!save_wpath(chosen, w)) return CELL_SAVEDATA_ERROR_PARAM;
+#endif
+    strcpy(s_save_root, chosen);
+    printf("[cellSaveData] save root: %s\n", s_save_root);
+    return CELL_OK;
+}
+
 
 /* Ensure directory (and parents) exist */
 static void ensure_dirs(const char* path)
@@ -446,25 +493,29 @@ static u32 enumerate_save_dirs(const char* prefix, CellSaveDataDirList* dirList,
             if (*p == '/') *p = '\\';
         }
 
-        WIN32_FIND_DATAA fd;
-        HANDLE hFind = FindFirstFileA(search, &fd);
+        wchar_t wsearch[1024];
+        if (!save_wpath(search, wsearch)) return 0;
+        WIN32_FIND_DATAW fd;
+        HANDLE hFind = FindFirstFileW(wsearch, &fd);
         if (hFind == INVALID_HANDLE_VALUE)
             return 0;
 
         do {
+            char entry[1024];
+            if (!WideCharToMultiByte(CP_UTF8, 0, fd.cFileName, -1, entry, sizeof(entry), NULL, NULL)) continue;
             if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
                 continue;
-            if (fd.cFileName[0] == '.')
+            if (entry[0] == '.')
                 continue;
-            if (prefix && prefix[0] && strncmp(fd.cFileName, prefix, strlen(prefix)) != 0)
+            if (prefix && prefix[0] && strncmp(entry, prefix, strlen(prefix)) != 0)
                 continue;
             if (count < max && dirList) {
                 memset(&dirList[count], 0, sizeof(CellSaveDataDirList));
-                strncpy(dirList[count].dirName, fd.cFileName,
+                strncpy(dirList[count].dirName, entry,
                         CELL_SAVEDATA_DIRNAME_SIZE - 1);
             }
             count++;
-        } while (FindNextFileA(hFind, &fd));
+        } while (FindNextFileW(hFind, &fd));
 
         FindClose(hFind);
     }
@@ -532,7 +583,7 @@ static int pfd_has(const char* save_path, const char* name)
 {
     char path[1024], line[64];
     pfd_path(save_path, path, sizeof(path));
-    FILE* fp = fopen(path, "rb");
+    FILE* fp = save_fopen(path, "rb");
     if (!fp) return 0;
     int found = 0;
     while (!found && fgets(line, sizeof(line), fp)) {
@@ -548,7 +599,7 @@ static void pfd_add(const char* save_path, const char* name)
     if (pfd_has(save_path, name)) return;
     char path[1024];
     pfd_path(save_path, path, sizeof(path));
-    FILE* fp = fopen(path, "ab");
+    FILE* fp = save_fopen(path, "ab");
     if (fp) { fprintf(fp, "%s\n", name); fclose(fp); }
 }
 
@@ -569,18 +620,22 @@ static u32 enumerate_save_files(const char* save_path,
     {
         char search[1024];
         snprintf(search, sizeof(search), "%s\\*", save_path);
-        WIN32_FIND_DATAA fd;
-        HANDLE hFind = FindFirstFileA(search, &fd);
+        wchar_t wsearch[1024];
+        if (!save_wpath(search, wsearch)) return 0;
+        WIN32_FIND_DATAW fd;
+        HANDLE hFind = FindFirstFileW(wsearch, &fd);
         if (hFind == INVALID_HANDLE_VALUE)
             return 0;
 
         do {
-            if ((fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || savedata_system_file(fd.cFileName))
+            char entry[1024];
+            if (!WideCharToMultiByte(CP_UTF8, 0, fd.cFileName, -1, entry, sizeof(entry), NULL, NULL)) continue;
+            if ((fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || savedata_system_file(entry))
                 continue;
             if (count < max && fileList) {
                 memset(&fileList[count], 0, sizeof(CellSaveDataFileStat));
-                fileList[count].fileType = savedata_file_type(save_path, fd.cFileName);
-                strncpy(fileList[count].fileName, fd.cFileName,
+                fileList[count].fileType = savedata_file_type(save_path, entry);
+                strncpy(fileList[count].fileName, entry,
                         CELL_SAVEDATA_FILENAME_SIZE - 1);
                 ULARGE_INTEGER sz;
                 sz.HighPart = fd.nFileSizeHigh;
@@ -588,7 +643,7 @@ static u32 enumerate_save_files(const char* save_path,
                 fileList[count].st_size = (u64)sz.QuadPart;
             }
             count++;
-        } while (FindNextFileA(hFind, &fd));
+        } while (FindNextFileW(hFind, &fd));
 
         FindClose(hFind);
     }
@@ -672,7 +727,7 @@ static s32 process_file_op(const char* save_path, CellSaveDataFileSet* set)
 
     switch (set->fileOperation) {
     case CELL_SAVEDATA_FILEOP_READ: {
-        FILE* fp = fopen(file_path, "rb");
+        FILE* fp = save_fopen(file_path, "rb");
         if (!fp) {
             printf("[cellSaveData] file read: cannot open '%s'\n", file_path);
             return CELL_SAVEDATA_ERROR_ACCESS_ERROR;
@@ -701,9 +756,9 @@ static s32 process_file_op(const char* save_path, CellSaveDataFileSet* set)
         } else {
             mode = "r+b";
         }
-        FILE* fp = fopen(file_path, mode);
+        FILE* fp = save_fopen(file_path, mode);
         if (!fp) {
-            fp = fopen(file_path, "wb");
+            fp = save_fopen(file_path, "wb");
         }
         if (!fp) {
             printf("[cellSaveData] file write: cannot open '%s'\n", file_path);
@@ -727,7 +782,7 @@ static s32 process_file_op(const char* save_path, CellSaveDataFileSet* set)
     }
 
     case CELL_SAVEDATA_FILEOP_DELETE:
-        remove(file_path);
+        save_remove(file_path);
         return 0;
 
     default:
@@ -748,7 +803,7 @@ static void write_param_sfo(const char* save_path, const CellSaveDataSystemFileP
     }
 #endif
 
-    FILE* fp = fopen(sfo_path, "wb");
+    FILE* fp = save_fopen(sfo_path, "wb");
     if (!fp) return;
 
     /* Write a simplified text-based PARAM.SFO for easy debugging.
@@ -775,7 +830,7 @@ static void read_param_sfo(const char* save_path, CellSaveDataSystemFileParam* p
     }
 #endif
 
-    FILE* fp = fopen(sfo_path, "rb");
+    FILE* fp = save_fopen(sfo_path, "rb");
     if (!fp) return;
 
     char line[2048];

@@ -49,7 +49,8 @@ so no `.rap` is needed.
 ```
 python tools/ppu_loader.py <NPJB00135>/USRDIR/EBOOT.elf -o out_jp/
 python tools/ppu_lifter.py <NPJB00135>/USRDIR/EBOOT.elf --functions out_jp/EBOOT.functions.json --hle-stubs out_jp/EBOOT.imports.json --patches projects/code_veronica/patches.json -o src/recomp_jp
-projects/code_veronica/build-release-jp.cmd
+set CV_BUILD_JP=1
+projects/code_veronica/build-release.cmd
 ```
 
 The SPU images are the same as the European ones. The port's own guest
@@ -95,3 +96,16 @@ Hoje o jogo chega ao menu e os vídeos tocam, mas ainda um pouco lentos.
 A versão japonesa da PSN (NPJB00135) também funciona, como um segundo
 executável (`MyGameRecomp_JP.exe`); veja a seção "Japanese version" acima.
 Ela não precisa de arquivo .rap.
+
+
+### US version and save folder
+
+The US PSN release **NPUB30467 01.00** has its own lift and executable,
+`MyGameRecomp_US.exe`, beside EU and JP. Select its game folder in the same
+launcher. Set `CV_BUILD_US=1` and run `build-release.cmd` to build it;
+`CV_BUILD_JP=1` updates JP in the same invocation.
+
+The Game page also allows choosing a **Saves folder**. Leaving it unset keeps
+the existing `gamedata/dev_hdd0/home/00000001/savedata` path. Changes take effect
+on the next game start and do not move existing saves. Details, ELF identity,
+regeneration and validation: [SAVES-E-VERSAO-AMERICANA.md](SAVES-E-VERSAO-AMERICANA.md).

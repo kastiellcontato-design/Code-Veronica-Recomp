@@ -1,4 +1,4 @@
-/* Code Veronica (EU 1.00 and JP; addresses in cv_version.h): extend the guest's OPTION menu using its own 2D queue.
+/* Code Veronica (EU/JP/US 1.00; addresses in cv_version.h): extend the guest's OPTION menu using its own 2D queue.
  * Only the build-local lift is wrapped. EBOOT and original generated files stay intact.
  * New labels use serif glyphs rasterized by Windows at the menu's own scale (one
  * texel per UI unit, like the game's lettering) and drawn magnified the way the
@@ -39,6 +39,8 @@ constexpr uint32_t kUp=0x10, kDown=0x40, kLeft=0x80, kRight=0x20;
 constexpr uint32_t kConfirm=0xC000, kCancel=0x2001;
 bool pc_selected=false, pc_open=false, drawing_main=false;
 int pc_row=0;
+constexpr int kSettingCount=6, kResetColorsRow=kSettingCount;
+constexpr int kBackRow=kResetColorsRow+1, kPcRowCount=kBackRow+1;
 std::array<int,6> values={1,0,0,80,50,100}; // neutral brightness, contrast and saturation
 int pc_adjust_direction=0;
 ULONGLONG pc_adjust_started=0;
@@ -86,6 +88,14 @@ void read_settings() {
     values={ (packed>>4)&7, (packed>>8)&3, packed&3, (packed>>10)&255, (packed>>18)&255, cv_pc_settings_saturation_read() };
     values[0]=std::clamp(values[0],0,4); values[1]=std::clamp(values[1],0,2); values[2]=std::clamp(values[2],0,2);
     values[3]=std::clamp(values[3],0,160); values[4]=std::clamp(values[4],0,130); values[5]=std::clamp(values[5],0,200);
+}
+
+// Values use the same offsets as read_settings and the existing settings bridge.
+// Only color rows are written: display settings keep their current values.
+void reset_colors() {
+    values[3]=80; values[4]=50; values[5]=100;
+    for(int row=3;row<kSettingCount;row++)cv_pc_settings_change(row,values[row]);
+    pc_adjust_direction=0;pc_adjust_started=0;
 }
 
 /* One cell between four texel centres, with its corners' coverage (top-left,
@@ -174,19 +184,20 @@ void draw_settings(const ppu_context* caller) {
     static const char* mode[]={"WINDOWED","BORDERLESS","FULLSCREEN"};
     TextBatch batch;
     batch.text("PC SETTINGS",320,102,0xDFFFFFFF,1.35f,true);
-    const char* labels[]={"RESOLUTION","ANTI-ALIASING","DISPLAY MODE","BRIGHTNESS","CONTRAST","SATURATION","BACK"};
+    const char* labels[]={"RESOLUTION","ANTI-ALIASING","DISPLAY MODE","BRIGHTNESS","CONTRAST","SATURATION","RESET COLORS","BACK"};
     char brightness[24],contrast[24],saturation[24];
     std::snprintf(brightness,sizeof brightness,"%+d%%",-80+values[3]);
     std::snprintf(contrast,sizeof contrast,"%d%%",50+values[4]);
     std::snprintf(saturation,sizeof saturation,"%d%%",values[5]);
     const char* current[]={resolution[values[0]],aa[values[1]],mode[values[2]],brightness,contrast,saturation};
-    const float rows[]={146,182,218,254,290,326,362};
-    for(int row=0;row<7;row++) {
+    const float rows[]={142,172,202,232,262,292,322,352};
+    for(int row=0;row<kPcRowCount;row++) {
         const uint32_t color=selected_color(pc_row==row);
         batch.text(labels[row],32,rows[row],color,.9f);
-        if(row<6)batch.text(std::string("< ")+current[row]+" >",330,rows[row],color,.8f);
+        if(row<kSettingCount)batch.text(std::string("< ")+current[row]+" >",330,rows[row],color,.8f);
     }
-    batch.text("LEFT / RIGHT TO CHANGE",320,410,0xBFCFCFCF,.6f,true);
+    batch.text(pc_row==kResetColorsRow?"CONFIRM TO RESET COLORS":pc_row==kBackRow?"CONFIRM TO GO BACK":"LEFT / RIGHT TO CHANGE",
+               320,410,0xBFCFCFCF,.6f,true);
     batch.submit(caller);
     auto work=call_context(caller);invoke(&work,CV_FN_MENU_FRAME);
 }
@@ -206,7 +217,11 @@ void CV_FN_MENU_RESET(ppu_context* ctx) {
     rsx_d3d12_set_ui_quads(nullptr,0);
     CV_OG_MENU_RESET(ctx);
 }
+static bool menu_trace() { static const bool on=std::getenv("CV_MENU_TRACE")!=nullptr; return on; }
 void CV_FN_MENU_COLOR(ppu_context* ctx) {
+    if(menu_trace() && drawing_main) { static int n=0; if(n++<6000)
+        std::fprintf(stderr,"[menu-trace] t=%llu color=%08X row=%08X sel=%d%c",(unsigned long long)GetTickCount64(),
+                     uint32_t(ctx->gpr[4]),uint32_t(ctx->gpr[5]),int(pc_selected),10); }
     if(drawing_main && pc_selected && uint32_t(ctx->gpr[5])==CV_MENU_ROW_TEXT)ctx->gpr[4]=0x7FAFAFAF;
     CV_OG_MENU_COLOR(ctx);
 }
@@ -221,13 +236,14 @@ void CV_FN_MENU_INPUT(ppu_context* ctx) {
     uint32_t cursor=vm_read32(kCursor);
     if(pc_selected && cursor!=5)pc_selected=false;
     if(pc_open) {
-        if(input&kCancel || ((input&kConfirm)&&pc_row==6)) {
+        if(input&kCancel || ((input&kConfirm)&&pc_row==kBackRow)) {
             pc_open=false;pc_selected=true;vm_write32(kCursor,5);sound(ctx,0);
             consume(input_address,repeat_address);ctx->gpr[4]=0;
         } else {
-            if(repeat&kUp) {pc_row=(pc_row+6)%7;pc_adjust_direction=0;sound(ctx,2);}
-            else if(repeat&kDown) {pc_row=(pc_row+1)%7;pc_adjust_direction=0;sound(ctx,2);}
-            else if(pc_row<6 && ((repeat&(kLeft|kRight)) || (input&kConfirm))) {
+            if(repeat&kUp) {pc_row=(pc_row+kPcRowCount-1)%kPcRowCount;pc_adjust_direction=0;sound(ctx,2);}
+            else if(repeat&kDown) {pc_row=(pc_row+1)%kPcRowCount;pc_adjust_direction=0;sound(ctx,2);}
+            else if(pc_row==kResetColorsRow && (input&kConfirm)) { reset_colors();sound(ctx,3); }
+            else if(pc_row<kSettingCount && ((repeat&(kLeft|kRight)) || (input&kConfirm))) {
                 if(pc_row<3) {
                     const int limit=pc_row==0?5:3;
                     const int step=(repeat&kLeft)?-1:1;
@@ -254,6 +270,7 @@ void CV_FN_MENU_INPUT(ppu_context* ctx) {
         consume(input_address,repeat_address);draw_settings(ctx);ctx->gpr[3]=0;return;
     }
     drawing_main=true;CV_OG_MENU_INPUT(ctx);finish(ctx);drawing_main=false;
+    if(menu_trace()) std::fprintf(stderr,"[menu-trace] t=%llu frame ret=%08X%c",(unsigned long long)GetTickCount64(),uint32_t(ctx->gpr[3]),10);
     if((ctx->gpr[3]&255)==255)rsx_d3d12_set_ui_quads(nullptr,0);
     else draw_entry(ctx);
 }

@@ -25,6 +25,7 @@
 #include "rsx_tex_hook.h"
 #include "rsx_perf_overlay.h"
 #include "rsx_fp_decompiler.h"
+#include "rsx_dxc.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -2481,22 +2482,88 @@ static volatile LONG s_shc_hits = 0, s_shc_miss = 0;
 /* HITCHDBG=1: where a long frame's time went. */
 static volatile LONG s_hd_vs_us = 0, s_hd_vs_n = 0, s_hd_fpi_us = 0, s_hd_fpi_n = 0, s_hd_wait_us = 0;
 
+/* Fixed for the entire process: never switch one stage to FXC after another
+ * has become DXIL. InitOnce also prevents races between shader workers. */
+static INIT_ONCE s_shader_once = INIT_ONCE_STATIC_INIT;
+static int s_shader_dxc = 0;
+static char s_shader_cache_dir[128] = "shader_cache";
+static BOOL CALLBACK shader_compiler_init(PINIT_ONCE once, PVOID arg, PVOID* context)
+{
+    (void)once; (void)arg; (void)context;
+    const char* requested = getenv("SHADER_COMPILER");
+    if (!requested || _stricmp(requested, "dxc")) {
+        fprintf(stderr, "[SHADER] compiler: FXC (default)%c", 10);
+        return TRUE;
+    }
+    D3D12_FEATURE_DATA_SHADER_MODEL model = { D3D_SHADER_MODEL_6_0 };
+    if (!s_d3d.device || FAILED(s_d3d.device->lpVtbl->CheckFeatureSupport(s_d3d.device,
+            D3D12_FEATURE_SHADER_MODEL, &model, sizeof model)) || model.HighestShaderModel < D3D_SHADER_MODEL_6_0) {
+        fprintf(stderr, "[SHADER] DXC unavailable: Shader Model 6 unsupported; using FXC for this session%c", 10);
+        return TRUE;
+    }
+    /* Check compiler/validator before any guest stage is compiled. Missing
+     * DLLs or an unusable installation fall back as a whole, never per-stage. */
+    static const char* probes[] = {
+        "float4 main(float4 p:POSITION):SV_Position{return p;}",
+        "float4 main():SV_Target{return float4(1,0,1,1);}"
+    };
+    for (int i = 0; i < 2; i++) {
+        void* object = NULL; size_t size = 0; char* error = NULL;
+        int result = rsx_dxc_compile(probes[i], strlen(probes[i]), i ? "ps_6_0" : "vs_6_0", &object, &size, &error);
+        free(object);
+        if (result || !size) {
+            fprintf(stderr, "[SHADER] DXC initialization failed (%d): %.400s; using FXC for this session%c",
+                    result, error ? error : "no diagnostic", 10);
+            free(error); return TRUE;
+        }
+        free(error);
+    }
+    s_shader_dxc = 1;
+    snprintf(s_shader_cache_dir, sizeof s_shader_cache_dir, "shader_cache/%s", rsx_dxc_cache_tag());
+    fprintf(stderr, "[SHADER] compiler: DXC EXPERIMENTAL (SM6, strict arithmetic); cache=%s; shadow artifacts may remain%c",
+            s_shader_cache_dir, 10);
+    return TRUE;
+}
+static int shader_uses_dxc(void)
+{
+    InitOnceExecuteOnce(&s_shader_once, shader_compiler_init, NULL, NULL);
+    return s_shader_dxc;
+}
+static const char* shader_cache_dir(void)
+{
+    shader_uses_dxc();
+    return s_shader_cache_dir;
+}
+
+/* Only these baseline guest stages can pair with translated guest stages.
+ * Preserve their original uncached FXC route when DXC is not selected. */
+static HRESULT shader_compile_cached(const char*, size_t, const char*, const char*, ID3DBlob**, ID3DBlob**);
+static HRESULT shader_compile_guest(const char* src, size_t len, const char* name,
+    const char* target, ID3DBlob** out, ID3DBlob** error)
+{
+    if (shader_uses_dxc()) return shader_compile_cached(src, len, name, target, out, error);
+    return D3DCompile(src, len, name, NULL, NULL, "main", target, 0, 0, out, error);
+}
+
 static HRESULT shader_compile_cached(const char* src, size_t len, const char* name,
                                      const char* target, ID3DBlob** out, ID3DBlob** err)
 {
+    const int dxc = shader_uses_dxc();
+    char sm6_target[16];
+    if (dxc) { snprintf(sm6_target, sizeof sm6_target, "%.2s_6_0", target); target = sm6_target; }
     static int on = -1;
     if (on < 0) {
         const char* e = getenv("SHADER_CACHE");
         on = (e && e[0] == '0') ? 0 : 1;
-        if (on) CreateDirectoryA("shader_cache", NULL);
+        if (on) { CreateDirectoryA("shader_cache", NULL); CreateDirectoryA(shader_cache_dir(), NULL); }
     }
     *out = NULL; if (err) *err = NULL;
-    char path[96] = "";
+    char path[256] = "";
     if (on) {
         unsigned long long h = 14695981039346656037ull;   /* FNV-1a 64 */
         for (size_t i = 0; i < len; i++) { h ^= (u8)src[i]; h *= 1099511628211ull; }
         for (const char* t = target; *t; t++) { h ^= (u8)*t; h *= 1099511628211ull; }
-        snprintf(path, sizeof path, "shader_cache/%s_%016llX.cso", target, h);
+        snprintf(path, sizeof path, "%s/%s_%016llX.cso", shader_cache_dir(), target, h);
         FILE* f = fopen(path, "rb");
         if (f) {
             fseek(f, 0, SEEK_END); long n = ftell(f); fseek(f, 0, SEEK_SET);
@@ -2513,10 +2580,27 @@ static HRESULT shader_compile_cached(const char* src, size_t len, const char* na
             fclose(f);   /* short or corrupt: recompile and overwrite */
         }
     }
-    HRESULT hr = D3DCompile(src, len, name, NULL, NULL, "main", target, 0, 0, out, err);
+    HRESULT hr;
+    if (dxc) {
+        void* object = NULL; size_t size = 0; char* error = NULL;
+        const int result = rsx_dxc_compile(src, len, target, &object, &size, &error);
+        hr = !result && size ? D3DCreateBlob(size, out) : E_FAIL;
+        if (SUCCEEDED(hr)) memcpy((*out)->lpVtbl->GetBufferPointer(*out), object, size);
+        if (FAILED(hr)) {
+            static LONG failures = 0;
+            if (InterlockedIncrement(&failures) <= 16)
+                fprintf(stderr, "[SHADER] DXC failed on %s: %.600s (restart with normal launcher for FXC)%c",
+                        name, error ? error : "no diagnostic", 10);
+            if (err && error && SUCCEEDED(D3DCreateBlob(strlen(error) + 1, err)))
+                memcpy((*err)->lpVtbl->GetBufferPointer(*err), error, strlen(error) + 1);
+        }
+        free(object); free(error);
+    } else {
+        hr = D3DCompile(src, len, name, NULL, NULL, "main", target, 0, 0, out, err);
+    }
     if (on && SUCCEEDED(hr) && *out) {
         InterlockedIncrement(&s_shc_miss);
-        char tmp[112];
+        char tmp[280];
         snprintf(tmp, sizeof tmp, "%s.%lu.tmp", path, (unsigned long)GetCurrentThreadId());
         FILE* f = fopen(tmp, "wb");
         if (f) {
@@ -2570,9 +2654,9 @@ static void compile_vp(void)
         "  if (cov <= 0.5) discard; return float4(i.col0.rgb, 1); }\n";
 
     ID3DBlob *vb=NULL,*pb=NULL,*e=NULL;
-    HRESULT hr = D3DCompile(hlsl, strlen(hlsl), "vp", NULL, NULL, "main", "vs_5_0", 0, 0, &vb, &e);
+    HRESULT hr = shader_compile_guest(hlsl, strlen(hlsl), "vp", "vs_5_0", &vb, &e);
     if (FAILED(hr)) { printf("[VP] VS compile FAIL: %s\n", e?(const char*)e->lpVtbl->GetBufferPointer(e):"?"); if(e)e->lpVtbl->Release(e); s_d3d.vp_compiled_bytes=st->vp_ucode_bytes; return; }
-    hr = D3DCompile(ps, sizeof(ps)-1, "vpps", NULL, NULL, "main", "ps_5_0", 0, 0, &pb, &e);
+    hr = shader_compile_guest(ps, sizeof(ps)-1, "vpps", "ps_5_0", &pb, &e);
     if (FAILED(hr)) { printf("[VP] PS compile FAIL: %s\n", e?(const char*)e->lpVtbl->GetBufferPointer(e):"?"); if(e)e->lpVtbl->Release(e); if(vb)vb->lpVtbl->Release(vb); s_d3d.vp_compiled_bytes=st->vp_ucode_bytes; return; }
 
     /* The decompiled VS declares inputs a0:ATTR0 .. a15:ATTR15 and the HLSL
@@ -2634,8 +2718,8 @@ static void compile_vp(void)
             "  float4 t4:TEXCOORD4; float4 t5:TEXCOORD5; float4 t6:TEXCOORD6; float4 t7:TEXCOORD7; };\n"
             "float4 main(PSIn i):SV_TARGET{ return float4(i.col0.rgb, 1); }\n";
         ID3DBlob *pcb=NULL,*ec=NULL;
-        if (SUCCEEDED(D3DCompile(ps_col, sizeof(ps_col)-1, "vppsc", NULL, NULL,
-                                 "main", "ps_5_0", 0, 0, &pcb, &ec)) && pcb) {
+        if (SUCCEEDED(shader_compile_guest(ps_col, sizeof(ps_col)-1, "vppsc",
+                                           "ps_5_0", &pcb, &ec)) && pcb) {
             pd.PS.pShaderBytecode = pcb->lpVtbl->GetBufferPointer(pcb);
             pd.PS.BytecodeLength  = pcb->lpVtbl->GetBufferSize(pcb);
             HRESULT hr2 = s_d3d.device->lpVtbl->CreateGraphicsPipelineState(
@@ -3355,7 +3439,9 @@ static void plib_init(void)
     if (FAILED(s_d3d.device->lpVtbl->QueryInterface(s_d3d.device, &IID_ID3D12Device1, (void**)&d1)) || !d1)
         return;
     CreateDirectoryA("shader_cache", NULL);
-    FILE* f = fopen("shader_cache/pipelines.bin", "rb");
+    CreateDirectoryA(shader_cache_dir(), NULL);
+    char path[256]; snprintf(path, sizeof path, "%s/pipelines.bin", shader_cache_dir());
+    FILE* f = fopen(path, "rb");
     size_t n = 0;
     if (f) {
         fseek(f, 0, SEEK_END); long sz = ftell(f); fseek(f, 0, SEEK_SET);
@@ -3388,13 +3474,14 @@ static void plib_save(void)
     InterlockedExchange(&s_plib_dirty, 0);
     ReleaseSRWLockExclusive(&s_plib_lock);
     if (SUCCEEDED(hr)) {
-        FILE* f = fopen("shader_cache/pipelines.bin.tmp", "wb");
+        char path[256], tmp[280];
+        snprintf(path, sizeof path, "%s/pipelines.bin", shader_cache_dir());
+        snprintf(tmp, sizeof tmp, "%s.tmp", path);
+        FILE* f = fopen(tmp, "wb");
         if (f) {
             int ok = fwrite(buf, 1, n, f) == n;
             ok = (fclose(f) == 0) && ok;
-            if (!ok || !MoveFileExA("shader_cache/pipelines.bin.tmp", "shader_cache/pipelines.bin",
-                                    MOVEFILE_REPLACE_EXISTING))
-                DeleteFileA("shader_cache/pipelines.bin.tmp");
+            if (!ok || !MoveFileExA(tmp, path, MOVEFILE_REPLACE_EXISTING)) DeleteFileA(tmp);
         }
     }
     free(buf);
