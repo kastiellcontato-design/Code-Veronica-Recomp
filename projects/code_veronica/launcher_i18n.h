@@ -60,6 +60,7 @@ enum StrId {
     S_SRT_TITLE, S_SRT_INTRO, S_SRT_ENABLE, S_SRT_NAME, S_SRT_HEALTH, S_SRT_TIME, S_SRT_STATS, S_SRT_ENEMIES, S_SRT_INVENTORY, S_SRT_CORNER, S_SRT_SCALE, S_SRT_LANGUAGE, S_SRT_FOLLOW, S_SRT_TL, S_SRT_TR, S_SRT_BL, S_SRT_BR, S_SRT_ALL, S_SRT_HOTKEY, S_SRT_ON, S_SRT_OFF, S_SRT_WAIT, S_SRT_SAVE, S_SRT_RETRY, S_SRT_EQUIPPED, S_SRT_FINE, S_SRT_CAUTION, S_SRT_DANGER, S_SRT_POISON, S_SRT_GAS, S_SRT_DEAD, S_SRT_EMPTY,
     S_SRT_OPACITY,
     S_OV_POSITION, S_OV_LAYOUT, S_OV_ROW, S_OV_COLUMN,
+    S_SRT_BOSS, S_SRT_PHASE,
     S_COUNT
 };
 
@@ -212,6 +213,8 @@ static const wchar_t* const k_str_pt[] = {
     L"Disposição",
     L"Em linha",
     L"Em coluna",
+    L"Chefe",
+    L"Fase",
 };
 static_assert(sizeof k_str_pt / sizeof k_str_pt[0] == S_COUNT, "k_str_pt: one text per StrId");
 
@@ -364,6 +367,8 @@ static const wchar_t* const k_str_en[] = {
     L"Layout",
     L"Row",
     L"Column",
+    L"Boss",
+    L"Phase",
 };
 static_assert(sizeof k_str_en / sizeof k_str_en[0] == S_COUNT, "k_str_en: one text per StrId");
 
@@ -516,6 +521,8 @@ static const wchar_t* const k_str_es[] = {
     L"Disposición",
     L"En fila",
     L"En columna",
+    L"Jefe",
+    L"Fase",
 };
 static_assert(sizeof k_str_es / sizeof k_str_es[0] == S_COUNT, "k_str_es: one text per StrId");
 
@@ -668,6 +675,8 @@ static const wchar_t* const k_str_ja[] = {
     L"レイアウト",
     L"横並び",
     L"縦並び",
+    L"ボス",
+    L"フェーズ",
 };
 static_assert(sizeof k_str_ja / sizeof k_str_ja[0] == S_COUNT, "k_str_ja: one text per StrId");
 
@@ -874,6 +883,8 @@ static const wchar_t* const k_str_fr[] = {
     L"Disposition",
     L"En ligne",
     L"En colonne",
+    L"Boss",
+    L"Phase",
 };
 static_assert(sizeof k_str_fr / sizeof k_str_fr[0] == S_COUNT, "k_str_fr: one text per StrId");
 
@@ -1080,6 +1091,8 @@ static const wchar_t* const k_str_de[] = {
     L"Anordnung",
     L"Nebeneinander",
     L"Untereinander",
+    L"Boss",
+    L"Phase",
 };
 static_assert(sizeof k_str_de / sizeof k_str_de[0] == S_COUNT, "k_str_de: one text per StrId");
 
@@ -1286,6 +1299,8 @@ static const wchar_t* const k_str_it[] = {
     L"Disposizione",
     L"In riga",
     L"In colonna",
+    L"Boss",
+    L"Fase",
 };
 static_assert(sizeof k_str_it / sizeof k_str_it[0] == S_COUNT, "k_str_it: one text per StrId");
 
@@ -1492,6 +1507,8 @@ static const wchar_t* const k_str_pl[] = {
     L"Układ",
     L"W poziomie",
     L"W pionie",
+    L"Boss",
+    L"Faza",
 };
 static_assert(sizeof k_str_pl / sizeof k_str_pl[0] == S_COUNT, "k_str_pl: one text per StrId");
 
@@ -1698,6 +1715,8 @@ static const wchar_t* const k_str_tr[] = {
     L"Düzen",
     L"Yatay",
     L"Dikey",
+    L"Boss",
+    L"Aşama",
 };
 static_assert(sizeof k_str_tr / sizeof k_str_tr[0] == S_COUNT, "k_str_tr: one text per StrId");
 
@@ -1904,6 +1923,8 @@ static const wchar_t* const k_str_ar[] = {
     L"التخطيط",
     L"أفقي",
     L"عمودي",
+    L"زعيم",
+    L"المرحلة",
 };
 static_assert(sizeof k_str_ar / sizeof k_str_ar[0] == S_COUNT, "k_str_ar: one text per StrId");
 
@@ -2110,6 +2131,8 @@ static const wchar_t* const k_str_zh[] = {
     L"排列",
     L"横向",
     L"纵向",
+    L"首领",
+    L"阶段",
 };
 static_assert(sizeof k_str_zh / sizeof k_str_zh[0] == S_COUNT, "k_str_zh: one text per StrId");
 
@@ -2316,6 +2339,8 @@ static const wchar_t* const k_str_ko[] = {
     L"배치",
     L"가로",
     L"세로",
+    L"보스",
+    L"페이즈",
 };
 static_assert(sizeof k_str_ko / sizeof k_str_ko[0] == S_COUNT, "k_str_ko: one text per StrId");
 
@@ -2522,6 +2547,8 @@ static const wchar_t* const k_str_ru[] = {
     L"Расположение",
     L"В строку",
     L"В столбец",
+    L"Босс",
+    L"Фаза",
 };
 static_assert(sizeof k_str_ru / sizeof k_str_ru[0] == S_COUNT, "k_str_ru: one text per StrId");
 

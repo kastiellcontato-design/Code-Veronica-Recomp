@@ -2216,7 +2216,7 @@ void set_srt_env()
     const std::wstring credit=srt_credit_text(lang);
     set_env("SRT_CREDIT",save_utf8(fs::path(credit)));
     const int ids[]={S_SRT_HEALTH,S_SRT_TIME,S_SRT_SAVE,S_SRT_RETRY,S_SRT_ENEMIES,S_SRT_INVENTORY,S_SRT_EQUIPPED,
-        S_SRT_FINE,S_SRT_CAUTION,S_SRT_DANGER,S_SRT_POISON,S_SRT_GAS,S_SRT_DEAD,S_SRT_WAIT,S_SRT_EMPTY};
+        S_SRT_FINE,S_SRT_CAUTION,S_SRT_DANGER,S_SRT_POISON,S_SRT_GAS,S_SRT_DEAD,S_SRT_WAIT,S_SRT_EMPTY,S_SRT_BOSS,S_SRT_PHASE};
     std::wstring words;for(int id:ids) {if(!words.empty())words+=L"|";words+=k_str[lang][id];}
     set_env("SRT_TEXT",save_utf8(fs::path(words)));cv_srt_configure_env();
 }

@@ -306,11 +306,11 @@ bool rtl_text(const std::wstring& text) {
     for(wchar_t c:text)if((c>=0x0600&&c<=0x08ff)||(c>=0xfb50&&c<=0xfdff)||(c>=0xfe70&&c<=0xfeff))return true;
     return false;
 }
-std::array<std::wstring,15> labels(Language lang) {
+std::array<std::wstring,17> labels(Language lang) {
     static_assert(COUNT==LANG_COUNT&&PT==LANG_PT&&RU==LANG_RU,"Shared launcher language order");
     const int ids[]={S_SRT_HEALTH,S_SRT_TIME,S_SRT_SAVE,S_SRT_RETRY,S_SRT_ENEMIES,S_SRT_INVENTORY,S_SRT_EQUIPPED,
-        S_SRT_FINE,S_SRT_CAUTION,S_SRT_DANGER,S_SRT_POISON,S_SRT_GAS,S_SRT_DEAD,S_SRT_WAIT,S_SRT_EMPTY};
-    std::array<std::wstring,15> result;for(int i=0;i<15;i++)result[i]=k_str[lang][ids[i]];return result;
+        S_SRT_FINE,S_SRT_CAUTION,S_SRT_DANGER,S_SRT_POISON,S_SRT_GAS,S_SRT_DEAD,S_SRT_WAIT,S_SRT_EMPTY,S_SRT_BOSS,S_SRT_PHASE};
+    std::array<std::wstring,17> result;for(int i=0;i<17;i++)result[i]=k_str[lang][ids[i]];return result;
 }
 std::wstring credit(Language lang) {return srt_credit_text(lang);}
 std::wstring quantity(const cv_srt_item& item) {

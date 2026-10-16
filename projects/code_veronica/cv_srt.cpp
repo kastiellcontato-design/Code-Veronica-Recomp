@@ -28,7 +28,7 @@ struct Config {
     cv_srt_i18n::Language lang=cv_srt_i18n::EN;
     int enemies=3,scale=100,corner=0,opacity=70;
     std::wstring credit=L"by Kastiel",game_root;
-    std::array<std::wstring,15> words={L"Health",L"Game time",L"Saves",L"Retries",L"Enemies",L"Inventory",L"Equipped",L"Fine",L"Caution",L"Danger",L"Poison",L"Gas",L"Dead",L"Waiting for a game",L"Empty"};
+    std::array<std::wstring,17> words={L"Health",L"Game time",L"Saves",L"Retries",L"Enemies",L"Inventory",L"Equipped",L"Fine",L"Caution",L"Danger",L"Poison",L"Gas",L"Dead",L"Waiting for a game",L"Empty",L"Boss",L"Phase"};
 };
 SRWLOCK config_lock=SRWLOCK_INIT;Config config;uint64_t generation=0;
 int env_int(const char* key,int fallback) {const char* e=std::getenv(key);return e&&*e?std::atoi(e):fallback;}
@@ -72,27 +72,52 @@ struct ItemImages {
         return images.emplace(id,std::move(image)).first->second.get();
     }
 } item_images;
-Bitmap* portrait(int character) {
-    static bool attempted=false;static std::array<std::unique_ptr<Bitmap>,4> images;
-    if(!attempted) {
-        attempted=true;const wchar_t* names[]={L"SRT_CLAIRE",L"SRT_CHRIS",L"SRT_STEVE",L"SRT_WESKER"};
-        for(int i=0;i<4;i++) {
-            const HMODULE module=GetModuleHandleW(nullptr);const HRSRC resource=FindResourceW(module,names[i],MAKEINTRESOURCEW(10));
-            if(!resource)continue;const DWORD size=SizeofResource(module,resource);
-            const void* data=LockResource(LoadResource(module,resource));if(!data||!size||size>1024*1024)continue;
-            HGLOBAL block=GlobalAlloc(GMEM_MOVEABLE,size);if(!block)continue;
-            void* bytes=GlobalLock(block);if(!bytes) {GlobalFree(block);continue;}
-            std::memcpy(bytes,data,size);GlobalUnlock(block);
-            IStream* stream=nullptr;if(CreateStreamOnHGlobal(block,TRUE,&stream)!=S_OK) {GlobalFree(block);continue;}
-            {
-                Bitmap source(stream);
-                if(source.GetLastStatus()==Ok&&source.GetWidth()==96&&source.GetHeight()==96)
-                    images[i].reset(source.Clone(0,0,96,96,PixelFormat32bppARGB));
-            }
-            stream->Release();
-        }
+// A square photo embedded from launcher_art/ (RCDATA named after the file).
+// Missing or unreadable: nullptr, remembered, and the layout goes without.
+Bitmap* art(const wchar_t* name) {
+    static std::map<std::wstring,std::unique_ptr<Bitmap>> cache;
+    auto found=cache.find(name);if(found!=cache.end())return found->second.get();
+    auto& image=cache[name];
+    const HMODULE module=GetModuleHandleW(nullptr);const HRSRC resource=FindResourceW(module,name,MAKEINTRESOURCEW(10));
+    if(!resource)return nullptr;const DWORD size=SizeofResource(module,resource);
+    const void* data=LockResource(LoadResource(module,resource));if(!data||!size||size>1024*1024)return nullptr;
+    HGLOBAL block=GlobalAlloc(GMEM_MOVEABLE,size);if(!block)return nullptr;
+    void* bytes=GlobalLock(block);if(!bytes) {GlobalFree(block);return nullptr;}
+    std::memcpy(bytes,data,size);GlobalUnlock(block);
+    IStream* stream=nullptr;if(CreateStreamOnHGlobal(block,TRUE,&stream)!=S_OK) {GlobalFree(block);return nullptr;}
+    {
+        Bitmap source(stream);const UINT w=source.GetWidth(),h=source.GetHeight();
+        if(source.GetLastStatus()==Ok&&w&&w==h&&w<=512)image.reset(source.Clone(0,0,int(w),int(h),PixelFormat32bppARGB));
     }
-    return character>=0&&character<4?images[character].get():nullptr;
+    stream->Release();
+    return image.get();
+}
+Bitmap* portrait(int character) {
+    const wchar_t* names[]={L"SRT_CLAIRE",L"SRT_CHRIS",L"SRT_STEVE",L"SRT_WESKER"};
+    return character>=0&&character<4?art(names[character]):nullptr;
+}
+// Bosses, by enemy type: their photo (launcher_art/srt_boss_<name>.png) and,
+// for Alexia, the phase. 21 is the small Albinoid, 22 the boss.
+struct Boss {int type;const wchar_t* photo;int phase;};
+const Boss* boss(int type) {
+    static const Boss bosses[]={{2,L"SRT_BOSS_GULP_WORM",0},{12,L"SRT_BOSS_ALEXIA",1},{13,L"SRT_BOSS_ALEXIA",2},
+        {14,L"SRT_BOSS_ALEXIA",3},{15,L"SRT_BOSS_NOSFERATU",0},{17,L"SRT_BOSS_STEVE",0},{19,L"SRT_BOSS_TYRANT",0},
+        {22,L"SRT_BOSS_ALBINOID",0},{23,L"SRT_BOSS_GIANT_SPIDER",0}};
+    for(const auto& b:bosses)if(b.type==type)return &b;
+    return nullptr;
+}
+// The small photo beside an ordinary enemy (launcher_art/srt_enemy_<name>.png).
+Bitmap* enemy_photo(int type) {
+    switch(type) {
+    case 1:return art(L"SRT_ENEMY_ZOMBIE");case 3:return art(L"SRT_ENEMY_SPIDER");case 4:return art(L"SRT_ENEMY_DOG");
+    case 5:return art(L"SRT_ENEMY_HUNTER");case 6:return art(L"SRT_ENEMY_MOTH");case 7:return art(L"SRT_ENEMY_BAT");
+    case 9:return art(L"SRT_ENEMY_BANDERSNATCH");case 21:return art(L"SRT_ENEMY_ALBINOID");case 26:return art(L"SRT_ENEMY_ANATOMIST");
+    case 29:return art(L"SRT_ENEMY_TENTACLE");case 30:return art(L"SRT_ENEMY_ALEXIA_BABY");default:return nullptr;
+    }
+}
+Bitmap* boss_photo(const Boss& b) {
+    if(b.phase) {wchar_t name[48];swprintf(name,48,L"%s_%d",b.photo,b.phase);if(Bitmap* own=art(name))return own;}
+    return art(b.photo);
 }
 struct Canvas {
     cv_srt_i18n::Language lang;
@@ -146,10 +171,30 @@ struct Canvas {
     }
     bool character(int id,float x,float y) {
         Bitmap* image=portrait(id);if(!image)return false;
-        box(x-1,y-1,26,26,Color(200,0,0,0));
-        const GraphicsState saved=g.Save();g.SetInterpolationMode(InterpolationModeHighQualityBicubic);g.SetPixelOffsetMode(PixelOffsetModeHalf);
-        g.DrawImage(image,RectF(x,y,24,24),0,0,96,96,UnitPixel);g.Restore(saved);
+        photo(image,x,y,24,Color(200,0,0,0));
         return true;
+    }
+    // Every distinct pixel of a photo becomes a quad, so above ~44 screen
+    // pixels the photo is resolved at 44x44 and enlarged in blocks: its cost
+    // stays near 2000 quads at 4K and 200%, instead of tens of thousands.
+    void photo(Bitmap* image,float x,float y,float size,Color frame) {
+        box(x-1,y-1,size+2,size+2,frame);
+        const int detail=44;const GraphicsState saved=g.Save();g.SetPixelOffsetMode(PixelOffsetModeHalf);
+        if(size*scale<=detail) {
+            g.SetInterpolationMode(InterpolationModeHighQualityBicubic);
+            g.DrawImage(image,RectF(x,y,size,size),0,0,REAL(image->GetWidth()),REAL(image->GetHeight()),UnitPixel);
+        } else {
+            Bitmap reduced(detail,detail,PixelFormat32bppARGB);
+            {Graphics sg(&reduced);sg.SetInterpolationMode(InterpolationModeHighQualityBicubic);sg.SetPixelOffsetMode(PixelOffsetModeHalf);
+             sg.DrawImage(image,Rect(0,0,detail,detail),0,0,int(image->GetWidth()),int(image->GetHeight()),UnitPixel);}
+            g.SetInterpolationMode(InterpolationModeNearestNeighbor);
+            g.DrawImage(&reduced,RectF(x,y,size,size),0,0,REAL(detail),REAL(detail),UnitPixel);
+        }
+        g.Restore(saved);
+    }
+    void diamond(float cx,float cy,float r,Color c,bool filled) {
+        const PointF p[]={PointF(cx,cy-r),PointF(cx+r,cy),PointF(cx,cy+r),PointF(cx-r,cy)};
+        if(filled) {SolidBrush b(c);g.FillPolygon(&b,p,4);} else {Pen pen(c,1);g.DrawPolygon(&pen,p,4);}
     }
     bool icon(int id,float x,float y,float w,float h) {
         Bitmap* image=item_images.get(id);if(!image)return false;
@@ -180,8 +225,35 @@ struct Canvas {
 std::vector<rsx_ui_quad> quads;
 size_t base_count=0;
 struct PulseArea {float x=0,y=0,w=0,scale=1;uint32_t color=0;bool dead=false;} pulse;
+// Boss blocks, in logical units while the layout is drawn, then in screen
+// pixels: the bar's filled part and the frame, animated over the cache.
+struct BossFx {float x,y,w,h,fill,fx,fy,fw,fh;};
+std::vector<BossFx> boss_fx;float fx_scale=1;
+void animate_bosses() {
+    if(boss_fx.empty())return;
+    const double t=double(GetTickCount64()%1000000)/1000.0;
+    // The bar breathes once every 1.4 s; the frame brightens with it.
+    const float bright=float(.5+.5*std::sin(t*4.5));
+    const float line=std::max(1.f,std::round(fx_scale));
+    for(const auto& b:boss_fx) {
+        const uint32_t frame=uint32_t(std::lround(200*bright))<<24|0xf3d27a;
+        quads.push_back({b.fx,b.fy,b.fw,line,frame,0});quads.push_back({b.fx,b.fy+b.fh-line,b.fw,line,frame,0});
+        quads.push_back({b.fx,b.fy,line,b.fh,frame,0});quads.push_back({b.fx+b.fw-line,b.fy,line,b.fh,frame,0});
+        if(b.fill<1)continue;
+        quads.push_back({b.x,b.y,b.fill,b.h,uint32_t(std::lround(110*bright))<<24|0xff6e5a,0});
+        // A glow that crosses only the life left, slowly, then rests.
+        const float band=40*fx_scale,speed=55*fx_scale,run=(b.fill+band)/speed,period=run+1.2f;
+        const float centre=float(std::fmod(t,double(period)))*speed-band*.5f;
+        for(int x=int(std::floor(centre-band*.5f));x<int(std::ceil(centre+band*.5f));x++) {
+            if(x<0||x>=int(b.fill))continue;
+            const float d=(x+.5f-centre)/(band*.28f);
+            const uint32_t alpha=uint32_t(std::lround(150*std::exp(-d*d)));
+            if(alpha)quads.push_back({b.x+x,b.y,1,b.h,alpha<<24|0xffebc8,0});
+        }
+    }
+}
 void animate_pulse() {
-    quads.resize(base_count);if(pulse.w<=0)return;
+    quads.resize(base_count);animate_bosses();if(pulse.w<=0)return;
     const float points[][2]={{0,0},{.08f,0},{.12f,-2},{.17f,0},{.28f,0},{.31f,3},{.34f,-11},{.37f,7},{.42f,0},{.55f,-3},{.66f,0},{1,0}};
     // A full cycle now takes ~2.2 seconds, instead of ~0.9 seconds.
     const double phase=double(GetTickCount64()%100000)/1000.0*.45;
@@ -216,15 +288,20 @@ void animate_pulse() {
 }
 
 void build(const cv_srt_state& st,const Config& cfg,uint32_t width,uint32_t height) {
+    boss_fx.clear();
     static ULONG_PTR token=0;if(!token) {GdiplusStartupInput input;GdiplusStartup(&token,&input,nullptr);}
     Bitmap measure_bitmap(1,1,PixelFormat32bppARGB);Graphics measure_graphics(&measure_bitmap);
     Font credit_font(L"Segoe UI",12,FontStyleRegular,UnitPixel);RectF credit_bounds;
     measure_graphics.MeasureString(cfg.credit.c_str(),-1,&credit_font,PointF(0,0),&credit_bounds);
     const bool credit_wrap=credit_bounds.Width>104;
     const auto grid=tiles(st);int gridrows=0;for(const auto& t:grid)gridrows=std::max(gridrows,t.slot/2+1);
-    const int count=cfg.enemies==99?st.enemy_count:std::min(st.enemy_count,cfg.enemies);
+    // Bosses first, so a limit of one or two enemies still shows them.
+    std::vector<cv_srt_enemy> shown(st.enemies,st.enemies+std::clamp(st.enemy_count,0,int(CV_SRT_MAX_ENEMIES)));
+    std::stable_partition(shown.begin(),shown.end(),[](const cv_srt_enemy& e){return boss(e.type)!=nullptr;});
+    const int count=cfg.enemies==99?int(shown.size()):std::min(int(shown.size()),cfg.enemies);
+    int bosses=0;for(int i=0;i<count;i++)if(boss(shown[i].type))bosses++;
     int h=16+(cfg.name?28:0)+(cfg.health?104:0)+(cfg.time?40:0)+(cfg.stats?45:0);
-    if(cfg.enemies)h+=28+std::max(1,count)*39;
+    if(cfg.enemies)h+=28+std::max(1,count)*39+bosses*45;
     h+=credit_wrap?42:26;
     const bool side=st.valid&&cfg.inventory;
     if(side)item_images.load(cfg.game_root);
@@ -310,10 +387,37 @@ void build(const cv_srt_state& st,const Config& cfg,uint32_t width,uint32_t heig
             c.heading(cfg.words[4],y);y+=28;
             if(!count) {c.text(L"—",18,y,268,14,c.dim,false,false,false,24);y+=39;}
             for(int i=0;i<count;i++) {
-                const auto& e=st.enemies[i];c.text(cv_srt_i18n::enemy(e.type,cfg.lang),18,y,151,14,c.cream,false,false,false,22);
+                const auto& e=shown[i];
+                if(const Boss* b=boss(e.type)) {
+                    // A framed block: photo, BOSS, the name large, a thicker bar
+                    // in quarters, Alexia's phase as three diamonds.
+                    const Color frame(255,201,162,74),hp_ink(255,222,116,107);
+                    c.background(18,y,268,76,Color(255,28,20,12));
+                    c.line(18,y,286,y,frame);c.line(18,y+75,286,y+75,frame);c.line(18,y,18,y+76,frame);c.line(285,y,285,y+76,frame);
+                    Bitmap* image=boss_photo(*b);const float tx=image?86.f:26.f,right=278;
+                    if(image)c.photo(image,26,y+12,52,frame);
+                    const float ratio=e.maximum?std::clamp(float(e.hp)/e.maximum,0.f,1.f):0;
+                    const std::wstring pct=number(int(ratio*100+.5f))+L"%";
+                    c.text(upper(cfg.words[15]),tx,y+3,120,11,frame,true,false,false,16);
+                    if(b->phase)for(int k=0;k<3;k++)c.diamond(right-28+k*12.f,y+11,4.5f,frame,k<b->phase);
+                    else c.text(pct,right-60,y+3,60,12,frame,false,true,false,16);
+                    c.text(upper(cv_srt_i18n::enemy(b->phase?12:e.type,cfg.lang)),tx,y+16,right-tx,18,c.cream,false,false,true,26);
+                    c.bar(tx,y+44,right-tx,12,ratio,Color(255,184,50,42));
+                    boss_fx.push_back({main_x+tx,y+44,right-tx,12,ratio,main_x+18,y,268,76});
+                    for(int q=1;q<4;q++)c.line(tx+(right-tx)*q/4.f,y+44,tx+(right-tx)*q/4.f,y+56,Color(255,12,12,14));
+                    if(b->phase) {
+                        static const wchar_t* roman[]={L"I",L"II",L"III"};
+                        c.text(upper(cfg.words[16])+L" "+roman[b->phase-1]+L" · "+pct,tx,y+57,140,12,frame,false,false,false,17);
+                    }
+                    c.text(number(e.hp)+L" / "+number(e.maximum),right-110,y+57,110,12,hp_ink,false,true,false,17);
+                    y+=84;continue;
+                }
+                Bitmap* image=enemy_photo(e.type);const float ex=image?56.f:18.f;
+                if(image)c.photo(image,18,y+1,32,Color(255,67,39,35));
+                c.text(cv_srt_i18n::enemy(e.type,cfg.lang),ex,y,169-ex,14,c.cream,false,false,false,22);
                 const std::wstring hp=number(e.hp)+L" / "+number(e.maximum);
                 c.text(hp,171,y,115,14,Color(255,222,116,107),false,true,false,22);
-                c.bar(18,y+22,268,11,e.maximum?float(e.hp)/e.maximum:0,Color(255,163,51,44));y+=39;
+                c.bar(ex,y+22,286-ex,11,e.maximum?float(e.hp)/e.maximum:0,Color(255,163,51,44));y+=39;
             }
         }
         if(cfg.inventory) {
@@ -387,10 +491,16 @@ void build(const cv_srt_state& st,const Config& cfg,uint32_t width,uint32_t heig
     }
     c.bitmap.UnlockBits(&pixels);
     base_count=quads.size();
+    fx_scale=scale;
+    for(auto& b:boss_fx) {   // logical -> screen pixels, on the same pixel grid as the cache
+        const float fill=b.w*b.fill;
+        b={std::round(x0+b.x*scale),std::round(y0+b.y*scale),std::round(b.w*scale),std::round(b.h*scale),std::round(fill*scale),
+           std::round(x0+b.fx*scale),std::round(y0+b.fy*scale),std::round(b.fw*scale),std::round(b.fh*scale)};
+    }
     pulse={};
     if(ecg_y>=0) {
         pulse={std::round(x0+(main_x+18)*scale),std::round(y0+ecg_y*scale),std::floor(166*scale),scale,ecg_color,st.condition==SRT_DEAD};
-        quads.reserve(base_count+size_t(pulse.w)*6+1);
+        quads.reserve(base_count+size_t(pulse.w)*6+boss_fx.size()*size_t(8+48*scale)+1);
     }
 }
 }

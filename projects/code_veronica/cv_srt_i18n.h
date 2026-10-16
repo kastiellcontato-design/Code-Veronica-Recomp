@@ -10,7 +10,7 @@ const wchar_t* font_face(Language lang,bool bold=false);
 bool rtl_text(const std::wstring& text);
 std::wstring item(int id,Language lang);
 std::wstring enemy(int id,Language lang);
-std::array<std::wstring,15> labels(Language lang);
+std::array<std::wstring,17> labels(Language lang);
 std::wstring credit(Language lang);
 // The selected inventory entry contains the ammunition loaded in the weapon,
 // independently from reserve-ammunition entries in the other slots.

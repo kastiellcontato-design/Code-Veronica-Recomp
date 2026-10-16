@@ -105,7 +105,11 @@ int main(int argc,char** argv) {
         }
         for(int enemy:{1,2,3,4,5,6,7,9,12,13,14,15,17,19,21,22,23,26,29,30})assert(!loc::enemy(enemy,language).empty());
     }
-    for(const wchar_t* name:{L"SRT_CLAIRE",L"SRT_CHRIS",L"SRT_STEVE",L"SRT_WESKER"}) {
+    for(const wchar_t* name:{L"SRT_CLAIRE",L"SRT_CHRIS",L"SRT_STEVE",L"SRT_WESKER",
+        L"SRT_BOSS_TYRANT",L"SRT_BOSS_NOSFERATU",L"SRT_BOSS_STEVE",L"SRT_BOSS_ALBINOID",L"SRT_BOSS_GIANT_SPIDER",L"SRT_BOSS_GULP_WORM",
+        L"SRT_BOSS_ALEXIA_1",L"SRT_BOSS_ALEXIA_2",L"SRT_BOSS_ALEXIA_3",L"SRT_ENEMY_ZOMBIE",L"SRT_ENEMY_DOG",L"SRT_ENEMY_SPIDER",
+        L"SRT_ENEMY_HUNTER",L"SRT_ENEMY_MOTH",L"SRT_ENEMY_BAT",L"SRT_ENEMY_BANDERSNATCH",L"SRT_ENEMY_ALBINOID",
+        L"SRT_ENEMY_TENTACLE",L"SRT_ENEMY_ALEXIA_BABY"}) {
         const auto resource=FindResourceW(GetModuleHandleW(nullptr),name,MAKEINTRESOURCEW(10));
         assert(resource&&SizeofResource(GetModuleHandleW(nullptr),resource)<65536);
     }
@@ -298,6 +302,19 @@ int main(int argc,char** argv) {
     const auto* percent=cv_srt_design(&state,1600,900,&count);assert(percent&&count<131072);
     if(argc>1) {char file[1024];std::snprintf(file,sizeof file,"%s/srt-%s-equipped-percent.png",argv[1],CV_TITLE_ID);export_png(file,percent,count,1600,900,false,true);}
     state.inventory[0].infinite=1;const auto* infinite=cv_srt_design(&state,1600,900,&count);assert(infinite&&count<131072);
+    // Bosses go to the top of the list in their framed block, inside the enemy limit.
+    {
+        const auto saved_state=state;
+        const std::string saved_limit=std::getenv("SRT_ENEMIES")?std::getenv("SRT_ENEMIES"):"3";
+        state.enemy_count=4;state.enemies[0]={1,72,72,0};state.enemies[1]={4,38,80,1};_putenv_s("SRT_ENEMIES","5");state.enemies[2]={19,504,700,0};state.enemies[3]={13,266,700,0};
+        for(const char* lang:{"pt-BR","en","ja","ar"}) {
+            _putenv_s("SRT_LANGUAGE",lang);cv_srt_configure_env();
+            const auto* bosses=cv_srt_design(&state,1600,900,&count);assert(bosses);assert(count<131072);peak=std::max(peak,count);
+            if(argc>1) {char file[1024];std::snprintf(file,sizeof file,"%s/srt-%s-bosses-%s.png",argv[1],CV_TITLE_ID,lang);export_png(file,bosses,count,1600,900,false,true);}
+        }
+        for(int b:{2,12,14,15,17,22,23}) {state.enemy_count=1;state.enemies[0]={b,10,100,0};assert(cv_srt_design(&state,3840,2160,&count)&&count<131072);peak=std::max(peak,count);}
+        state=saved_state;_putenv_s("SRT_ENEMIES",saved_limit.c_str());_putenv_s("SRT_LANGUAGE","pt-BR");cv_srt_configure_env();
+    }
     state=localized_saved;_putenv_s("SRT_LANGUAGE","pt-BR");_putenv_s("SRT_TEXT",saved_words.c_str());cv_srt_configure_env();
     state.condition=SRT_FINE;state.hp=max;
     // Preview from the production renderer, using synthetic inventory only.

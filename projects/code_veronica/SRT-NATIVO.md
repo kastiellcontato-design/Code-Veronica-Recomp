@@ -381,3 +381,20 @@ Continuação do trabalho do GPT (fotos, munição do equipado, 13 idiomas).
 - Build `build-release/srt-wesker-build.log`: EU/JP/US e testes aprovados,
   pico 114297 quads. Prévias em `codex_diag_srt/srt-*-character-3-*.png`
   e `srt-*-locale-*.png`. Falta o teste visual do usuário no jogo. Sem commit.
+
+## Chefes, efeito e fotos dos inimigos — 16/10/2026
+
+- Chefes reconhecidos pelo tipo: Gulp Worm (2), Alexia I/II/III (12/13/14),
+  Nosferatu (15), Steve mutante (17), Tyrant (19), Albinoid adulto (22),
+  aranha gigante (23). Vão para o topo da lista dentro do limite de inimigos,
+  num bloco com moldura dourada, CHEFE, nome grande, barra em quartos e
+  losangos de fase na Alexia. Textos "Chefe"/"Fase" nos 13 idiomas.
+- Efeito escolhido pelo usuário: a barra e a moldura pulsam (1,4 s) e um
+  brilho lento cruza só a parte com vida, depois descansa 1,2 s. Desenhado
+  por cima do cache, como o ECG (`animate_bosses`).
+- Fotos geradas pelo usuário (`launcher_art/srt_boss_*.png`, `srt_enemy_*.png`,
+  96×96, recortadas do zip dele). O usuário autorizou publicá-las no GitHub.
+  Sem foto do zumbi anatomista (26); sweeper, formiga e aranha filhote
+  vieram no zip mas não têm tipo reconhecido no leitor.
+- Cada pixel distinto vira um quad: acima de 44 px na tela a foto é resolvida
+  em 44×44 e ampliada em blocos. Pico testado 119402 quads (4K, 200%).
