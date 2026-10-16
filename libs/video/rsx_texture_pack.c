@@ -41,11 +41,22 @@ static int is_dir(const wchar_t* p)
     const DWORD a = GetFileAttributesW(p);
     return a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_DIRECTORY);
 }
+/* A folder from the environment: UTF-8 as the launcher sets it in this
+ * process, or, set from outside (a shortcut, a script), the wide value --
+ * the narrow one is then in the ANSI code page and loses any accent. */
+static int env_path(const char* name, const wchar_t* wname, wchar_t* out)
+{
+    const char* v = getenv(name);
+    if (v && *v && MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, v, -1, out, PATH_CAP)) return 1;
+    const wchar_t* w = _wgetenv(wname);
+    if (!w || !*w) return 0;
+    wcsncpy(out, w, PATH_CAP - 1); out[PATH_CAP - 1] = 0;
+    return 1;
+}
 static BOOL CALLBACK paths_init(PINIT_ONCE once, PVOID arg, PVOID* ctx)
 {
     (void)once; (void)arg; (void)ctx;
-    const char* d = getenv("TEXTURE_DIR");
-    if (!d || !*d || !MultiByteToWideChar(CP_UTF8, 0, d, -1, s_dir, PATH_CAP)) {
+    if (!env_path("TEXTURE_DIR", L"TEXTURE_DIR", s_dir)) {
         GetModuleFileNameW(NULL, s_dir, PATH_CAP);
         wchar_t* sl = wcsrchr(s_dir, L'\\');
         if (sl) sl[1] = 0;
@@ -58,8 +69,12 @@ static BOOL CALLBACK paths_init(PINIT_ONCE once, PVOID arg, PVOID* ctx)
     /* One folder can hold a pack per version: <dir>\<code> when it exists. */
     swprintf(s_root, PATH_CAP, L"%ls\\%ls", s_dir, code);
     if (!code[0] || !is_dir(s_root)) wcscpy(s_root, s_dir);
-    if (code[0]) swprintf(s_dump_dir, PATH_CAP, L"%ls\\%ls\\dump", s_dir, code);
-    else swprintf(s_dump_dir, PATH_CAP, L"%ls\\dump", s_dir);
+    /* Dumps: TEXTURE_DUMP_DIR when chosen, else <dir>\<code>\dump. */
+    if (!env_path("TEXTURE_DUMP_DIR", L"TEXTURE_DUMP_DIR", s_dump_dir)) {
+        if (code[0]) swprintf(s_dump_dir, PATH_CAP, L"%ls\\%ls\\dump", s_dir, code);
+        else swprintf(s_dump_dir, PATH_CAP, L"%ls\\dump", s_dir);
+    }
+    for (size_t n = wcslen(s_dump_dir); n > 3 && (s_dump_dir[n - 1] == L'\\' || s_dump_dir[n - 1] == L'/'); n--) s_dump_dir[n - 1] = 0;
     return TRUE;
 }
 static void paths(void) { InitOnceExecuteOnce(&s_paths_once, paths_init, NULL, NULL); }
@@ -179,7 +194,8 @@ static void scan_dir(const wchar_t* dir, int depth)
         wchar_t full[PATH_CAP];
         if (swprintf(full, PATH_CAP, L"%ls\\%ls", dir, n) < 0) continue;
         if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
-            if (_wcsicmp(n, L"dump")) scan_dir(full, depth + 1);   /* never the textures being dumped */
+            if (_wcsicmp(n, L"dump") && _wcsicmp(full, s_dump_dir))   /* never the textures being dumped */
+                scan_dir(full, depth + 1);
         } else {
             uint64_t hh;
             if (is_png(n) && name_hash(n, &hh)) idx_add(hh, full);

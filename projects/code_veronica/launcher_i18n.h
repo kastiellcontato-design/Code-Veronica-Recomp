@@ -55,6 +55,7 @@ enum StrId {
     S_SUPPORTED_VERSIONS, S_REGION_EU, S_REGION_JP, S_REGION_US,
     S_SH_TITLE, S_SH_HINT, S_SH_PSO_T, S_SH_PSO_D, S_SH_LOAD_T, S_SH_LOAD_D, S_SH_BUILD_T, S_SH_BUILD_D, S_SH_PAR_T, S_SH_PAR_D, S_SH_NOTE_T, S_SH_NOTE_D, S_SH_NOTE_LOADING, S_SH_NOTE_LOADED,
     S_MODS_TITLE, S_MODS_HINT, S_TEX_FOLDER, S_TEX_COUNT_FMT, S_TEX_REPLACE_T, S_TEX_REPLACE_D, S_TEX_DUMP_T, S_TEX_DUMP_D, S_TEX_HOWTO,
+    S_TEX_DUMP_FOLDER, S_TEX_DUMP_COUNT_FMT,
     S_COUNT
 };
 
@@ -163,8 +164,10 @@ static const wchar_t* const k_str_pt[] = {
     L"Substituir texturas",
     L"Usa os PNGs da pasta no lugar das texturas originais, carregando cada um só quando aparece: mods grandes não pesam. Cada versão lê a sua subpasta (NPEB00553, NPJB00135, NPUB30467) ou, sem ela, a própria pasta.",
     L"Extrair texturas",
-    L"Salva em PNG cada textura nova que aparece enquanto você joga, em <pasta>\\<versão>\\dump. Passe pelos mapas para extrair as texturas deles.",
-    L"Para criar um mod: ligue Extrair, passe pelos mapas, edite os PNGs (pode aumentar a resolução) mantendo o código do começo do nome e coloque-os na pasta da versão. As duas chaves valem na hora, também com o jogo aberto."
+    L"Salva em PNG cada textura nova que aparece enquanto você joga, na pasta das extraídas escolhida acima. Passe pelos mapas para extrair as texturas deles.",
+    L"Para criar um mod: ligue Extrair, passe pelos mapas, edite os PNGs (pode aumentar a resolução) mantendo o código do começo do nome e coloque-os na pasta da versão. As duas chaves valem na hora, também com o jogo aberto.",
+    L"Pasta das extraídas",
+    L"%d texturas extraídas até agora"
 };
 static_assert(sizeof k_str_pt / sizeof k_str_pt[0] == S_COUNT, "k_str_pt: one text per StrId");
 
@@ -273,8 +276,10 @@ static const wchar_t* const k_str_en[] = {
     L"Replace textures",
     L"Uses the folder's PNGs in place of the original textures, loading each only when it appears: big mods weigh nothing. Each version reads its own subfolder (NPEB00553, NPJB00135, NPUB30467) or, without one, the folder itself.",
     L"Dump textures",
-    L"Saves each new texture that shows up as you play as a PNG, in <folder>\\<version>\\dump. Go through the maps to dump their textures.",
-    L"To make a mod: turn on Dump, go through the maps, edit the PNGs (a higher resolution is fine) keeping the code at the start of the name, and put them in the version's folder. Both switches act at once, even with the game open."
+    L"Saves each new texture that shows up as you play as a PNG, in the dump folder chosen above. Go through the maps to dump their textures.",
+    L"To make a mod: turn on Dump, go through the maps, edit the PNGs (a higher resolution is fine) keeping the code at the start of the name, and put them in the version's folder. Both switches act at once, even with the game open.",
+    L"Dump folder",
+    L"%d textures dumped so far"
 };
 static_assert(sizeof k_str_en / sizeof k_str_en[0] == S_COUNT, "k_str_en: one text per StrId");
 
@@ -383,8 +388,10 @@ static const wchar_t* const k_str_es[] = {
     L"Reemplazar texturas",
     L"Usa los PNG de la carpeta en lugar de las texturas originales y carga cada uno solo cuando aparece: los mods grandes no pesan. Cada versión lee su subcarpeta (NPEB00553, NPJB00135, NPUB30467) o, si no existe, la propia carpeta.",
     L"Extraer texturas",
-    L"Guarda en PNG cada textura nueva que aparece mientras juegas, en <carpeta>\\<versión>\\dump. Recorre los mapas para extraer sus texturas.",
-    L"Para crear un mod: activa Extraer, recorre los mapas, edita los PNG (puedes subir la resolución) manteniendo el código del inicio del nombre y colócalos en la carpeta de la versión. Los dos interruptores actúan al instante, incluso con el juego abierto."
+    L"Guarda en PNG cada textura nueva que aparece mientras juegas, en la carpeta de extraídas elegida arriba. Recorre los mapas para extraer sus texturas.",
+    L"Para crear un mod: activa Extraer, recorre los mapas, edita los PNG (puedes subir la resolución) manteniendo el código del inicio del nombre y colócalos en la carpeta de la versión. Los dos interruptores actúan al instante, incluso con el juego abierto.",
+    L"Carpeta de extraídas",
+    L"%d texturas extraídas hasta ahora"
 };
 static_assert(sizeof k_str_es / sizeof k_str_es[0] == S_COUNT, "k_str_es: one text per StrId");
 
@@ -493,8 +500,10 @@ static const wchar_t* const k_str_ja[] = {
     L"テクスチャを置き換える",
     L"フォルダー内の PNG を元のテクスチャの代わりに使います。表示されたときだけ読み込むので、大きな Mod でも重くなりません。各バージョンは専用のサブフォルダー（NPEB00553、NPJB00135、NPUB30467）を、なければフォルダー自体を読みます。",
     L"テクスチャを抽出する",
-    L"プレイ中に新しく現れたテクスチャを PNG として <フォルダー>\\<バージョン>\\dump に保存します。各マップを回ってテクスチャを抽出してください。",
-    L"Mod の作り方：抽出をオンにしてマップを回り、名前の先頭のコードを残したまま PNG を編集し（高解像度にしても構いません）、バージョンのフォルダーに入れます。どちらのスイッチもゲーム中でもすぐに反映されます。"
+    L"プレイ中に新しく現れたテクスチャを PNG として、上で選んだ抽出先フォルダーに保存します。各マップを回ってテクスチャを抽出してください。",
+    L"Mod の作り方：抽出をオンにしてマップを回り、名前の先頭のコードを残したまま PNG を編集し（高解像度にしても構いません）、バージョンのフォルダーに入れます。どちらのスイッチもゲーム中でもすぐに反映されます。",
+    L"抽出先フォルダー",
+    L"これまでに抽出したテクスチャ: %d 枚"
 };
 static_assert(sizeof k_str_ja / sizeof k_str_ja[0] == S_COUNT, "k_str_ja: one text per StrId");
 
@@ -657,8 +666,10 @@ static const wchar_t* const k_str_fr[] = {
     L"Remplacer les textures",
     L"Utilise les PNG du dossier à la place des textures d'origine, en chargeant chacun seulement quand il apparaît : les gros mods ne pèsent rien. Chaque version lit son sous-dossier (NPEB00553, NPJB00135, NPUB30467) ou, à défaut, le dossier lui-même.",
     L"Extraire les textures",
-    L"Enregistre en PNG chaque nouvelle texture qui apparaît pendant que vous jouez, dans <dossier>\\<version>\\dump. Parcourez les cartes pour en extraire les textures.",
-    L"Pour créer un mod : activez Extraire, parcourez les cartes, modifiez les PNG (la résolution peut être augmentée) en gardant le code au début du nom, puis placez-les dans le dossier de la version. Les deux interrupteurs agissent tout de suite, même jeu ouvert."
+    L"Enregistre en PNG chaque nouvelle texture qui apparaît pendant que vous jouez, dans le dossier d'extraction choisi ci-dessus. Parcourez les cartes pour en extraire les textures.",
+    L"Pour créer un mod : activez Extraire, parcourez les cartes, modifiez les PNG (la résolution peut être augmentée) en gardant le code au début du nom, puis placez-les dans le dossier de la version. Les deux interrupteurs agissent tout de suite, même jeu ouvert.",
+    L"Dossier d'extraction",
+    L"%d textures extraites jusqu’ici"
 };
 static_assert(sizeof k_str_fr / sizeof k_str_fr[0] == S_COUNT, "k_str_fr: one text per StrId");
 
@@ -821,8 +832,10 @@ static const wchar_t* const k_str_de[] = {
     L"Texturen ersetzen",
     L"Verwendet die PNGs im Ordner statt der Originaltexturen und lädt jede erst, wenn sie erscheint: große Mods belasten nicht. Jede Version liest ihren Unterordner (NPEB00553, NPJB00135, NPUB30467) oder, falls keiner existiert, den Ordner selbst.",
     L"Texturen extrahieren",
-    L"Speichert jede neue Textur, die beim Spielen erscheint, als PNG in <Ordner>\\<Version>\\dump. Geh durch die Karten, um ihre Texturen zu extrahieren.",
-    L"So entsteht ein Mod: Extrahieren einschalten, durch die Karten gehen, die PNGs bearbeiten (höhere Auflösung ist erlaubt), dabei den Code am Namensanfang behalten und sie in den Ordner der Version legen. Beide Schalter wirken sofort, auch bei laufendem Spiel."
+    L"Speichert jede neue Textur, die beim Spielen erscheint, als PNG im oben gewählten Extraktionsordner. Geh durch die Karten, um ihre Texturen zu extrahieren.",
+    L"So entsteht ein Mod: Extrahieren einschalten, durch die Karten gehen, die PNGs bearbeiten (höhere Auflösung ist erlaubt), dabei den Code am Namensanfang behalten und sie in den Ordner der Version legen. Beide Schalter wirken sofort, auch bei laufendem Spiel.",
+    L"Extraktionsordner",
+    L"Bisher %d Texturen extrahiert"
 };
 static_assert(sizeof k_str_de / sizeof k_str_de[0] == S_COUNT, "k_str_de: one text per StrId");
 
@@ -985,8 +998,10 @@ static const wchar_t* const k_str_it[] = {
     L"Sostituisci le texture",
     L"Usa i PNG della cartella al posto delle texture originali, caricando ciascuno solo quando appare: le mod grandi non pesano. Ogni versione legge la propria sottocartella (NPEB00553, NPJB00135, NPUB30467) o, se manca, la cartella stessa.",
     L"Estrai le texture",
-    L"Salva in PNG ogni nuova texture che appare mentre giochi, in <cartella>\\<versione>\\dump. Percorri le mappe per estrarne le texture.",
-    L"Per creare una mod: attiva Estrai, percorri le mappe, modifica i PNG (puoi aumentare la risoluzione) mantenendo il codice all'inizio del nome e mettili nella cartella della versione. Entrambi gli interruttori agiscono subito, anche a gioco aperto."
+    L"Salva in PNG ogni nuova texture che appare mentre giochi, nella cartella delle estratte scelta qui sopra. Percorri le mappe per estrarne le texture.",
+    L"Per creare una mod: attiva Estrai, percorri le mappe, modifica i PNG (puoi aumentare la risoluzione) mantenendo il codice all'inizio del nome e mettili nella cartella della versione. Entrambi gli interruttori agiscono subito, anche a gioco aperto.",
+    L"Cartella estratte",
+    L"%d texture estratte finora"
 };
 static_assert(sizeof k_str_it / sizeof k_str_it[0] == S_COUNT, "k_str_it: one text per StrId");
 
@@ -1149,8 +1164,10 @@ static const wchar_t* const k_str_pl[] = {
     L"Zastępuj tekstury",
     L"Używa plików PNG z folderu zamiast oryginalnych tekstur i wczytuje każdy dopiero, gdy się pojawi: duże mody nie obciążają. Każda wersja czyta swój podfolder (NPEB00553, NPJB00135, NPUB30467) lub, gdy go nie ma, sam folder.",
     L"Wyodrębniaj tekstury",
-    L"Zapisuje jako PNG każdą nową teksturę, która pojawi się podczas gry, w <folder>\\<wersja>\\dump. Przejdź przez mapy, aby wyodrębnić ich tekstury.",
-    L"Jak zrobić moda: włącz Wyodrębniaj, przejdź przez mapy, edytuj pliki PNG (można zwiększyć rozdzielczość), zachowując kod na początku nazwy, i umieść je w folderze wersji. Oba przełączniki działają od razu, także przy uruchomionej grze."
+    L"Zapisuje jako PNG każdą nową teksturę, która pojawi się podczas gry, w folderze wyodrębnionych wybranym powyżej. Przejdź przez mapy, aby wyodrębnić ich tekstury.",
+    L"Jak zrobić moda: włącz Wyodrębniaj, przejdź przez mapy, edytuj pliki PNG (można zwiększyć rozdzielczość), zachowując kod na początku nazwy, i umieść je w folderze wersji. Oba przełączniki działają od razu, także przy uruchomionej grze.",
+    L"Folder wyodrębnionych",
+    L"Dotąd wyodrębniono %d tekstur"
 };
 static_assert(sizeof k_str_pl / sizeof k_str_pl[0] == S_COUNT, "k_str_pl: one text per StrId");
 
@@ -1313,8 +1330,10 @@ static const wchar_t* const k_str_tr[] = {
     L"Dokuları değiştir",
     L"Klasördeki PNG'leri orijinal dokuların yerine kullanır ve her birini yalnızca göründüğünde yükler: büyük modlar yük olmaz. Her sürüm kendi alt klasörünü (NPEB00553, NPJB00135, NPUB30467), yoksa klasörün kendisini okur.",
     L"Dokuları çıkar",
-    L"Oynarken beliren her yeni dokuyu PNG olarak <klasör>\\<sürüm>\\dump içine kaydeder. Dokularını çıkarmak için haritaları dolaşın.",
-    L"Mod yapmak için: Çıkar'ı açın, haritaları dolaşın, adın başındaki kodu koruyarak PNG'leri düzenleyin (çözünürlüğü artırabilirsiniz) ve sürümün klasörüne koyun. İki anahtar da oyun açıkken bile hemen etki eder."
+    L"Oynarken beliren her yeni dokuyu PNG olarak yukarıda seçilen çıkarma klasörüne kaydeder. Dokularını çıkarmak için haritaları dolaşın.",
+    L"Mod yapmak için: Çıkar'ı açın, haritaları dolaşın, adın başındaki kodu koruyarak PNG'leri düzenleyin (çözünürlüğü artırabilirsiniz) ve sürümün klasörüne koyun. İki anahtar da oyun açıkken bile hemen etki eder.",
+    L"Çıkarma klasörü",
+    L"Şimdiye kadar %d doku çıkarıldı"
 };
 static_assert(sizeof k_str_tr / sizeof k_str_tr[0] == S_COUNT, "k_str_tr: one text per StrId");
 
@@ -1477,8 +1496,10 @@ static const wchar_t* const k_str_ar[] = {
     L"استبدال الخامات",
     L"يستخدم ملفات PNG في المجلد بدل الخامات الأصلية، ويحمّل كل ملف عند ظهوره فقط، فلا تثقل التعديلات الكبيرة. تقرأ كل نسخة مجلدها الفرعي (NPEB00553 وNPJB00135 وNPUB30467) أو المجلد نفسه إن لم يوجد.",
     L"استخراج الخامات",
-    L"يحفظ كل خامة جديدة تظهر أثناء اللعب بصيغة PNG في <المجلد>\\<النسخة>\\dump. تجوّل في الخرائط لاستخراج خاماتها.",
-    L"لإنشاء تعديل: فعّل الاستخراج، وتجوّل في الخرائط، وعدّل ملفات PNG (يمكن رفع الدقة) مع إبقاء الرمز في بداية الاسم، ثم ضعها في مجلد النسخة. يعمل المفتاحان فورًا حتى واللعبة مفتوحة."
+    L"يحفظ كل خامة جديدة تظهر أثناء اللعب بصيغة PNG في مجلد الاستخراج المختار أعلاه. تجوّل في الخرائط لاستخراج خاماتها.",
+    L"لإنشاء تعديل: فعّل الاستخراج، وتجوّل في الخرائط، وعدّل ملفات PNG (يمكن رفع الدقة) مع إبقاء الرمز في بداية الاسم، ثم ضعها في مجلد النسخة. يعمل المفتاحان فورًا حتى واللعبة مفتوحة.",
+    L"مجلد الاستخراج",
+    L"استُخرجت %d خامة حتى الآن"
 };
 static_assert(sizeof k_str_ar / sizeof k_str_ar[0] == S_COUNT, "k_str_ar: one text per StrId");
 
@@ -1641,8 +1662,10 @@ static const wchar_t* const k_str_zh[] = {
     L"替换纹理",
     L"用文件夹中的 PNG 代替原始纹理，每张只在出现时才加载，大型模组也不会拖慢游戏。每个版本读取各自的子文件夹（NPEB00553、NPJB00135、NPUB30467），没有时读取文件夹本身。",
     L"提取纹理",
-    L"游戏时把每个新出现的纹理保存为 PNG，放在 <文件夹>\\<版本>\\dump 中。走遍各个地图即可提取它们的纹理。",
-    L"制作模组：打开提取，走遍地图，编辑 PNG（可以提高分辨率）并保留文件名开头的代码，然后放入该版本的文件夹。两个开关都会立即生效，游戏运行时也一样。"
+    L"游戏时把每个新出现的纹理保存为 PNG，放在上面选择的提取文件夹中。走遍各个地图即可提取它们的纹理。",
+    L"制作模组：打开提取，走遍地图，编辑 PNG（可以提高分辨率）并保留文件名开头的代码，然后放入该版本的文件夹。两个开关都会立即生效，游戏运行时也一样。",
+    L"提取文件夹",
+    L"目前已提取 %d 张纹理"
 };
 static_assert(sizeof k_str_zh / sizeof k_str_zh[0] == S_COUNT, "k_str_zh: one text per StrId");
 
@@ -1805,8 +1828,10 @@ static const wchar_t* const k_str_ko[] = {
     L"텍스처 교체",
     L"폴더의 PNG를 원래 텍스처 대신 사용하며, 각각 화면에 나올 때만 불러오므로 큰 모드도 부담이 없습니다. 각 버전은 자기 하위 폴더(NPEB00553, NPJB00135, NPUB30467)를, 없으면 폴더 자체를 읽습니다.",
     L"텍스처 추출",
-    L"플레이 중 새로 나타나는 텍스처를 PNG로 <폴더>\\<버전>\\dump에 저장합니다. 맵을 돌아다니며 텍스처를 추출하세요.",
-    L"모드 만드는 법: 추출을 켜고 맵을 돌아다닌 뒤, 이름 앞의 코드를 유지한 채 PNG를 편집하고(해상도를 높여도 됩니다) 버전 폴더에 넣으세요. 두 스위치 모두 게임 중에도 바로 적용됩니다."
+    L"플레이 중 새로 나타나는 텍스처를 PNG로 위에서 고른 추출 폴더에 저장합니다. 맵을 돌아다니며 텍스처를 추출하세요.",
+    L"모드 만드는 법: 추출을 켜고 맵을 돌아다닌 뒤, 이름 앞의 코드를 유지한 채 PNG를 편집하고(해상도를 높여도 됩니다) 버전 폴더에 넣으세요. 두 스위치 모두 게임 중에도 바로 적용됩니다.",
+    L"추출 폴더",
+    L"지금까지 추출한 텍스처 %d개"
 };
 static_assert(sizeof k_str_ko / sizeof k_str_ko[0] == S_COUNT, "k_str_ko: one text per StrId");
 
@@ -1969,8 +1994,10 @@ static const wchar_t* const k_str_ru[] = {
     L"Заменять текстуры",
     L"Использует PNG из папки вместо исходных текстур и загружает каждый, только когда он появляется: большие моды не нагружают игру. Каждая версия читает свою подпапку (NPEB00553, NPJB00135, NPUB30467), а без неё саму папку.",
     L"Извлекать текстуры",
-    L"Сохраняет в PNG каждую новую текстуру, появившуюся во время игры, в <папка>\\<версия>\\dump. Пройдите по картам, чтобы извлечь их текстуры.",
-    L"Как сделать мод: включите извлечение, пройдите по картам, отредактируйте PNG (можно повысить разрешение), сохранив код в начале имени, и положите их в папку версии. Оба переключателя действуют сразу, даже при запущенной игре."
+    L"Сохраняет в PNG каждую новую текстуру, появившуюся во время игры, в папку извлечённых, выбранную выше. Пройдите по картам, чтобы извлечь их текстуры.",
+    L"Как сделать мод: включите извлечение, пройдите по картам, отредактируйте PNG (можно повысить разрешение), сохранив код в начале имени, и положите их в папку версии. Оба переключателя действуют сразу, даже при запущенной игре.",
+    L"Папка извлечённых",
+    L"Извлечено текстур: %d"
 };
 static_assert(sizeof k_str_ru / sizeof k_str_ru[0] == S_COUNT, "k_str_ru: one text per StrId");
 

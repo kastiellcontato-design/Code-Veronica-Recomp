@@ -14,7 +14,8 @@
  *   TEXTURE_GAME     the game's code: <dir>\<code> is used when it exists, so
  *                    one folder can hold a pack for each version
  *   TEXTURE_REPLACE  1: use the PNG files in place of the textures
- *   TEXTURE_DUMP     1: write each new texture to <dir>\<code>\dump
+ *   TEXTURE_DUMP     1: write each new texture to the dump folder
+ *   TEXTURE_DUMP_DIR the dump folder (UTF-8); default <dir>\<code>\dump
  * Both switches are read again every half second.
  */
 #pragma once

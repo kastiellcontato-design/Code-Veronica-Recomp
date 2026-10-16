@@ -173,6 +173,7 @@ struct Settings {
     int overlay_items = 3; /* bits of k_overlay_items: FPS and frame time */
     bool shader_opt[5] = { true, true, true, true, true };   /* k_shader_opts, Desempenho page */
     std::wstring tex_dir;              /* texture mods (Mods page); empty: "textures" beside the exe */
+    std::wstring tex_dump_dir;         /* where dumps go; empty: <tex_dir>\<version>\dump */
     bool tex_replace = false, tex_dump = false;
     std::wstring game, rap, fw, saves;
     std::wstring patch_dir;                 /* patch files (patch_files.h) */
@@ -334,6 +335,7 @@ Settings load_settings()
     for (int i = 0; i < NSHADER_OPTS; i++)
         s.shader_opt[i] = _wtoi(ini_get(L"shaders", k_shader_opts[i].key, L"1").c_str()) != 0;
     s.tex_dir = ini_get(L"texturas", L"pasta", L"");
+    s.tex_dump_dir = ini_get(L"texturas", L"pasta_extraidas", L"");
     s.tex_replace = _wtoi(ini_get(L"texturas", L"substituir", L"0").c_str()) != 0;
     s.tex_dump = _wtoi(ini_get(L"texturas", L"extrair", L"0").c_str()) != 0;
     s.overlay_items = _wtoi(ini_get(L"overlay", L"itens", L"3").c_str()) & ((1 << NOVERLAY) - 1);
@@ -387,6 +389,7 @@ void save_settings(const Settings& s)
     for (int i = 0; i < NSHADER_OPTS; i++)
         ini_set(L"shaders", k_shader_opts[i].key, s.shader_opt[i] ? L"1" : L"0");
     ini_set(L"texturas", L"pasta", s.tex_dir);
+    ini_set(L"texturas", L"pasta_extraidas", s.tex_dump_dir);
     ini_set(L"texturas", L"substituir", s.tex_replace ? L"1" : L"0");
     ini_set(L"texturas", L"extrair", s.tex_dump ? L"1" : L"0");
     ini_set(L"pastas", L"patches", s.patch_dir);
@@ -562,7 +565,7 @@ enum {
     ID_PATCH_DIR_BROWSE = 1500, ID_PATCH_DIR_OPEN, ID_FPATCH = 1600,  /* + file patch index */
     ID_LOG_VIEW = 2100, ID_LOG_COPY, ID_LOG_SAVE, ID_LOG_FOLDER,
     ID_SHADER_OPT = 2200,                                          /* + k_shader_opts index */
-    ID_TEX_BROWSE = 2300, ID_TEX_OPEN, ID_TEX_REPLACE, ID_TEX_DUMP,
+    ID_TEX_BROWSE = 2300, ID_TEX_OPEN, ID_TEX_REPLACE, ID_TEX_DUMP, ID_TEX_DUMP_BROWSE, ID_TEX_DUMP_OPEN,
 };
 
 void hit(float x, float y, float w, float h, int id) { g.hits.push_back({ RectF(x, y, w, h), id }); }
@@ -1461,6 +1464,10 @@ fs::path tex_folder()
     wchar_t exe[MAX_PATH]; GetModuleFileNameW(NULL, exe, MAX_PATH);
     return fs::path(exe).parent_path() / L"textures";
 }
+fs::path tex_dump_folder()
+{
+    return g.s.tex_dump_dir.empty() ? tex_folder() / GAME_CODE / L"dump" : fs::path(g.s.tex_dump_dir);
+}
 int count_png(const fs::path& dir, bool recurse)
 {
     int n = 0; std::error_code ec;
@@ -1482,7 +1489,7 @@ void scan_tex_dir()
     if (!fs::is_directory(root, ec)) root = tex_folder();
     g.tex_root_name = root.filename().wstring();
     g.tex_rep = count_png(root, true);
-    g.tex_dumped = count_png(tex_folder() / GAME_CODE / L"dump", false);
+    g.tex_dumped = count_png(tex_dump_folder(), false);
 }
 
 void draw_mods(Graphics& gr, const Font& head, const Font& body, const Font& fsm)
@@ -1496,6 +1503,9 @@ void draw_mods(Graphics& gr, const Font& head, const Font& body, const Font& fsm
     wchar_t note[512];
     swprintf(note, 512, T(S_TEX_COUNT_FMT), g.tex_rep, g.tex_dumped, g.tex_root_name.c_str());
     path_row(gr, x, y, T(S_TEX_FOLDER), tex_folder().wstring(), note, true, ID_TEX_BROWSE, ID_TEX_OPEN, body, fsm);
+    y += 66;
+    swprintf(note, 512, T(S_TEX_DUMP_COUNT_FMT), g.tex_dumped);
+    path_row(gr, x, y, T(S_TEX_DUMP_FOLDER), tex_dump_folder().wstring(), note, true, ID_TEX_DUMP_BROWSE, ID_TEX_DUMP_OPEN, body, fsm);
     y += 70;
     option_card(gr, x, y, w, 92, g.s.tex_replace, ID_TEX_REPLACE, T(S_TEX_REPLACE_T), T(S_TEX_REPLACE_D), body, fsm);
     y += 104;
@@ -1805,6 +1815,16 @@ void click(int id)
         open_in_explorer((tex_folder() / GAME_CODE).wstring());
         g.tex_rep = -1;
     }
+    else if (id == ID_TEX_DUMP_BROWSE) {
+        auto p = pick(true, tex_dump_folder().wstring(), nullptr, nullptr);
+        if (!p.empty()) { g.s.tex_dump_dir = p; g.tex_rep = -1; set_texture_env(); changed(); }
+    }
+    else if (id == ID_TEX_DUMP_OPEN) {
+        std::error_code ec;
+        fs::create_directories(tex_dump_folder(), ec);
+        open_in_explorer(tex_dump_folder().wstring());
+        g.tex_rep = -1;
+    }
     else if (id == ID_TEX_REPLACE) { g.s.tex_replace = !g.s.tex_replace; set_texture_env(); changed(); }
     else if (id == ID_TEX_DUMP) { g.s.tex_dump = !g.s.tex_dump; set_texture_env(); changed(); }
     else if (id >= ID_FPATCH && id < ID_FPATCH + (int)g.fpatches.size()) {
@@ -1988,6 +2008,7 @@ void set_texture_env()
 {
     set_env("TEXTURE_DIR", save_utf8(tex_folder()));
     set_env("TEXTURE_GAME", CV_TITLE_ID);
+    set_env("TEXTURE_DUMP_DIR", save_utf8(tex_dump_folder()));
     set_env("TEXTURE_REPLACE", g.s.tex_replace ? "1" : "0");
     set_env("TEXTURE_DUMP", g.s.tex_dump ? "1" : "0");
 }
