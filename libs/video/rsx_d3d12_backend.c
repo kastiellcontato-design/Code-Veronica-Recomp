@@ -4530,6 +4530,7 @@ static u64* s_pl_known = NULL; static u32 s_pl_known_cap = 0, s_pl_known_n = 0;
 static u8* s_pl_out = NULL; static size_t s_pl_out_n = 0, s_pl_out_cap = 0;
 static ULONGLONG s_pl_flushed_at = 0;
 static int s_pl_started = 0, s_pl_reported = 0;
+static volatile ULONGLONG s_pl_finished_at = 0;   /* GetTickCount64 when it ended */
 static volatile LONG s_pl_next_vs = 0, s_pl_next_fp = 0, s_pl_done_vs = 0, s_pl_done_fp = 0;
 static volatile LONG s_pl_threads_left = 0, s_pl_built = 0;
 static PlDone* s_pl_done = NULL;
@@ -4856,17 +4857,22 @@ static void pl_tick(void)
     pl_drain();
     if (s_pl_started && !s_pl_reported && s_pl_threads_left <= 0) {
         s_pl_reported = 1;
+        s_pl_finished_at = GetTickCount64();
         fprintf(stderr, "[PRELOAD] %ld pipelines ready in %.1f s (%d listed)%c",
                 (long)s_pl_built, perf_now() - s_pl_t0, s_pl_nfp, 10);
     }
 }
 
-/* For the corner note (rsx_perf_overlay.c): 1 while the preload runs. */
+/* For the corner note (rsx_perf_overlay.c): 1 while the preload runs and for
+ * 3 s after. It usually takes a fraction of a second -- less than the note's
+ * own refresh -- and the note never got drawn; now it ends on 100%. */
 int rsx_shader_preload_progress(int* done, int* total)
 {
     if (done) *done = (int)(s_pl_done_vs + s_pl_done_fp);
     if (total) *total = s_pl_nvs + s_pl_nfp;
-    return s_pl_started && s_pl_threads_left > 0;
+    if (!s_pl_started) return 0;
+    if (s_pl_threads_left > 0 || !s_pl_finished_at) return 1;
+    return GetTickCount64() - s_pl_finished_at < 3000;
 }
 
 /* Upload the guest texture for a VP draw into a per-frame texture slot
