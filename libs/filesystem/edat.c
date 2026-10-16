@@ -844,11 +844,11 @@ int npdrm_self_decrypt(const char* self_path, const char* rap_path, const char* 
     size_t size = 0, rap_size = 0;
     uint8_t* d = read_whole(self_path, &size);
     if (!d) return self_fail("cannot read the SELF");
-    uint8_t* rap = read_whole(rap_path, &rap_size);
+    /* No .rap is fine for a free-licence EBOOT (checked below). */
+    uint8_t* rap = (rap_path && *rap_path) ? read_whole(rap_path, &rap_size) : NULL;
     int rc = -1;
     uint8_t* elf = NULL;
     uint8_t* meta = NULL;
-    if (!rap || rap_size != 16) { self_fail("the .rap must be exactly 16 bytes"); goto done; }
     if (size < 0x90 || be32(d) != 0x53434500 || be16(d + 10) != 1) { self_fail("not a SELF"); goto done; }
 
     const uint16_t key_rev = be16(d + 8);
@@ -865,7 +865,9 @@ int npdrm_self_decrypt(const char* self_path, const char* rap_path, const char* 
         if (SELF_NPDRM_KEYS[i].rev == key_rev) { erk = SELF_NPDRM_KEYS[i].erk; riv = SELF_NPDRM_KEYS[i].riv; }
     if (!erk) { fprintf(stderr, "[self] no key for revision 0x%04X\n", key_rev); goto done; }
 
-    /* Control info type 3 holds the NPD header; licences 1 and 2 need the .rap. */
+    /* Control info type 3 holds the NPD header; licences 1 and 2 need the .rap,
+     * licence 3 (free: BIOHAZARD CODE: Veronica Kanzenban's PSN release, for
+     * one) uses the fixed NP_KLIC_FREE klicensee and needs none. */
     const uint8_t* npd = NULL;
     for (uint64_t o = ctrl_off; o + 0x10 <= ctrl_off + ctrl_len; ) {
         uint32_t type = be32(d + o), len = be32(d + o + 4);
@@ -875,10 +877,16 @@ int npdrm_self_decrypt(const char* self_path, const char* rap_path, const char* 
     }
     if (!npd || be32(npd) != 0x4E504400) { self_fail("no NPD header in the control info"); goto done; }
     const uint32_t license = be32(npd + 8);
-    if (license != 1 && license != 2) { fprintf(stderr, "[self] unexpected licence type %u\n", license); goto done; }
+    if (license != 1 && license != 2 && license != 3) { fprintf(stderr, "[self] unexpected licence type %u\n", license); goto done; }
 
     uint8_t klic[16], rk[176];
-    edat_rap_key(rap, klic);
+    if (license == 3) {
+        memcpy(klic, KLIC_CANDIDATES[1].key, 16);   /* NP_KLIC_FREE */
+    } else {
+        if (!rap || rap_size != 16) { self_fail("the .rap must be exactly 16 bytes"); goto done; }
+        edat_rap_key(rap, klic);
+    }
+    /* Either key goes through NP_KLIC_KEY, as RPCS3 does. */
     aes128_expand(NP_KLIC_KEY, rk);
     aes128_decrypt_block(rk, klic, klic);
 

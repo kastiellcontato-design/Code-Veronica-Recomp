@@ -188,6 +188,13 @@ if(PORT_ENABLE_SPU)
     endif()
 endif()
 
+# Which EBOOT RECOMP_DIR holds: EU (NPEB00553, the default) or JP
+# (NPJB00135). The port's own guest addresses follow it (cv_version.h); the
+# JP build is MyGameRecomp_JP.exe, beside the EU one (build-release-jp.cmd).
+set(CV_REGION "EU" CACHE STRING "Game version of the lift in RECOMP_DIR: EU or JP")
+set_property(CACHE CV_REGION PROPERTY STRINGS EU JP)
+string(TOLOWER "${CV_REGION}" CV_REGION_LC)
+
 # Guest OPTION menu hooks: create a build-local copy of only the affected
 # lifted units. Direct and indirect guest calls keep their original names;
 # the renamed bodies remain available to native_pc_menu.cpp as originals.
@@ -196,6 +203,7 @@ if(WIN32)
     set(CV_MENU_HOOK_SCRIPT "${PS3RECOMP_DIR}/tools/cv_native_menu_hooks.py")
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CV_MENU_HOOK_SCRIPT}")
     execute_process(COMMAND "${Python3_EXECUTABLE}" "${CV_MENU_HOOK_SCRIPT}" --discover "${RECOMP_DIR}"
+                            --region "${CV_REGION_LC}"
         RESULT_VARIABLE CV_MENU_DISCOVERY_RESULT OUTPUT_VARIABLE CV_MENU_UNITS
         ERROR_VARIABLE CV_MENU_DISCOVERY_ERROR OUTPUT_STRIP_TRAILING_WHITESPACE)
     if(NOT CV_MENU_DISCOVERY_RESULT EQUAL 0)
@@ -206,7 +214,7 @@ if(WIN32)
         set(CV_MENU_PATCHED "${CMAKE_CURRENT_BINARY_DIR}/native_menu_lift/${CV_MENU_UNIT_NAME}")
         add_custom_command(OUTPUT "${CV_MENU_PATCHED}"
             COMMAND "${Python3_EXECUTABLE}" "${CV_MENU_HOOK_SCRIPT}"
-                    --input "${CV_MENU_UNIT}" --output "${CV_MENU_PATCHED}"
+                    --input "${CV_MENU_UNIT}" --output "${CV_MENU_PATCHED}" --region "${CV_REGION_LC}"
             DEPENDS "${CV_MENU_UNIT}" "${CV_MENU_HOOK_SCRIPT}" VERBATIM)
         list(REMOVE_ITEM RECOMP_SOURCES "${CV_MENU_UNIT}")
         list(APPEND RECOMP_SOURCES "${CV_MENU_PATCHED}")
@@ -299,6 +307,15 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
 # The runtime is C++, and on Apple also Objective-C. Letting CMake infer the
 # link language from the generated C would leave the C++ standard library out.
 set_target_properties(${PROJECT_NAME} PROPERTIES LINKER_LANGUAGE CXX)
+
+# The Japanese build: its own guest addresses (cv_version.h) and its own name,
+# so both executables share one folder (DLLs, launcher settings, caches).
+if(CV_REGION_LC STREQUAL "jp")
+    target_compile_definitions(${PROJECT_NAME} PRIVATE CV_REGION_JP=1)
+    set_target_properties(${PROJECT_NAME} PROPERTIES OUTPUT_NAME "${PROJECT_NAME}_JP")
+elseif(NOT CV_REGION_LC STREQUAL "eu")
+    message(FATAL_ERROR "CV_REGION must be EU or JP, not ${CV_REGION}")
+endif()
 
 # Windows system import libraries. dbghelp symbolizes crash-handler addresses
 # against the PDB, user32 and gdi32 are what the backend's window and its GDI

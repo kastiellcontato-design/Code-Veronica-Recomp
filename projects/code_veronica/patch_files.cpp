@@ -21,6 +21,7 @@
  * Read line by line, the place of a line given by the keys above it at
  * smaller indents. */
 #include "patch_files.h"
+#include "cv_version.h"
 #include <windows.h>
 #include <cctype>
 #include <cstdint>
@@ -38,13 +39,18 @@ extern "C" const char* ps3_patch_site_flag(uint32_t addr, uint32_t word);
 
 namespace {
 
-/* This build runs one executable: NPEB00553 01.00 (EU), RPCS3's hash for it,
- * and its code, from the ELF's executable sections (.text and the import
- * stubs); everything past them is data. */
+/* Each build runs one executable: NPEB00553 01.00 (EU) or NPJB00135 01.00
+ * (JP), RPCS3's hash for it, and its code, from the ELF's executable sections
+ * (.text and the import stubs); everything past them is data. */
+#if defined(CV_REGION_JP)
+const char* const kHash = "PPU-5b1fe8f0b8eab817078b6db007de327653bc65dc";
+const uint32_t kCodeLo = 0x00010200, kCodeHi = 0x0086E838;
+#else
 const char* const kHash = "PPU-df822d7d47de09c5672201db8cc633009037f54f";
-const char* const kSerial = "NPEB00553";
-const char* const kVersion = "01.00";
 const uint32_t kCodeLo = 0x00010200, kCodeHi = 0x0086FF08;
+#endif
+const char* const kSerial = CV_TITLE_ID;
+const char* const kVersion = "01.00";
 
 std::wstring widen(const std::string& s)
 {

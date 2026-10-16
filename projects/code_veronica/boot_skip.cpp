@@ -13,14 +13,16 @@
  * states 8 and 9, and in state -1 closes and hands over to PRESS START. With
  * the flag on, state 7 goes straight to -1, so the movie never starts.
  *
- * Both wrappers are built by tools/cv_native_menu_hooks.py.
+ * Both wrappers are built by tools/cv_native_menu_hooks.py. The addresses
+ * named here are the European ones; cv_version.h has each version's.
  */
 #include "ppu_recomp.h"
+#include "cv_version.h"
 #include <cstdint>
 #include <cstring>
 
-void cv_original_0020140C(ppu_context*);
-void cv_original_0002B35C(ppu_context*);
+void CV_OG_LOGO(ppu_context*);
+void CV_OG_TITLE(ppu_context*);
 extern "C" volatile unsigned char* ps3_patch_flag(const char* name);
 
 static bool skip_on()
@@ -30,14 +32,14 @@ static bool skip_on()
     return *skip != 0;
 }
 
-void func_0002B35C(ppu_context* ctx)
+void CV_FN_TITLE(ppu_context* ctx)
 {
-    const uint32_t kTitleState = 0x00BBE8FC;
+    const uint32_t kTitleState = CV_TITLE_STATE;
     if (skip_on() && vm_read32(kTitleState) == 7) vm_write32(kTitleState, 0xFFFFFFFFu);   /* past the intro movie */
-    cv_original_0002B35C(ctx);
+    CV_OG_TITLE(ctx);
 }
 
-void func_0020140C(ppu_context* ctx)
+void CV_FN_LOGO(ppu_context* ctx)
 {
     if (skip_on()) {
         const uint32_t layout = vm_read32((uint32_t)ctx->gpr[3] + 0x3C);
@@ -48,5 +50,5 @@ void func_0020140C(ppu_context* ctx)
             vm_write32(layout + 0x34, bits);
         }
     }
-    cv_original_0020140C(ctx);
+    CV_OG_LOGO(ctx);
 }

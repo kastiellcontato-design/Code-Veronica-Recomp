@@ -3,6 +3,7 @@ build/
 build-*/
 cmake-build-*/
 out/
+out_jp/
 
 # CMake generated files
 CMakeCache.txt
@@ -114,6 +115,7 @@ scratch/
 JOGO/
 # Code lifted from the game's executable: regenerate locally with the lifter
 src/recomp/
+src/recomp_jp/
 projects/*/spu/
 projects/*/recompiled/
 # Shaders dumped from the running game

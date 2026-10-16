@@ -2,17 +2,25 @@
 import argparse
 from pathlib import Path
 
-# 0002A468, 0002F3D0, 001BD060: the OPTION menu (native_pc_menu.cpp);
+# EU: 0002A468, 0002F3D0, 001BD060: the OPTION menu (native_pc_menu.cpp);
 # 0020140C: the opening logos' end check, 0002B35C: the title sequence that
-# plays the intro movie (boot_skip.cpp).
-HOOKS = ("0002A468", "0002F3D0", "001BD060", "0020140C", "0002B35C")
+# plays the intro movie (boot_skip.cpp). JP: the same functions in the
+# Japanese EBOOT, in the same order (projects/code_veronica/cv_version.h).
+HOOKS_BY_REGION = {
+    "eu": ("0002A468", "0002F3D0", "001BD060", "0020140C", "0002B35C"),
+    "jp": ("0002A038", "0002EF38", "001BB688", "001FF7C0", "0002AEC4"),
+}
+HOOKS = HOOKS_BY_REGION["eu"]
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--discover", type=Path)
     parser.add_argument("--input", type=Path)
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--region", choices=sorted(HOOKS_BY_REGION), default="eu")
     args = parser.parse_args()
+    global HOOKS
+    HOOKS = HOOKS_BY_REGION[args.region]
     if args.discover:
         owners = {}
         for path in sorted(args.discover.glob("ppu_recomp_*.cpp")):

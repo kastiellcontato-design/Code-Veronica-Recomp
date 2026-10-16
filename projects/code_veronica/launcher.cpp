@@ -35,6 +35,7 @@
 #include "pad_map.h"
 #include "launcher_i18n.h"
 #include "patch_files.h"
+#include "cv_version.h"
 #include "log_viewer.h"
 
 /* button_icons.cpp: the keycaps' short labels and font, shared with the game. */
@@ -72,7 +73,42 @@ const Color C_BG(255, 21, 17, 17), C_SIDE(255, 13, 11, 11), C_PANEL(255, 30, 25,
             C_RED(255, 196, 28, 34), C_RED_HI(255, 230, 50, 50), C_HOVER(255, 38, 30, 30),
             C_FIELD(255, 26, 22, 22), C_FIELD_BD(255, 70, 60, 58), C_OK(255, 120, 190, 110);
 
-const wchar_t* GAME_CODE = L"NPEB00553";
+/* The versions this port is built for, one executable each, side by side
+ * (cv_version.h, build-release-jp.cmd). The launcher of either accepts both:
+ * a folder of the other version starts that version's executable, which
+ * reads the same settings and starts at once. */
+struct GameVersion { const wchar_t* code; const char* elf_sha1; const wchar_t* exe; const wchar_t* name; };
+const GameVersion k_versions[] = {
+    { L"NPEB00553", "d0c9d3ab3a5ed12c80ab77fe73fa58d464083fa1", L"MyGameRecomp.exe",
+      L"Resident Evil Code: Veronica X (PSN)" },
+    { L"NPJB00135", "ad17bbfadf23937480ba0330616262e595dfaa78", L"MyGameRecomp_JP.exe",
+      L"BIOHAZARD CODE: Veronica Kanzenban (PSN)" },
+};
+const wchar_t* GAME_CODE = L"" CV_TITLE_ID;
+/* The text that names the compatible versions in the strings, replaced by
+ * the one found where a message is about a particular folder. */
+const wchar_t* CODES_TOKEN = L"NPEB00553 / NPJB00135";
+const GameVersion* version_of(const std::wstring& code)
+{
+    for (const GameVersion& v : k_versions) if (code == v.code) return &v;
+    return nullptr;
+}
+const GameVersion& own_version() { return *version_of(GAME_CODE); }
+/* The executable for another version, beside this one; empty if absent. */
+std::wstring sibling_exe(const GameVersion& v)
+{
+    wchar_t self[MAX_PATH]; GetModuleFileNameW(NULL, self, MAX_PATH);
+    const std::filesystem::path p = std::filesystem::path(self).parent_path() / v.exe;
+    std::error_code ec;
+    return std::filesystem::exists(p, ec) ? p.wstring() : L"";
+}
+std::wstring folder_code();   /* the chosen folder's TITLE_ID, defined below */
+std::wstring with_code(std::wstring m, const std::wstring& code)
+{
+    for (size_t at; (at = m.find(CODES_TOKEN)) != std::wstring::npos; )
+        m.replace(at, wcslen(CODES_TOKEN), code);
+    return m;
+}
 
 /* ---------------------------------------------------------------- language */
 int g_lang = LANG_PT;        /* the language shown */
@@ -322,7 +358,7 @@ void save_settings(const Settings& s)
  * cheaply enough to check on every repaint; the ELF's SHA-1 is checked once
  * on Jogar (prepare_eboot), since an update can change the EBOOT alone. */
 const char* GAME_VERSION = "01.00";
-const char* GAME_ELF_SHA1 = "d0c9d3ab3a5ed12c80ab77fe73fa58d464083fa1";
+const char* GAME_ELF_SHA1 = own_version().elf_sha1;
 
 /* One string field of a PARAM.SFO, or "" if the file or the key is missing. */
 std::string sfo_field(const fs::path& sfo, const char* key)
@@ -356,14 +392,16 @@ std::wstring check_game(const std::wstring& g, bool* ok)
     const std::string id = sfo_field(root / L"PARAM.SFO", "TITLE_ID");
     const std::string ver = sfo_field(root / L"PARAM.SFO", "APP_VER");
     if (id.empty()) return T(S_CHK_GAME_NO_SFO);
-    if (widen(id.c_str()) != GAME_CODE) {
-        std::wstring m = T(S_CHK_GAME_OTHER_FMT); m.replace(m.find(L"%s"), 2, widen(id.c_str())); return m;
+    const std::wstring wid = widen(id.c_str());
+    const GameVersion* v = version_of(wid);
+    if (!v || (wid != GAME_CODE && sibling_exe(*v).empty())) {
+        std::wstring m = T(S_CHK_GAME_OTHER_FMT); m.replace(m.find(L"%s"), 2, wid); return m;
     }
     if (ver != GAME_VERSION) {
-        std::wstring m = T(S_CHK_GAME_VER_FMT); m.replace(m.find(L"%s"), 2, widen(ver.c_str())); return m;
+        std::wstring m = with_code(T(S_CHK_GAME_VER_FMT), wid); m.replace(m.find(L"%s"), 2, widen(ver.c_str())); return m;
     }
     *ok = true;
-    return T(bin ? S_CHK_GAME_OK : S_CHK_GAME_ELF);
+    return with_code(T(bin ? S_CHK_GAME_OK : S_CHK_GAME_ELF), wid);
 }
 std::wstring check_rap(const std::wstring& r, bool* ok)
 {
@@ -748,7 +786,9 @@ void draw_inicio(Graphics& gr, const Font& head, const Font& body, const Font& c
     gr.FillRectangle(&fade, cx, bh - 120, cw, 121.0f);
     LinearGradientBrush fadeL(PointF(cx, 0), PointF(cx + 120, 0), Color(200, 13, 11, 11), Color(0, 13, 11, 11));
     gr.FillRectangle(&fadeL, cx, 0.0f, 120.0f, bh);
-    text(gr, std::wstring(GAME_CODE) + L"  ·  Resident Evil Code: Veronica X (PSN)", cx + 32, bh - 46, code, C_RED_HI);
+    { const GameVersion* v = version_of(folder_code());
+      if (!v) v = &own_version();
+      text(gr, std::wstring(v->code) + L"  ·  " + v->name, cx + 32, bh - 46, code, C_RED_HI); }
 
     float x = cx + 32, y = bh + 14;
     section(gr, T(S_QUICK), x, y, cw - 64, head);
@@ -1450,6 +1490,7 @@ void quit_game()
 }
 void start_game();
 int prepare_eboot();
+void start_other_version();
 void set_icon_env();
 
 void changed() { save_settings(g.s); g.play_msg.clear(); apply_live(); InvalidateRect(g.hwnd, NULL, FALSE); }
@@ -1545,7 +1586,8 @@ void click(int id)
     else if (id == ID_PLAY) {
         bool ok; check_game(g.s.game, &ok);
         if (!ok) { g.page = P_JOGO; g.play_msg = T(S_SET_FOLDER_FIRST); }
-        else if (int e = prepare_eboot()) { g.page = P_JOGO; g.play_msg = T(e); }
+        else if (folder_code() != GAME_CODE) { save_settings(g.s); start_other_version(); }
+        else if (int e = prepare_eboot()) { g.page = P_JOGO; g.play_msg = with_code(T(e), GAME_CODE); }
         else { save_settings(g.s); start_game(); }
     }
     else if (id == ID_RESUME) { hide_menu(); return; }
@@ -1752,18 +1794,55 @@ int prepare_eboot()
         g.eboot = narrow((usr / L"EBOOT.elf").wstring());
         return eboot_matches(g.eboot) ? 0 : S_EBOOT_MISMATCH;
     }
+    /* A decrypted EBOOT.elf beside the EBOOT.BIN, if it is the right one. */
+    if (fs::exists(usr / L"EBOOT.elf", ec) && eboot_matches(narrow((usr / L"EBOOT.elf").wstring()))) {
+        g.eboot = narrow((usr / L"EBOOT.elf").wstring());
+        return 0;
+    }
+    /* The licence is per version: the one chosen may be the other version's,
+     * so take this version's from the same folder when the name says so. */
+    std::wstring rap = g.s.rap;
+    if (!rap.empty() && fs::path(rap).filename().wstring().find(GAME_CODE) == std::wstring::npos) {
+        const std::wstring mine = find_rap(fs::path(rap).parent_path().wstring());
+        if (!mine.empty()) rap = mine;
+    }
     wchar_t cwd[MAX_PATH]; GetCurrentDirectoryW(MAX_PATH, cwd);
     const fs::path out = fs::path(cwd) / L"eboot_cache" / GAME_CODE / L"EBOOT.elf";
     g.eboot = narrow(out.wstring());
     if (!fs::exists(out, ec) || fs::last_write_time(out, ec) < fs::last_write_time(bin, ec)) {
-        if (g.s.rap.empty()) return S_DECRYPT_FAIL;
+        /* An empty licence is tried too: a free-licence EBOOT needs none. */
         fs::create_directories(out.parent_path(), ec);
-        if (npdrm_self_decrypt(narrow(bin.wstring()).c_str(), narrow(g.s.rap).c_str(), g.eboot.c_str()) != 0)
+        if (npdrm_self_decrypt(narrow(bin.wstring()).c_str(), narrow(rap).c_str(), g.eboot.c_str()) != 0)
             return S_DECRYPT_FAIL;
     }
     if (eboot_matches(g.eboot)) return 0;
     fs::remove(out, ec);            /* not this version: do not keep it as a cache */
     return S_EBOOT_MISMATCH;
+}
+
+/* The title of the chosen folder (its PARAM.SFO), or "" if it has none. */
+std::wstring folder_code()
+{
+    return widen(sfo_field(fs::path(g.s.game) / L"PARAM.SFO", "TITLE_ID").c_str());
+}
+
+/* The chosen folder is the other version: start its executable, which reads
+ * the settings just saved and plays at once (CV_LAUNCHER_AUTOPLAY), and leave. */
+void start_other_version()
+{
+    const GameVersion* v = version_of(folder_code());
+    const std::wstring exe = v ? sibling_exe(*v) : L"";
+    if (exe.empty()) { g.page = P_JOGO; g.play_msg = T(S_SET_FOLDER_FIRST); return; }
+    set_env("CV_LAUNCHER_AUTOPLAY", "1");
+    wchar_t cwd[MAX_PATH]; GetCurrentDirectoryW(MAX_PATH, cwd);
+    std::wstring cmd = L"\"" + exe + L"\"";
+    STARTUPINFOW si = { sizeof si }; PROCESS_INFORMATION pi = {};
+    if (!CreateProcessW(exe.c_str(), &cmd[0], NULL, NULL, FALSE, 0, NULL, cwd, &si, &pi)) {
+        set_env("CV_LAUNCHER_AUTOPLAY", "");
+        g.page = P_JOGO; g.play_msg = T(S_SET_FOLDER_FIRST); return;
+    }
+    CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
+    ExitProcess(0);
 }
 
 void start_game()
@@ -1840,6 +1919,12 @@ DWORD WINAPI launcher_thread(void*)
     ShowWindow(g.hwnd, SW_SHOW);
     SetForegroundWindow(g.hwnd);
     SetTimer(g.hwnd, 1, 30, NULL);
+    /* Started by the other version's launcher for this version's folder:
+     * play at once with the settings it saved. Once only. */
+    if (const char* a = getenv("CV_LAUNCHER_AUTOPLAY"); a && *a) {
+        _putenv_s("CV_LAUNCHER_AUTOPLAY", "");
+        click(ID_PLAY);
+    }
     MSG msg;
     while (GetMessageW(&msg, NULL, 0, 0) > 0) { TranslateMessage(&msg); DispatchMessageW(&msg); }
     /* closed before Jogar: the main thread sees this thread end */

@@ -40,6 +40,22 @@ Experimental. Expect graphical glitches and crashes.
    Use the Release build. With the Debug build the lifted game code runs
    unoptimized (~98% of frame time), and the movies stutter badly.
 
+### Japanese version (NPJB00135, BIOHAZARD CODE: Veronica Kanzenban)
+
+The Japanese PSN release is supported too, as a second executable,
+`MyGameRecomp_JP.exe`, beside the European one. Its EBOOT has a free licence,
+so no `.rap` is needed.
+
+```
+python tools/ppu_loader.py <NPJB00135>/USRDIR/EBOOT.elf -o out_jp/
+python tools/ppu_lifter.py <NPJB00135>/USRDIR/EBOOT.elf --functions out_jp/EBOOT.functions.json --hle-stubs out_jp/EBOOT.imports.json --patches projects/code_veronica/patches.json -o src/recomp_jp
+projects/code_veronica/build-release-jp.cmd
+```
+
+The SPU images are the same as the European ones. The port's own guest
+addresses for each version are in `cv_version.h`. Either launcher accepts
+either version's folder and starts the matching executable.
+
 ## Running
 
 Edit the paths at the top of `executar-code-veronica-otimizado.cmd`
@@ -75,3 +91,7 @@ Para compilar: coloque o jogo em `JOGO/NPEB00553/`, gere o código seguindo o
 `docs/GETTING_STARTED.md` e rode o `build-release.cmd`. Para jogar, ajuste os
 caminhos no `executar-code-veronica-otimizado.cmd` e dê dois cliques nele.
 Hoje o jogo chega ao menu e os vídeos tocam, mas ainda um pouco lentos.
+
+A versão japonesa da PSN (NPJB00135) também funciona, como um segundo
+executável (`MyGameRecomp_JP.exe`); veja a seção "Japanese version" acima.
+Ela não precisa de arquivo .rap.

@@ -1,4 +1,4 @@
-/* Code Veronica EU 1.00: extend the guest's OPTION menu using its own 2D queue.
+/* Code Veronica (EU 1.00 and JP; addresses in cv_version.h): extend the guest's OPTION menu using its own 2D queue.
  * Only the build-local lift is wrapped. EBOOT and original generated files stay intact.
  * New labels use serif glyphs rasterized by Windows at the menu's own scale (one
  * texel per UI unit, like the game's lettering) and drawn magnified the way the
@@ -6,6 +6,7 @@
  * framebuffer (no additional window).
  */
 #include "ppu_recomp.h"
+#include "cv_version.h"
 #include "../../libs/video/rsx_ui_batch.h"
 #ifdef _WIN32
 #define NOMINMAX
@@ -21,9 +22,9 @@
 #include <string>
 #include <vector>
 
-void cv_original_0002A468(ppu_context*);
-void cv_original_0002F3D0(ppu_context*);
-void cv_original_001BD060(ppu_context*);
+void CV_OG_MENU_RESET(ppu_context*);
+void CV_OG_MENU_INPUT(ppu_context*);
+void CV_OG_MENU_COLOR(ppu_context*);
 extern "C" PPU_THREAD_LOCAL void (*g_trampoline_fn)(void*);
 extern "C" PPU_THREAD_LOCAL ppu_context* g_active_ctx;
 extern "C" uint8_t* vm_base;
@@ -32,8 +33,8 @@ extern "C" int cv_pc_settings_saturation_read(void);
 extern "C" void cv_pc_settings_change(int which, int value);
 
 namespace {
-constexpr uint32_t kCursor=0x00BBE910, kInput=0x00BC3370, kRepeat=0x00BC3374;
-constexpr uint32_t kDialog=0x00AD33DC;
+constexpr uint32_t kCursor=CV_MENU_CURSOR, kInput=CV_MENU_INPUT, kRepeat=CV_MENU_REPEAT;
+constexpr uint32_t kDialog=CV_MENU_DIALOG;
 constexpr uint32_t kUp=0x10, kDown=0x40, kLeft=0x80, kRight=0x20;
 constexpr uint32_t kConfirm=0xC000, kCancel=0x2001;
 bool pc_selected=false, pc_open=false, drawing_main=false;
@@ -50,7 +51,7 @@ ppu_context call_context(const ppu_context* caller) {
     ppu_context work=*caller;
     work.gpr[1]-=0x400;
     vm_write64(work.gpr[1],caller->gpr[1]);
-    work.gpr[2]=0x00A8AE70;
+    work.gpr[2]=CV_TOC;
     return work;
 }
 void finish(ppu_context* work) {
@@ -78,7 +79,7 @@ void context_test_call(ppu_context* work) {
 }
 void sound(const ppu_context* caller,int id) {
     auto work=call_context(caller); work.gpr[3]=0; work.gpr[4]=id;
-    invoke(&work,func_00197308);
+    invoke(&work,CV_FN_MENU_SOUND);
 }
 void read_settings() {
     const int packed=cv_pc_settings_read();
@@ -161,7 +162,7 @@ struct TextBatch {
 };
 uint32_t selected_color(bool selected) {
     if(!selected)return 0x7FAFAFAF;
-    const uint32_t pulse=vm_read32(0x00BBE92C)&255;
+    const uint32_t pulse=vm_read32(CV_MENU_PULSE)&255;
     return ((pulse?pulse:255)<<24)|0xFFFFFF;
 }
 void draw_entry(const ppu_context* caller) {
@@ -187,7 +188,7 @@ void draw_settings(const ppu_context* caller) {
     }
     batch.text("LEFT / RIGHT TO CHANGE",320,410,0xBFCFCFCF,.6f,true);
     batch.submit(caller);
-    auto work=call_context(caller);invoke(&work,func_0002B548);
+    auto work=call_context(caller);invoke(&work,CV_FN_MENU_FRAME);
 }
 bool move_extra_row(uint32_t& cursor, bool& selected, uint32_t repeat) {
     if(selected && (repeat&kDown)) { selected=false; return true; }
@@ -200,19 +201,19 @@ bool move_extra_row(uint32_t& cursor, bool& selected, uint32_t repeat) {
 void consume(uint32_t input,uint32_t repeat) {vm_write32(input,0);vm_write32(repeat,0);}
 }
 
-void func_0002A468(ppu_context* ctx) {
+void CV_FN_MENU_RESET(ppu_context* ctx) {
     pc_selected=pc_open=drawing_main=false; pc_row=0;
     rsx_d3d12_set_ui_quads(nullptr,0);
-    cv_original_0002A468(ctx);
+    CV_OG_MENU_RESET(ctx);
 }
-void func_001BD060(ppu_context* ctx) {
-    if(drawing_main && pc_selected && uint32_t(ctx->gpr[5])==0x00BBEE18)ctx->gpr[4]=0x7FAFAFAF;
-    cv_original_001BD060(ctx);
+void CV_FN_MENU_COLOR(ppu_context* ctx) {
+    if(drawing_main && pc_selected && uint32_t(ctx->gpr[5])==CV_MENU_ROW_TEXT)ctx->gpr[4]=0x7FAFAFAF;
+    CV_OG_MENU_COLOR(ctx);
 }
-void func_0002F3D0(ppu_context* ctx) {
-    if(!enabled()) {cv_original_0002F3D0(ctx);return;}
+void CV_FN_MENU_INPUT(ppu_context* ctx) {
+    if(!enabled()) {CV_OG_MENU_INPUT(ctx);return;}
     const uint32_t port=uint32_t(ctx->gpr[3]);
-    if(port>6) {cv_original_0002F3D0(ctx);return;}
+    if(port>6) {CV_OG_MENU_INPUT(ctx);return;}
     const bool interactive=ctx->gpr[4]!=0 && vm_read32(kDialog)==0;
     const uint32_t input_address=kInput+port*60,repeat_address=kRepeat+port*60;
     const uint32_t input=interactive?vm_read32(input_address):0;
@@ -252,7 +253,7 @@ void func_0002F3D0(ppu_context* ctx) {
         pc_open=true;pc_selected=false;pc_row=0;pc_adjust_direction=0;read_settings();sound(ctx,3);
         consume(input_address,repeat_address);draw_settings(ctx);ctx->gpr[3]=0;return;
     }
-    drawing_main=true;cv_original_0002F3D0(ctx);finish(ctx);drawing_main=false;
+    drawing_main=true;CV_OG_MENU_INPUT(ctx);finish(ctx);drawing_main=false;
     if((ctx->gpr[3]&255)==255)rsx_d3d12_set_ui_quads(nullptr,0);
     else draw_entry(ctx);
 }

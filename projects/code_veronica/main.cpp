@@ -31,6 +31,7 @@
 /* The lifter's generated header, which declares ppu_context and the function
  * table. It comes first: everything below is written against that struct. */
 #include "ppu_recomp.h"
+#include "cv_version.h"
 
 /* The Win32 names -- Sleep, GetTickCount64, CreateThread, InterlockedIncrement,
  * VirtualAlloc, the scalar typedefs -- from one place. On Windows this is a
@@ -414,8 +415,9 @@ int main(int argc, char** argv)
     /* Xbox button icons: the game's own Xbox 360 art, swapped in per archive. */
     cv_button_icons_init();
     /* The switchable sites lifted into this build (projects/code_veronica/
-     * patches.json, EU sites): a patch file with the same write switches them. */
-    ps3_patch_site(0x001AFCCC, 0x38600000, "cv_door_skip");
+     * patches.json, this version's sites): a patch file with the same write
+     * switches them. */
+    ps3_patch_site(CV_DOOR_SKIP_SITE, 0x38600000, "cv_door_skip");
 
     /* The options window. CV_NO_LAUNCHER=1 skips it (tests, scripts). */
     if (!getenv("CV_NO_LAUNCHER")) {
@@ -438,7 +440,7 @@ int main(int argc, char** argv)
              * This default makes a direct double-click work for this setup. */
             fs::path exe_dir = fs::absolute(argv[0]).parent_path();
             game_root = exe_dir.parent_path().parent_path().parent_path()
-                      / "JOGO" / "NPEB00553";
+                      / "JOGO" / CV_TITLE_ID;
         }
 
         fs::path candidate = game_root / "USRDIR" / "EBOOT.elf";
@@ -451,7 +453,7 @@ int main(int argc, char** argv)
         eboot_path = candidate.string();
 
         /* derive_vfs_root honors this override; without it, the usual PS3_GAME
-         * folder layout would derive the wrong root for this NPEB00553 path. */
+         * folder layout would derive the wrong root for this JOGO/<title> path. */
 #ifdef _WIN32
         _putenv_s("PS3_VFS_ROOT", game_root.string().c_str());
 #else

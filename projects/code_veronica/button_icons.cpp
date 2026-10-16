@@ -69,6 +69,7 @@
 #include "../../libs/filesystem/edat.h"
 #include "../../libs/input/pad_phys.h"
 #include "../../libs/input/pad_map.h"
+#include "cv_version.h"
 #include "../../libs/video/rsx_tex_hook.h"
 
 #include <cstdio>
@@ -1283,6 +1284,13 @@ std::vector<unsigned char> keyboard_manual_page(const std::vector<unsigned char>
                                                 const std::vector<unsigned char>& xb_dxt, bool main)
 {
     if (ps_dxt.size() != (size_t)MAN_W * MAN_H / 2 || xb_dxt.size() != ps_dxt.size()) return {};
+#if defined(CV_REGION_JP)
+    /* The Japanese pages' PlayStation and 360 versions differ in their text
+     * as well as their icons, so the comparison below picks up lettering and
+     * redraws the wrong parts. The PlayStation page is shown instead. */
+    (void)main;
+    return {};
+#endif
     std::vector<Rgba> img = dxt1_decode(ps_dxt.data(), MAN_W, MAN_H);
     const std::vector<Rgba> orig = img, xb = dxt1_decode(xb_dxt.data(), MAN_W, MAN_H);
     const size_t N = (size_t)MAN_W * MAN_H;
