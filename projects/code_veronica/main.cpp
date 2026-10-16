@@ -88,6 +88,18 @@ extern int32_t g_sys_process_exit_code;
 
 /* Host-provided symbols the runtime and the HLE libraries link against. */
 uint8_t* vm_base = nullptr;
+
+/* LiveSplit (livesplit/recvx-ps3recomp.asl) finds the game through this
+ * export: a signature, where guest memory starts (guest address 0 -- the
+ * game's variables sit at their PS3 addresses from there, big-endian) and
+ * which release this executable runs. Laid out for the script: magic at 0,
+ * vm_base at 16, title at 24, layout version at 40. */
+extern "C" __declspec(dllexport) volatile struct CvLiveSplit {
+    char magic[16];
+    uint64_t vm_base;
+    char title[16];
+    uint32_t version;
+} g_cv_livesplit = { "PS3RECOMP-CVX", 0, CV_TITLE_ID, 1 };
 extern uint32_t ppu_vm_size;                  /* ppu_loader.cpp: the OOB guard */
 
 /* Guest-callback dispatch. g_ps3_guest_caller is the hook the HLE runtime
@@ -490,6 +502,7 @@ int main(int argc, char** argv)
         fprintf(stderr, "ERROR: could not allocate the guest address space\n");
         return 1;
     }
+    g_cv_livesplit.vm_base = (uint64_t)(uintptr_t)vm_base;
 
     uint32_t entry = ppu_load_elf(eboot_path.c_str());
     if (!entry) {
