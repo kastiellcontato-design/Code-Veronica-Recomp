@@ -18,7 +18,7 @@ static const int k_lang_order[LANG_COUNT] = {
     LANG_ZH, LANG_JA, LANG_KO };
 
 enum StrId {
-    S_NAV_HOME, S_NAV_GAME, S_NAV_CONTROLS, S_NAV_PATCHES, S_NAV_ADVANCED,
+    S_NAV_HOME, S_NAV_GAME, S_NAV_CONTROLS, S_NAV_PATCHES, S_NAV_PERF, S_NAV_ADVANCED,
     S_RESUME, S_QUIT, S_MENU_HINT, S_PLAY, S_SET_FOLDER_TAB, S_SET_FOLDER_FIRST,
     S_QUICK, S_DISPLAY_MODE, S_FRAME_LIMIT, S_FPS_ORIG, S_RENDER_RES, S_AA,
     S_MODE_WINDOW, S_MODE_BORDERLESS, S_MODE_FULL, S_RES_NATIVE,
@@ -53,12 +53,13 @@ enum StrId {
     S_CREDIT_KASTIEL,
     S_SAVE_FOLDER, S_SAVE_HINT, S_SAVE_NO_MOVE, S_SAVE_DEFAULT, S_SAVE_ERROR, S_SAVE_USING_DEFAULT, S_SAVE_SELECTED,
     S_SUPPORTED_VERSIONS, S_REGION_EU, S_REGION_JP, S_REGION_US,
+    S_SH_TITLE, S_SH_HINT, S_SH_PSO_T, S_SH_PSO_D, S_SH_LOAD_T, S_SH_LOAD_D, S_SH_BUILD_T, S_SH_BUILD_D, S_SH_PAR_T, S_SH_PAR_D,
     S_COUNT
 };
 
 /* Português */
 static const wchar_t* const k_str_pt[] = {
-    L"Início", L"Jogo", L"Controles", L"Patches", L"Avançado",
+    L"Início", L"Jogo", L"Controles", L"Patches", L"Desempenho", L"Avançado",
     L"VOLTAR AO JOGO", L"Fechar jogo", L"No jogo: Insert ou R3+L2 abre este menu.", L"JOGAR",
     L"Configure a pasta do jogo na aba Jogo.", L"Configure a pasta do jogo antes de jogar.",
     L"AJUSTES RÁPIDOS", L"Modo de exibição", L"Limite de quadros", L"30 FPS (original)",
@@ -140,12 +141,22 @@ static const wchar_t* const k_str_pt[] = {
     L"Europa",
     L"Japão",
     L"América",
+    L"SHADERS",
+    L"Valem a partir da próxima vez que o jogo abrir. Os shaders já salvos são mantidos.",
+    L"Usar cache binário de pipelines",
+    L"Reaproveita as pipelines que o driver já montou e salvou em disco, em vez de montá-las de novo. Desative só para comparar o desempenho; os arquivos salvos continuam lá.",
+    L"Carregar o cache de shaders em segundo plano",
+    L"O jogo abre na hora e os shaders já vistos carregam enquanto você joga; uma nota no canto mostra o progresso. Desative para o jogo esperar na abertura até carregar todos.",
+    L"Compilar novos shaders em segundo plano",
+    L"Menos travadas em áreas novas: o jogo continua enquanto os shaders novos compilam. Um objeto pode aparecer um instante depois. Desative se algo continuar faltando.",
+    L"Carregamento rápido do cache de shaders (paralelo)",
+    L"Monta os shaders salvos em várias threads da CPU ao mesmo tempo. Desative se o computador ficar pesado logo depois de abrir o jogo."
 };
 static_assert(sizeof k_str_pt / sizeof k_str_pt[0] == S_COUNT, "k_str_pt: one text per StrId");
 
 /* English */
 static const wchar_t* const k_str_en[] = {
-    L"Home", L"Game", L"Controls", L"Patches", L"Advanced",
+    L"Home", L"Game", L"Controls", L"Patches", L"Performance", L"Advanced",
     L"BACK TO GAME", L"Close game", L"In game: Insert or R3+L2 opens this menu.", L"PLAY",
     L"Set the game folder on the Game page.", L"Set the game folder before playing.",
     L"QUICK SETTINGS", L"Display mode", L"Frame limit", L"30 FPS (original)",
@@ -227,12 +238,22 @@ static const wchar_t* const k_str_en[] = {
     L"Europe",
     L"Japan",
     L"America",
+    L"SHADERS",
+    L"Applies the next time the game starts. Shaders already saved are kept.",
+    L"Use the binary pipeline cache",
+    L"Reuses the pipelines the driver already built and saved to disk instead of building them again. Turn off only to compare performance; the saved files stay.",
+    L"Load the shader cache in the background",
+    L"The game opens at once and shaders seen before load while you play; a note in the corner shows the progress. Turn off to have the game wait at startup until they are all loaded.",
+    L"Compile new shaders in the background",
+    L"Fewer hitches in new areas: the game keeps running while new shaders compile. An object may appear a moment later. Turn off if something keeps missing.",
+    L"Fast shader cache loading (parallel)",
+    L"Builds the saved shaders on several CPU threads at once. Turn off if the computer feels sluggish right after the game opens."
 };
 static_assert(sizeof k_str_en / sizeof k_str_en[0] == S_COUNT, "k_str_en: one text per StrId");
 
 /* Español */
 static const wchar_t* const k_str_es[] = {
-    L"Inicio", L"Juego", L"Controles", L"Parches", L"Avanzado",
+    L"Inicio", L"Juego", L"Controles", L"Parches", L"Rendimiento", L"Avanzado",
     L"VOLVER AL JUEGO", L"Cerrar juego", L"En el juego: Insert o R3+L2 abre este menú.", L"JUGAR",
     L"Configura la carpeta del juego en la pestaña Juego.", L"Configura la carpeta del juego antes de jugar.",
     L"AJUSTES RÁPIDOS", L"Modo de pantalla", L"Límite de fotogramas", L"30 FPS (original)",
@@ -314,12 +335,22 @@ static const wchar_t* const k_str_es[] = {
     L"Europa",
     L"Japón",
     L"América",
+    L"SHADERS",
+    L"Se aplican la próxima vez que se abra el juego. Los shaders ya guardados se conservan.",
+    L"Usar caché binaria de pipelines",
+    L"Reutiliza las pipelines que el controlador ya creó y guardó en disco en lugar de crearlas de nuevo. Desactívalo solo para comparar el rendimiento; los archivos guardados se conservan.",
+    L"Cargar la caché de shaders en segundo plano",
+    L"El juego abre al instante y los shaders ya vistos se cargan mientras juegas; una nota en la esquina muestra el progreso. Desactívalo para que el juego espere al inicio hasta cargarlos todos.",
+    L"Compilar shaders nuevos en segundo plano",
+    L"Menos tirones en zonas nuevas: el juego sigue mientras se compilan los shaders nuevos. Un objeto puede aparecer un instante después. Desactívalo si algo sigue faltando.",
+    L"Carga rápida de la caché de shaders (paralela)",
+    L"Crea los shaders guardados en varios hilos de la CPU a la vez. Desactívalo si el equipo va lento justo después de abrir el juego."
 };
 static_assert(sizeof k_str_es / sizeof k_str_es[0] == S_COUNT, "k_str_es: one text per StrId");
 
 /* 日本語 */
 static const wchar_t* const k_str_ja[] = {
-    L"ホーム", L"ゲーム", L"操作設定", L"パッチ", L"詳細設定",
+    L"ホーム", L"ゲーム", L"操作設定", L"パッチ", L"パフォーマンス", L"詳細設定",
     L"ゲームに戻る", L"ゲームを終了", L"ゲーム中: Insert または R3+L2 でこのメニューを開きます。", L"プレイ",
     L"「ゲーム」タブでゲームフォルダーを設定してください。", L"プレイする前にゲームフォルダーを設定してください。",
     L"クイック設定", L"表示モード", L"フレームレート上限", L"30 FPS（固定）",
@@ -401,6 +432,16 @@ static const wchar_t* const k_str_ja[] = {
     L"欧州",
     L"日本",
     L"北米",
+    L"シェーダー",
+    L"次回ゲーム起動時から有効です。保存済みのシェーダーは残ります。",
+    L"パイプラインのバイナリキャッシュを使う",
+    L"ドライバーが作成してディスクに保存したパイプラインを、作り直さずに再利用します。性能の比較用にのみオフにしてください。保存済みファイルは残ります。",
+    L"シェーダーキャッシュをバックグラウンドで読み込む",
+    L"ゲームはすぐに始まり、以前に見たシェーダーはプレイ中に読み込まれます。進行状況は画面の隅に表示されます。オフにすると、すべて読み込むまで起動時に待機します。",
+    L"新しいシェーダーをバックグラウンドでコンパイル",
+    L"新しいエリアでのカクつきが減ります。新しいシェーダーのコンパイル中もゲームは進みます。物体の表示が一瞬遅れることがあります。何かが表示されないままならオフにしてください。",
+    L"シェーダーキャッシュの高速読み込み（並列）",
+    L"保存済みのシェーダーを複数の CPU スレッドで同時に作成します。起動直後に PC が重くなる場合はオフにしてください。"
 };
 static_assert(sizeof k_str_ja / sizeof k_str_ja[0] == S_COUNT, "k_str_ja: one text per StrId");
 
@@ -410,7 +451,7 @@ static const wchar_t* const k_str_fr[] = {
     L"Jeu",
     L"Commandes",
     L"Patchs",
-    L"Avancé",
+    L"Performances", L"Avancé",
     L"RETOUR AU JEU",
     L"Fermer le jeu",
     L"En jeu : Insert ou R3+L2 ouvre ce menu.",
@@ -542,6 +583,16 @@ static const wchar_t* const k_str_fr[] = {
     L"Europe",
     L"Japon",
     L"Amérique",
+    L"SHADERS",
+    L"S'applique au prochain lancement du jeu. Les shaders déjà enregistrés sont conservés.",
+    L"Utiliser le cache binaire des pipelines",
+    L"Réutilise les pipelines déjà construits par le pilote et enregistrés sur le disque au lieu de les reconstruire. Désactivez uniquement pour comparer les performances ; les fichiers enregistrés restent.",
+    L"Charger le cache des shaders en arrière-plan",
+    L"Le jeu s'ouvre tout de suite et les shaders déjà vus se chargent pendant que vous jouez ; une note dans le coin indique la progression. Désactivez pour que le jeu attende au démarrage qu'ils soient tous chargés.",
+    L"Compiler les nouveaux shaders en arrière-plan",
+    L"Moins de saccades dans les nouvelles zones : le jeu continue pendant la compilation des nouveaux shaders. Un objet peut apparaître un instant plus tard. Désactivez si quelque chose manque encore.",
+    L"Chargement rapide du cache des shaders (parallèle)",
+    L"Construit les shaders enregistrés sur plusieurs threads du processeur à la fois. Désactivez si l'ordinateur ralentit juste après l'ouverture du jeu."
 };
 static_assert(sizeof k_str_fr / sizeof k_str_fr[0] == S_COUNT, "k_str_fr: one text per StrId");
 
@@ -551,7 +602,7 @@ static const wchar_t* const k_str_de[] = {
     L"Spiel",
     L"Steuerung",
     L"Patches",
-    L"Erweitert",
+    L"Leistung", L"Erweitert",
     L"ZURÜCK ZUM SPIEL",
     L"Spiel beenden",
     L"Im Spiel: Einfg oder R3+L2 öffnet dieses Menü.",
@@ -683,6 +734,16 @@ static const wchar_t* const k_str_de[] = {
     L"Europa",
     L"Japan",
     L"Amerika",
+    L"SHADER",
+    L"Gilt ab dem nächsten Spielstart. Bereits gespeicherte Shader bleiben erhalten.",
+    L"Binären Pipeline-Cache verwenden",
+    L"Verwendet die vom Treiber bereits erstellten und gespeicherten Pipelines wieder, statt sie neu zu erstellen. Nur zum Leistungsvergleich ausschalten; die gespeicherten Dateien bleiben erhalten.",
+    L"Shader-Cache im Hintergrund laden",
+    L"Das Spiel startet sofort und bekannte Shader laden während des Spielens; ein Hinweis in der Ecke zeigt den Fortschritt. Ausschalten, damit das Spiel beim Start wartet, bis alle geladen sind.",
+    L"Neue Shader im Hintergrund kompilieren",
+    L"Weniger Ruckler in neuen Bereichen: Das Spiel läuft weiter, während neue Shader kompiliert werden. Ein Objekt kann einen Moment später erscheinen. Ausschalten, wenn etwas weiterhin fehlt.",
+    L"Schnelles Laden des Shader-Caches (parallel)",
+    L"Erstellt die gespeicherten Shader auf mehreren CPU-Threads gleichzeitig. Ausschalten, wenn der PC direkt nach dem Spielstart träge wird."
 };
 static_assert(sizeof k_str_de / sizeof k_str_de[0] == S_COUNT, "k_str_de: one text per StrId");
 
@@ -692,7 +753,7 @@ static const wchar_t* const k_str_it[] = {
     L"Gioco",
     L"Comandi",
     L"Patch",
-    L"Avanzate",
+    L"Prestazioni", L"Avanzate",
     L"TORNA AL GIOCO",
     L"Chiudi il gioco",
     L"In gioco: Ins o R3+L2 apre questo menu.",
@@ -824,6 +885,16 @@ static const wchar_t* const k_str_it[] = {
     L"Europa",
     L"Giappone",
     L"America",
+    L"SHADER",
+    L"Valgono dal prossimo avvio del gioco. Gli shader già salvati vengono mantenuti.",
+    L"Usa la cache binaria delle pipeline",
+    L"Riutilizza le pipeline già create dal driver e salvate su disco invece di ricrearle. Disattiva solo per confrontare le prestazioni; i file salvati restano.",
+    L"Carica la cache degli shader in background",
+    L"Il gioco si apre subito e gli shader già visti si caricano mentre giochi; una nota nell'angolo mostra l'avanzamento. Disattiva per far attendere il gioco all'avvio finché non sono tutti caricati.",
+    L"Compila i nuovi shader in background",
+    L"Meno scatti nelle nuove aree: il gioco continua mentre i nuovi shader vengono compilati. Un oggetto può apparire un istante dopo. Disattiva se qualcosa continua a mancare.",
+    L"Caricamento rapido della cache degli shader (parallelo)",
+    L"Crea gli shader salvati su più thread della CPU contemporaneamente. Disattiva se il computer rallenta subito dopo l'avvio del gioco."
 };
 static_assert(sizeof k_str_it / sizeof k_str_it[0] == S_COUNT, "k_str_it: one text per StrId");
 
@@ -833,7 +904,7 @@ static const wchar_t* const k_str_pl[] = {
     L"Gra",
     L"Sterowanie",
     L"Poprawki",
-    L"Zaawansowane",
+    L"Wydajność", L"Zaawansowane",
     L"WRÓĆ DO GRY",
     L"Zamknij grę",
     L"W grze: Insert lub R3+L2 otwiera to menu.",
@@ -965,6 +1036,16 @@ static const wchar_t* const k_str_pl[] = {
     L"Europa",
     L"Japonia",
     L"Ameryka",
+    L"SHADERY",
+    L"Obowiązuje od następnego uruchomienia gry. Zapisane shadery pozostają.",
+    L"Używaj binarnej pamięci podręcznej potoków",
+    L"Ponownie wykorzystuje potoki zbudowane już przez sterownik i zapisane na dysku zamiast budować je od nowa. Wyłącz tylko w celu porównania wydajności; zapisane pliki pozostają.",
+    L"Wczytuj pamięć podręczną shaderów w tle",
+    L"Gra uruchamia się od razu, a znane shadery wczytują się w trakcie gry; postęp pokazuje notka w rogu. Wyłącz, aby gra przy starcie czekała, aż wszystkie się wczytają.",
+    L"Kompiluj nowe shadery w tle",
+    L"Mniej przycięć w nowych obszarach: gra działa dalej, gdy kompilują się nowe shadery. Obiekt może pojawić się chwilę później. Wyłącz, jeśli czegoś wciąż brakuje.",
+    L"Szybkie wczytywanie pamięci shaderów (równoległe)",
+    L"Buduje zapisane shadery na wielu wątkach procesora jednocześnie. Wyłącz, jeśli komputer zwalnia tuż po uruchomieniu gry."
 };
 static_assert(sizeof k_str_pl / sizeof k_str_pl[0] == S_COUNT, "k_str_pl: one text per StrId");
 
@@ -974,7 +1055,7 @@ static const wchar_t* const k_str_tr[] = {
     L"Oyun",
     L"Kontroller",
     L"Yamalar",
-    L"Gelişmiş",
+    L"Performans", L"Gelişmiş",
     L"OYUNA DÖN",
     L"Oyunu kapat",
     L"Oyunda: Insert veya R3+L2 bu menüyü açar.",
@@ -1106,6 +1187,16 @@ static const wchar_t* const k_str_tr[] = {
     L"Avrupa",
     L"Japonya",
     L"Amerika",
+    L"GÖLGELENDİRİCİLER",
+    L"Oyunun bir sonraki açılışında geçerli olur. Kaydedilmiş gölgelendiriciler korunur.",
+    L"İkili ardışık düzen önbelleğini kullan",
+    L"Sürücünün daha önce oluşturup diske kaydettiği ardışık düzenleri yeniden oluşturmak yerine tekrar kullanır. Yalnızca performansı karşılaştırmak için kapatın; kaydedilen dosyalar korunur.",
+    L"Gölgelendirici önbelleğini arka planda yükle",
+    L"Oyun hemen açılır ve daha önce görülen gölgelendiriciler siz oynarken yüklenir; köşedeki bir not ilerlemeyi gösterir. Oyunun açılışta hepsi yüklenene kadar beklemesi için kapatın.",
+    L"Yeni gölgelendiricileri arka planda derle",
+    L"Yeni bölgelerde daha az takılma: yeni gölgelendiriciler derlenirken oyun devam eder. Bir nesne bir an sonra görünebilir. Bir şey eksik kalmaya devam ederse kapatın.",
+    L"Gölgelendirici önbelleğini hızlı yükleme (paralel)",
+    L"Kaydedilen gölgelendiricileri aynı anda birden çok CPU iş parçacığında oluşturur. Oyun açıldıktan hemen sonra bilgisayar yavaşlarsa kapatın."
 };
 static_assert(sizeof k_str_tr / sizeof k_str_tr[0] == S_COUNT, "k_str_tr: one text per StrId");
 
@@ -1115,7 +1206,7 @@ static const wchar_t* const k_str_ar[] = {
     L"اللعبة",
     L"التحكم",
     L"التصحيحات",
-    L"متقدم",
+    L"الأداء", L"متقدم",
     L"العودة إلى اللعبة",
     L"إغلاق اللعبة",
     L"داخل اللعبة: Insert أو R3+L2 يفتح هذه القائمة.",
@@ -1247,6 +1338,16 @@ static const wchar_t* const k_str_ar[] = {
     L"أوروبا",
     L"اليابان",
     L"أمريكا",
+    L"المظللات",
+    L"تُطبَّق عند التشغيل التالي للعبة. تبقى المظللات المحفوظة كما هي.",
+    L"استخدام ذاكرة خطوط المعالجة الثنائية المؤقتة",
+    L"يعيد استخدام خطوط المعالجة التي أنشأها برنامج التشغيل وحفظها على القرص بدلًا من إنشائها من جديد. أوقفه فقط لمقارنة الأداء؛ تبقى الملفات المحفوظة.",
+    L"تحميل ذاكرة التظليل المؤقتة في الخلفية",
+    L"تفتح اللعبة فورًا وتُحمَّل المظللات التي ظهرت من قبل أثناء اللعب؛ وتعرض ملاحظة في الزاوية مدى التقدم. أوقفه لتنتظر اللعبة عند البدء حتى يكتمل تحميلها كلها.",
+    L"ترجمة المظللات الجديدة في الخلفية",
+    L"تقطّع أقل في المناطق الجديدة: تستمر اللعبة أثناء ترجمة المظللات الجديدة. قد يظهر جسم ما بعد لحظة. أوقفه إذا ظل شيء مفقودًا.",
+    L"تحميل سريع لذاكرة التظليل المؤقتة (متوازٍ)",
+    L"ينشئ المظللات المحفوظة على عدة خيوط من المعالج في الوقت نفسه. أوقفه إذا أصبح الحاسوب بطيئًا بعد فتح اللعبة مباشرة."
 };
 static_assert(sizeof k_str_ar / sizeof k_str_ar[0] == S_COUNT, "k_str_ar: one text per StrId");
 
@@ -1256,7 +1357,7 @@ static const wchar_t* const k_str_zh[] = {
     L"游戏",
     L"控制",
     L"补丁",
-    L"高级",
+    L"性能", L"高级",
     L"返回游戏",
     L"关闭游戏",
     L"游戏中：按 Insert 或 R3+L2 打开此菜单。",
@@ -1388,6 +1489,16 @@ static const wchar_t* const k_str_zh[] = {
     L"欧洲",
     L"日本",
     L"美洲",
+    L"着色器",
+    L"下次启动游戏时生效。已保存的着色器会保留。",
+    L"使用管线二进制缓存",
+    L"直接重用驱动程序已创建并保存到磁盘的管线，而不是重新创建。仅在比较性能时关闭；已保存的文件会保留。",
+    L"在后台加载着色器缓存",
+    L"游戏立即启动，以前见过的着色器会在游戏过程中加载；角落里的提示会显示进度。关闭后，游戏会在启动时等待全部加载完毕。",
+    L"在后台编译新着色器",
+    L"在新区域卡顿更少：新着色器编译期间游戏继续运行。某个物体可能会稍晚出现。如果仍有东西缺失，请关闭。",
+    L"快速加载着色器缓存（并行）",
+    L"同时在多个 CPU 线程上创建已保存的着色器。如果游戏启动后电脑变得卡顿，请关闭。"
 };
 static_assert(sizeof k_str_zh / sizeof k_str_zh[0] == S_COUNT, "k_str_zh: one text per StrId");
 
@@ -1397,7 +1508,7 @@ static const wchar_t* const k_str_ko[] = {
     L"게임",
     L"조작",
     L"패치",
-    L"고급",
+    L"성능", L"고급",
     L"게임으로 돌아가기",
     L"게임 종료",
     L"게임 중: Insert 또는 R3+L2로 이 메뉴를 엽니다.",
@@ -1529,6 +1640,16 @@ static const wchar_t* const k_str_ko[] = {
     L"유럽",
     L"일본",
     L"미주",
+    L"셰이더",
+    L"다음에 게임을 실행할 때부터 적용됩니다. 저장된 셰이더는 유지됩니다.",
+    L"파이프라인 바이너리 캐시 사용",
+    L"드라이버가 이미 만들어 디스크에 저장한 파이프라인을 다시 만들지 않고 재사용합니다. 성능 비교용으로만 끄세요. 저장된 파일은 유지됩니다.",
+    L"셰이더 캐시를 백그라운드에서 불러오기",
+    L"게임이 바로 시작되고 이전에 본 셰이더는 플레이 중에 불러옵니다. 진행 상황은 화면 구석에 표시됩니다. 끄면 모두 불러올 때까지 게임이 시작 시 기다립니다.",
+    L"새 셰이더를 백그라운드에서 컴파일",
+    L"새 지역에서 끊김이 줄어듭니다. 새 셰이더를 컴파일하는 동안에도 게임이 계속됩니다. 물체가 잠시 늦게 나타날 수 있습니다. 계속 무언가가 보이지 않으면 끄세요.",
+    L"셰이더 캐시 빠른 불러오기 (병렬)",
+    L"저장된 셰이더를 여러 CPU 스레드에서 동시에 만듭니다. 게임 실행 직후 PC가 느려지면 끄세요."
 };
 static_assert(sizeof k_str_ko / sizeof k_str_ko[0] == S_COUNT, "k_str_ko: one text per StrId");
 
@@ -1538,7 +1659,7 @@ static const wchar_t* const k_str_ru[] = {
     L"Игра",
     L"Управление",
     L"Патчи",
-    L"Дополнительно",
+    L"Производительность", L"Дополнительно",
     L"НАЗАД В ИГРУ",
     L"Закрыть игру",
     L"В игре: Insert или R3+L2 открывает это меню.",
@@ -1670,6 +1791,16 @@ static const wchar_t* const k_str_ru[] = {
     L"Европа",
     L"Япония",
     L"Америка",
+    L"ШЕЙДЕРЫ",
+    L"Применяется при следующем запуске игры. Сохранённые шейдеры остаются.",
+    L"Использовать бинарный кэш конвейеров",
+    L"Повторно использует конвейеры, уже созданные драйвером и сохранённые на диск, вместо их повторного создания. Отключайте только для сравнения производительности; сохранённые файлы останутся.",
+    L"Загружать кэш шейдеров в фоне",
+    L"Игра открывается сразу, а уже встречавшиеся шейдеры загружаются во время игры; ход загрузки показывает заметка в углу. Отключите, чтобы игра при запуске ждала, пока все загрузятся.",
+    L"Компилировать новые шейдеры в фоне",
+    L"Меньше подтормаживаний в новых местах: игра продолжается, пока компилируются новые шейдеры. Объект может появиться на мгновение позже. Отключите, если что-то по-прежнему пропадает.",
+    L"Быстрая загрузка кэша шейдеров (параллельно)",
+    L"Создаёт сохранённые шейдеры сразу в нескольких потоках процессора. Отключите, если компьютер тормозит сразу после запуска игры."
 };
 static_assert(sizeof k_str_ru / sizeof k_str_ru[0] == S_COUNT, "k_str_ru: one text per StrId");
 

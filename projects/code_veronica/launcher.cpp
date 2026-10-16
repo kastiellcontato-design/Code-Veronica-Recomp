@@ -171,6 +171,7 @@ struct Settings {
     int layout = 2;        /* button icons: 0 PlayStation, 1 Xbox, 2 automatic, 3 keyboard */
     bool overlay = false;  /* the performance overlay (rsx_perf_overlay.h) */
     int overlay_items = 3; /* bits of k_overlay_items: FPS and frame time */
+    bool shader_opt[4] = { true, true, true, true };   /* k_shader_opts, Desempenho page */
     std::wstring game, rap, fw, saves;
     std::wstring patch_dir;                 /* patch files (patch_files.h) */
     std::vector<std::string> patch_files_on; /* ids of the file patches turned on */
@@ -199,6 +200,20 @@ const PatchOpt k_patches[] = {
     { "cv_skip_logos", S_PATCH_LOGO_T, S_PATCH_LOGO_D, S_PATCH_LOGO_C },   /* boot_skip.cpp */
 };
 const int NPATCHES = sizeof k_patches / sizeof k_patches[0];
+
+/* The SHADERS switches on the Desempenho page (read by the game at start):
+ * the pipeline library (PSO_LIBRARY), loading the saved shaders while the
+ * game runs or before it goes on (SHADER_PRELOAD), building new ones on the
+ * shader workers (FP_ASYNC) and loading the saved ones on several threads
+ * (SHADER_PRELOAD_PARALLEL). All on by default. */
+struct ShaderOpt { const wchar_t* key; int title, desc; };
+const ShaderOpt k_shader_opts[] = {
+    { L"cache_pipelines", S_SH_PSO_T, S_SH_PSO_D },
+    { L"carregar_em_segundo_plano", S_SH_LOAD_T, S_SH_LOAD_D },
+    { L"compilar_em_segundo_plano", S_SH_BUILD_T, S_SH_BUILD_D },
+    { L"carregamento_paralelo", S_SH_PAR_T, S_SH_PAR_D },
+};
+const int NSHADER_OPTS = sizeof k_shader_opts / sizeof k_shader_opts[0];
 
 /* Actions shown on the Controles page. */
 const int k_rows[] = { PA_CROSS, PA_CIRCLE, PA_SQUARE, PA_TRIANGLE, PA_L1, PA_R1, PA_L2, PA_R2,
@@ -311,6 +326,8 @@ Settings load_settings()
         }
     }
     s.overlay = _wtoi(ini_get(L"overlay", L"mostrar", L"0").c_str()) != 0;
+    for (int i = 0; i < NSHADER_OPTS; i++)
+        s.shader_opt[i] = _wtoi(ini_get(L"shaders", k_shader_opts[i].key, L"1").c_str()) != 0;
     s.overlay_items = _wtoi(ini_get(L"overlay", L"itens", L"3").c_str()) & ((1 << NOVERLAY) - 1);
     s.patch_dir = ini_get(L"pastas", L"patches", L"");
     {
@@ -359,6 +376,8 @@ void save_settings(const Settings& s)
         ini_set(L"patches", widen(k_patches[i].id).c_str(), s.patch[i] ? L"1" : L"0");
     ini_set(L"overlay", L"mostrar", s.overlay ? L"1" : L"0");
     ini_set(L"overlay", L"itens", std::to_wstring(s.overlay_items));
+    for (int i = 0; i < NSHADER_OPTS; i++)
+        ini_set(L"shaders", k_shader_opts[i].key, s.shader_opt[i] ? L"1" : L"0");
     ini_set(L"pastas", L"patches", s.patch_dir);
     {
         std::wstring on;
@@ -484,7 +503,7 @@ Bitmap* load_png(const char* name)
 }
 
 /* ---------------------------------------------------------------- UI state */
-enum Page { P_INICIO, P_JOGO, P_CONTROLES, P_PATCHES, P_AVANCADO, P_COUNT };
+enum Page { P_INICIO, P_JOGO, P_CONTROLES, P_PATCHES, P_DESEMPENHO, P_AVANCADO, P_COUNT };
 enum Capture { CAP_NONE, CAP_KEY, CAP_BTN };
 
 struct Hit { RectF r; int id; };
@@ -529,6 +548,7 @@ enum {
     ID_OVERLAY = 1400, ID_OVERLAY_ITEM = 1410,                     /* + item */
     ID_PATCH_DIR_BROWSE = 1500, ID_PATCH_DIR_OPEN, ID_FPATCH = 1600,  /* + file patch index */
     ID_LOG_VIEW = 2100, ID_LOG_COPY, ID_LOG_SAVE, ID_LOG_FOLDER,
+    ID_SHADER_OPT = 2200,                                          /* + k_shader_opts index */
 };
 
 void hit(float x, float y, float w, float h, int id) { g.hits.push_back({ RectF(x, y, w, h), id }); }
@@ -1260,7 +1280,7 @@ void draw_controles(Graphics& gr, const Font& head, const Font& body, const Font
 }
 
 /* The shader cache the D3D12 backend keeps under the working directory
- * (shader_cache/*.cso and pipelines.bin). Only those files are removed. */
+ * (shader_cache/*.cso, pipelines.bin and pipelines.list). Only those files are removed. */
 fs::path cache_dir()
 {
     wchar_t cwd[MAX_PATH]; GetCurrentDirectoryW(MAX_PATH, cwd);
@@ -1269,7 +1289,8 @@ fs::path cache_dir()
 bool is_cache_file(const fs::path& p)
 {
     const std::wstring n = p.filename().wstring();
-    return p.extension() == L".cso" || n == L"pipelines.bin" || n == L"pipelines.bin.tmp";
+    return p.extension() == L".cso" || n == L"pipelines.bin" || n == L"pipelines.bin.tmp" ||
+           n == L"pipelines.list" || n == L"pipelines.list.tmp";
 }
 void cache_stats(int* n, double* mb)
 {
@@ -1377,6 +1398,46 @@ void draw_avancado(Graphics& gr, const Font& head, const Font& body, const Font&
     text(gr, log_note, x, y, fsm, g.log_msg.empty() ? C_DIM : C_OK, StringAlignmentNear, w, 20);
 }
 
+/* A switch card whose description wraps (the options' texts run to two
+ * lines): the patch cards' look. */
+void option_card(Graphics& gr, float x, float y, float w, float h, bool on, int id,
+                 const std::wstring& title, const std::wstring& desc, const Font& body, const Font& fsm)
+{
+    const bool hot = g.hover == id;
+    RectF card(x, y, w, h);
+    GraphicsPath* cp = round_rect(card, 6);
+    SolidBrush cb(hot ? C_HOVER : C_PANEL); gr.FillPath(&cb, cp);
+    Pen cbd(on ? C_RED : C_FIELD_BD, 1); gr.DrawPath(&cbd, cp); delete cp;
+    RectF sw(x + w - 70, y + (h - 26) / 2, 48, 26);
+    GraphicsPath* sp = round_rect(sw, 13);
+    SolidBrush sb(on ? C_RED : Color(255, 60, 52, 52)); gr.FillPath(&sb, sp); delete sp;
+    SolidBrush knob(C_TEXT);
+    gr.FillEllipse(&knob, on ? sw.X + sw.Width - 23 : sw.X + 3, sw.Y + 3, 20.0f, 20.0f);
+    text(gr, title, x + 18, y + 8, body, C_TEXT, StringAlignmentNear, w - 120, 24);
+    {
+        const std::wstring t = g_lang == LANG_AR ? L"\u202B" + desc + L"\u202C" : desc;
+        StringFormat sf; sf.SetAlignment(StringAlignmentNear); sf.SetLineAlignment(StringAlignmentNear);
+        sf.SetTrimming(StringTrimmingEllipsisWord);
+        SolidBrush db(C_DIM);
+        gr.DrawString(t.c_str(), -1, &fsm, RectF(x + 18, y + 34, w - 120, h - 40), &sf, &db);
+    }
+    hit(x, y, w, h, id);
+}
+
+void draw_desempenho(Graphics& gr, const Font& head, const Font& body, const Font& fsm)
+{
+    float x = SIDE + 32.0f, y = 34;
+    const float w = W - SIDE - 64.0f;
+    section(gr, T(S_SH_TITLE), x, y, w, head);
+    text(gr, T(S_SH_HINT), x, y + 32, fsm, C_DIM, StringAlignmentNear, w, 20);
+    y += 74;
+    for (int i = 0; i < NSHADER_OPTS; i++) {
+        option_card(gr, x, y, w, 92, g.s.shader_opt[i], ID_SHADER_OPT + i,
+                    T(k_shader_opts[i].title), T(k_shader_opts[i].desc), body, fsm);
+        y += 104;
+    }
+}
+
 void paint(HDC hdc)
 {
     Bitmap back(W, H, PixelFormat32bppARGB);
@@ -1398,6 +1459,7 @@ void paint(HDC hdc)
     else if (g.page == P_JOGO) draw_jogo(gr, fHead, fBody, fSmall);
     else if (g.page == P_CONTROLES) draw_controles(gr, fHead, fBody, fSmall, fCol);
     else if (g.page == P_PATCHES) draw_patches(gr, fHead, fBody, fSmall);
+    else if (g.page == P_DESEMPENHO) draw_desempenho(gr, fHead, fBody, fSmall);
     else draw_avancado(gr, fHead, fBody, fSmall);
     draw_sidebar(gr, fTitle, fTitle2, fNav, fSmall);
     draw_play(gr, fBig, fSmall);
@@ -1670,6 +1732,7 @@ void click(int id)
         changed();
     }
     else if (id == ID_OVERLAY) { g.s.overlay = !g.s.overlay; set_overlay_env(); changed(); }
+    else if (id >= ID_SHADER_OPT && id < ID_SHADER_OPT + NSHADER_OPTS) { g.s.shader_opt[id - ID_SHADER_OPT] ^= true; changed(); }
     else if (id >= ID_OVERLAY_ITEM && id < ID_OVERLAY_ITEM + NOVERLAY) {
         g.s.overlay_items ^= 1 << (id - ID_OVERLAY_ITEM); set_overlay_env(); changed();
     }
@@ -1962,6 +2025,10 @@ void start_game()
     set_env("PS3_PATCHES", pl);
     set_map_env();
     set_overlay_env();
+    set_env("PSO_LIBRARY", s.shader_opt[0] ? "1" : "0");
+    set_env("SHADER_PRELOAD", s.shader_opt[1] ? "bg" : "wait");
+    set_env("FP_ASYNC", s.shader_opt[2] ? "1" : "0");
+    set_env("SHADER_PRELOAD_PARALLEL", s.shader_opt[3] ? "1" : "0");
     {   /* file patches: applied by the runtime once the game is loaded */
         if (g.fpatches.empty()) scan_patch_dir();
         std::string w;

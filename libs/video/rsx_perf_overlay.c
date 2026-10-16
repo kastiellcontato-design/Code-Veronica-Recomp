@@ -21,7 +21,11 @@
 #pragma comment(lib, "pdh.lib")
 #pragma comment(lib, "psapi.lib")
 
-enum { OV_FPS = 1, OV_MS = 2, OV_CPU = 4, OV_GPU = 8, OV_RAM = 16, OV_VRAM = 32 };
+enum { OV_FPS = 1, OV_MS = 2, OV_CPU = 4, OV_GPU = 8, OV_RAM = 16, OV_VRAM = 32, OV_SHADERS = 64 };
+
+/* The shader preload (rsx_d3d12_backend.c): 1 while it runs. Its progress
+ * shows here whether or not the overlay is on. */
+extern int rsx_shader_preload_progress(int* done, int* total);
 
 static unsigned overlay_items(void)
 {
@@ -274,7 +278,8 @@ const rsx_ui_quad* perf_overlay_quads(uint32_t w, uint32_t h, uint32_t* count)
     static ULONGLONG last_build;
     static HANDLE gpu;
     *count = 0;
-    const unsigned items = overlay_items();
+    int pl_done = 0, pl_total = 0;
+    const unsigned items = overlay_items() | (rsx_shader_preload_progress(&pl_done, &pl_total) ? OV_SHADERS : 0);
     if (!items || !s_qpf.QuadPart) { last_items = 0; return NULL; }
     if ((items & OV_GPU) && !gpu) gpu = CreateThread(NULL, 0, gpu_thread, NULL, 0, NULL);
     const ULONGLONG now = GetTickCount64();
@@ -289,7 +294,7 @@ const rsx_ui_quad* perf_overlay_quads(uint32_t w, uint32_t h, uint32_t* count)
         static int cpu = -1;
         const int c = cpu_pct();
         if (c >= 0) cpu = c;
-        Seg segs[6]; int n = 0;
+        Seg segs[7]; int n = 0;
         memset(segs, 0, sizeof segs);
         if (items & OV_FPS) { swprintf(segs[n++].value, 24, L"%.0f FPS", fps); }
         if (items & OV_MS)  { swprintf(segs[n++].value, 24, L"%.1f ms", ms); }
@@ -302,6 +307,8 @@ const rsx_ui_quad* perf_overlay_quads(uint32_t w, uint32_t h, uint32_t* count)
                               else wcscpy(segs[n].value, L"-");
                               n++; }
         if (items & OV_VRAM) { wcscpy(segs[n].label, L"VRAM"); swprintf(segs[n].value, 24, L"%.2f GB", vram_used() / 1073741824.0); n++; }
+        if (items & OV_SHADERS) { wcscpy(segs[n].label, L"Shaders");
+                                  swprintf(segs[n].value, 24, L"%d%%", pl_total ? pl_done * 100 / pl_total : 0); n++; }
         build(w, h, items, segs, n);
         last_items = items; last_w = w; last_h = h; last_build = now;
     }

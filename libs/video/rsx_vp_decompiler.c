@@ -30,6 +30,7 @@
  */
 #include "rsx_vp_decompiler.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 /* ---- little-endian word read (RPCS3-capture native order) --------------- */
@@ -134,7 +135,9 @@ static void emit_store(Out* b, const char* dst_fmt, u32 idx, const char* m)
 /* ---- flow control -------------------------------------------------------- */
 #define RSX_VP_MAX_INSTR 512
 
-static u32 s_vp_branch_base = 0;   /* VP slot the program being decompiled starts at */
+/* Per thread: the shader preload decompiles programs on worker threads while
+ * the recording thread decompiles the game's own. */
+static _Thread_local u32 s_vp_branch_base = 0;   /* VP slot the program being decompiled starts at */
 void rsx_vp_set_branch_base(u32 start_slot) { s_vp_branch_base = start_slot; }
 
 /* BRA BRI CAL CLI RET BRB CLB (scalar opcodes). */
@@ -301,8 +304,10 @@ static int rsx_vp_decompile_impl(
     if (!ucode || !out || out_size < 256) return -1;
 
     /* Body is built first, preamble/epilogue wrap it. */
-    static char body[192 * 1024];
-    Out b = { body, sizeof(body), 0, 0 };
+    enum { BODY_SIZE = 192 * 1024 };
+    static _Thread_local char* body;   /* per thread, see s_vp_branch_base */
+    if (!body && !(body = (char*)malloc(BODY_SIZE))) return -1;
+    Out b = { body, BODY_SIZE, 0, 0 };
     body[0] = '\0';
 
     int n_cond_skipped = 0, n_flow_skipped = 0;
@@ -319,7 +324,7 @@ static int rsx_vp_decompile_impl(
      * bounded loop, with a small call stack for CAL/RET. Branch-free programs
      * are emitted exactly as before. Targets are VP slot addresses; the slot
      * the program starts at comes from rsx_vp_set_branch_base(). */
-    static u8 leader[RSX_VP_MAX_INSTR + 1];
+    static _Thread_local u8 leader[RSX_VP_MAX_INSTR + 1];
     memset(leader, 0, sizeof leader);
     int has_flow = 0;
     {

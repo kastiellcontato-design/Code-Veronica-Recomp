@@ -3041,6 +3041,20 @@ static void render_wait_idle(void);   /* render thread, see render_frame() */
  * once, which held the game for over half a second. The slot is published
  * with vs = NULL and pending set; draws that need it are left out (or, if
  * urgent, waited for) until the blob lands. */
+/* Shader preload (pl_*, after vp_get_fp_pso): a vertex program listed from an
+ * earlier session, built on a preload thread. */
+typedef struct PlVs {
+    u32 hash, vstart, vtex_mask, len;
+    const u8* ucode;
+    ID3DBlob* vs;                /* the built program; NULL until ready or if it failed */
+    char* hlsl;
+    int uses_c03;
+    volatile LONG state;         /* 0 queued, 1 ready, 2 failed */
+} PlVs;
+static const PlVs* pl_vs_ready(u32 hash);
+static void pl_record_vs(u32 hash, u32 vstart, u32 vtex_mask, const u8* ucode, u32 len);
+static void pl_record_fp(const VPFPEntry* key, const u8* ucode, u32 len);
+
 typedef struct VsJob { int slot; u32 hash; char* hlsl; } VsJob;
 static VOID CALLBACK vs_compile_job(PTP_CALLBACK_INSTANCE inst, PVOID ctx)
 {
@@ -3112,10 +3126,15 @@ static int vp_get_vs(const rsx_state* st)
             return i;
         }
 
+    /* Built by the shader preload: no decompile, no compile, no pending. */
+    const PlVs* pre = pl_vs_ready(hash);
     static char hlsl[262144];
+    int ni = 0;
+    if (pre) goto have_program;
     rsx_vp_set_branch_base(vstart / 16u);   /* targets are absolute slots */
-    int ni = rsx_vp_decompile_ex(vuc, vlen, vtex_mask, hlsl, sizeof hlsl);
+    ni = rsx_vp_decompile_ex(vuc, vlen, vtex_mask, hlsl, sizeof hlsl);
     if (ni <= 0) return -1;
+    pl_record_vs(hash, vstart, vtex_mask, vuc, vlen);
     if (getenv("CV_VIDEO_CAPTURE")) { char pn[80];snprintf(pn,sizeof pn,"vs_%08X.hlsl",hash);FILE* f=fopen(pn,"w");if(f){fprintf(f,"/* slot=%d */\n%s",s_d3d.vp_vs_n,hlsl);fclose(f);} }
     if (getenv("VP_DUMP")) { static int _d=0; if (_d++ < 4) {
         FILE* f = fopen("vp2_dump.hlsl", _d==1 ? "w" : "a");
@@ -3169,6 +3188,7 @@ static int vp_get_vs(const rsx_state* st)
             at += n;
         }
     }
+have_program: ;
     int slot;
     if (s_d3d.vp_vs_n < VP_VS_CACHE) slot = s_d3d.vp_vs_n++;
     else {  /* replace the least recently used slot, in place */
@@ -3189,6 +3209,14 @@ static int vp_get_vs(const rsx_state* st)
                                         built, s_d3d.vp_vs_n, (unsigned long long)s_d3d.frame_count, 10); }
     s_d3d.vp_vs[slot].hash = hash;
     s_d3d.vp_vs[slot].vs   = NULL;
+    if (pre) {
+        pre->vs->lpVtbl->AddRef(pre->vs);
+        s_d3d.vp_vs[slot].vs = pre->vs;
+        s_d3d.vp_vs[slot].hlsl = _strdup(pre->hlsl);
+        s_d3d.vp_vs[slot].uses_c03 = pre->uses_c03;
+        s_d3d.vp_vs[slot].pending = 0;
+        goto have_slot;
+    }
     s_d3d.vp_vs[slot].hlsl = _strdup(hlsl);
     { VsJob* j = (VsJob*)calloc(1, sizeof *j);
       s_d3d.vp_vs[slot].pending = 1;
@@ -3201,6 +3229,7 @@ static int vp_get_vs(const rsx_state* st)
         (strstr(hlsl, "vp_c[0]") || strstr(hlsl, "vp_c[1]") ||
          strstr(hlsl, "vp_c[2]") || strstr(hlsl, "vp_c[3]")) ? 1 : 0;
     { static int _n=0; if (_n++<6) printf("[VP] per-draw VS cached (hash=0x%08X, %d instrs, slot %d)\n", hash, ni, slot); }
+have_slot:
     /* Build the base VP pipeline here if it does not exist yet. render_frame's
      * trigger reads s_d3d.current_rsx_state, which by frame end no longer has
      * the microcode -- so for a title that only ever compiles per-draw VS the
@@ -3715,6 +3744,7 @@ static void fp_async_drain(void)
     while (j) {
         FpJob* nx = j->next;
         int idx = fp_index_find(&j->key);
+        if (j->status == FPB_OK) pl_record_fp(&j->key, j->ucode, j->ucode_bytes);
         if (idx >= 0 && s_d3d.vp_fp[idx].pending) {
             VPFPEntry* e = &s_d3d.vp_fp[idx];
             e->pso = j->pso; e->pending = 0; e->skip = (j->status == FPB_SKIP);
@@ -4456,10 +4486,387 @@ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, in
     int st = fp_build_pso(j);
     InterlockedAdd(&s_hd_fpi_us, (LONG)((perf_now() - _hf0) * 1e6)); InterlockedIncrement(&s_hd_fpi_n);
     ID3D12PipelineState* pso = j->pso;
+    if (st == FPB_OK) pl_record_fp(&key, j->ucode, j->ucode_bytes);
     fp_job_free(j);
     fp_cache_insert(&key, pso, 0, st == FPB_SKIP);
     if (st == FPB_SKIP) s_fp_skip_draw = 1;
     return pso;
+}
+
+/* ---------------------------------------------------------------------------
+ * Shader preload. Every pipeline built is listed in pipelines.list, beside
+ * pipelines.bin: the guest programs it came from (the fragment program's
+ * ucode; the vertex program's ucode, start slot and vertex-texture units) and
+ * its fixed-function key. At the next start, preload threads rebuild the
+ * listed pipelines from the disk caches -- bytecode from the .cso files, the
+ * PSO from pipelines.bin -- before the game asks for them, so an area seen in
+ * an earlier session draws without a pipeline skipped or waited for.
+ * The list holds guest programs, not translated text: a newer translator
+ * makes its own HLSL (and .cso) from them, never runs a stale one.
+ * SHADER_PRELOAD=bg (default) loads while the game runs, with a note in the
+ * corner; wait holds the game at its start until done; 0 loads nothing (the
+ * list is still kept). SHADER_PRELOAD_PARALLEL=0 loads on one thread.
+ * -------------------------------------------------------------------------*/
+#define PL_MAGIC   0x4C505643u            /* "CVPL" */
+#define PL_VERSION 1u
+#define PL_MAX_VS  2048
+#define PL_MAX_FP  (VP_FP_CACHE / 2)      /* the other half stays free for new pipelines */
+enum { PL_REC_VS = 1, PL_REC_FP = 2 };
+typedef struct { VPFPEntry key; const u8* ucode; u32 len; } PlFp;
+typedef struct PlDone { struct PlDone* next; VPFPEntry key; ID3D12PipelineState* pso; int skip; } PlDone;
+
+static INIT_ONCE s_pl_once = INIT_ONCE_STATIC_INIT;
+static SRWLOCK s_pl_lock = SRWLOCK_INIT;   /* the known set, the output buffer, the done list */
+static int s_pl_on = 0;                    /* the list is kept (the shader cache is on) */
+static int s_pl_mode = 0;                  /* 0 no preload, 1 in the background, 2 the game waits */
+static char s_pl_path[280];
+static u8* s_pl_file = NULL;               /* the list as read; the records point into it */
+static size_t s_pl_good = 0;               /* its bytes up to the first bad record */
+static int s_pl_rewrite = 0;               /* missing, another format or a cut-off tail: write anew */
+static PlVs* s_pl_vs = NULL; static int s_pl_nvs = 0;
+static PlFp* s_pl_fp = NULL; static int s_pl_nfp = 0;
+static int* s_pl_vs_index = NULL; static u32 s_pl_vs_index_cap = 0;   /* by hash: s_pl_vs index + 1 */
+static u64* s_pl_known = NULL; static u32 s_pl_known_cap = 0, s_pl_known_n = 0;
+static u8* s_pl_out = NULL; static size_t s_pl_out_n = 0, s_pl_out_cap = 0;
+static ULONGLONG s_pl_flushed_at = 0;
+static int s_pl_started = 0, s_pl_reported = 0;
+static volatile LONG s_pl_next_vs = 0, s_pl_next_fp = 0, s_pl_done_vs = 0, s_pl_done_fp = 0;
+static volatile LONG s_pl_threads_left = 0, s_pl_built = 0;
+static PlDone* s_pl_done = NULL;
+static double s_pl_t0 = 0.0;
+
+static u32 pl_rd32(const u8* p) { u32 v; memcpy(&v, p, 4); return v; }
+static u64 pl_mix(u64 h, u32 v) { h ^= v; h *= 1099511628211ull; return h; }
+static u64 pl_vs_id(u32 hash) { const u64 h = pl_mix(14695981039346656037ull ^ 'V', hash); return h ? h : 1; }
+static u64 pl_fp_id(const VPFPEntry* k)
+{
+    const u32 f[9] = { k->vs_hash, k->blend, (u32)k->nrt, k->rtfmt, (u32)k->exp32,
+                       k->ucode_hash, k->cmask, k->cull, k->cube_mask };
+    u64 h = 14695981039346656037ull ^ 'F';
+    for (int i = 0; i < 9; i++) h = pl_mix(h, f[i]);
+    return h ? h : 1;
+}
+static u32 pl_slot(u64 id, u32 cap) { return (u32)((id * 0x9E3779B97F4A7C15ull) >> 40) & (cap - 1); }
+/* 1 if id was not known yet. s_pl_lock held (or the list still loading). */
+static int pl_known_add(u64 id)
+{
+    if ((s_pl_known_n + 1) * 2 > s_pl_known_cap) {
+        const u32 cap = s_pl_known_cap ? s_pl_known_cap * 2 : 4096;
+        u64* t = (u64*)calloc(cap, sizeof *t);
+        if (!t) return 0;
+        for (u32 i = 0; i < s_pl_known_cap; i++)
+            if (s_pl_known[i]) {
+                u32 j = pl_slot(s_pl_known[i], cap);
+                while (t[j]) j = (j + 1) & (cap - 1);
+                t[j] = s_pl_known[i];
+            }
+        free(s_pl_known); s_pl_known = t; s_pl_known_cap = cap;
+    }
+    u32 j = pl_slot(id, s_pl_known_cap);
+    while (s_pl_known[j]) { if (s_pl_known[j] == id) return 0; j = (j + 1) & (s_pl_known_cap - 1); }
+    s_pl_known[j] = id; s_pl_known_n++;
+    return 1;
+}
+static u32 pl_sum(u32 h, const u8* p, size_t n) { for (size_t i = 0; i < n; i++) { h ^= p[i]; h *= 16777619u; } return h; }
+/* One record: type, payload size, payload checksum, then the payload (head
+ * words, then ucode). s_pl_lock held. */
+static void pl_put_record(u32 type, const u32* head, int nhead, const u8* ucode, u32 len)
+{
+    const u32 plen = (u32)nhead * 4u + len;
+    const size_t need = s_pl_out_n + 12u + plen;
+    if (need > s_pl_out_cap) {
+        size_t cap = s_pl_out_cap ? s_pl_out_cap : 65536;
+        while (cap < need) cap *= 2;
+        u8* t = (u8*)realloc(s_pl_out, cap);
+        if (!t) return;
+        s_pl_out = t; s_pl_out_cap = cap;
+    }
+    const u32 sum = pl_sum(pl_sum(2166136261u, (const u8*)head, (size_t)nhead * 4u), ucode, len);
+    u8* o = s_pl_out + s_pl_out_n;
+    memcpy(o, &type, 4); memcpy(o + 4, &plen, 4); memcpy(o + 8, &sum, 4);
+    memcpy(o + 12, head, (size_t)nhead * 4u); memcpy(o + 12 + nhead * 4, ucode, len);
+    s_pl_out_n = need;
+}
+
+static BOOL CALLBACK pl_load(PINIT_ONCE once, PVOID arg, PVOID* ctx)
+{
+    (void)once; (void)arg; (void)ctx;
+    { const char* e = getenv("SHADER_CACHE"); if (e && e[0] == '0') return TRUE; }
+    CreateDirectoryA("shader_cache", NULL);
+    CreateDirectoryA(shader_cache_dir(), NULL);
+    snprintf(s_pl_path, sizeof s_pl_path, "%s/pipelines.list", shader_cache_dir());
+    s_pl_on = 1;
+    { const char* m = getenv("SHADER_PRELOAD");
+      s_pl_mode = (m && m[0] == '0') ? 0 : (m && !_stricmp(m, "wait")) ? 2 : 1; }
+    /* Vertex-program edits for diagnosis that the list does not carry. */
+    if (getenv("VP_W_ONE") || getenv("VP_BYPASS")) s_pl_mode = 0;
+    FILE* f = fopen(s_pl_path, "rb");
+    size_t sz = 0;
+    if (f) {
+        fseek(f, 0, SEEK_END); const long n = ftell(f); fseek(f, 0, SEEK_SET);
+        if (n > 0 && (s_pl_file = (u8*)malloc((size_t)n)) != NULL &&
+            fread(s_pl_file, 1, (size_t)n, f) == (size_t)n) sz = (size_t)n;
+        fclose(f);
+    }
+    const u8* p = s_pl_file;
+    if (sz < 8 || pl_rd32(p) != PL_MAGIC || pl_rd32(p + 4) != PL_VERSION) {
+        s_pl_rewrite = 1;   /* none yet, or another format: start a new list */
+        return TRUE;
+    }
+    int cap_vs = 0, cap_fp = 0;
+    size_t at = 8;
+    while (at + 12 <= sz) {
+        const u32 type = pl_rd32(p + at), plen = pl_rd32(p + at + 4);
+        if (plen > sz - at - 12 || pl_sum(2166136261u, p + at + 12, plen) != pl_rd32(p + at + 8)) break;
+        const u8* q = p + at + 12;
+        if (type == PL_REC_VS && plen >= 16 && 16u + pl_rd32(q + 12) == plen) {
+            if (pl_known_add(pl_vs_id(pl_rd32(q))) && s_pl_nvs < PL_MAX_VS) {
+                if (s_pl_nvs == cap_vs) {
+                    cap_vs = cap_vs ? cap_vs * 2 : 256;
+                    PlVs* t = (PlVs*)realloc(s_pl_vs, (size_t)cap_vs * sizeof *t);
+                    if (!t) break;
+                    s_pl_vs = t;
+                }
+                PlVs* v = &s_pl_vs[s_pl_nvs++];
+                memset(v, 0, sizeof *v);
+                v->hash = pl_rd32(q); v->vstart = pl_rd32(q + 4); v->vtex_mask = pl_rd32(q + 8);
+                v->len = pl_rd32(q + 12); v->ucode = q + 16;
+            }
+        } else if (type == PL_REC_FP && plen >= 44 && 44u + pl_rd32(q + 40) == plen) {
+            PlFp r;
+            memset(&r, 0, sizeof r);
+            r.key.vs_hash = pl_rd32(q); r.key.blend = pl_rd32(q + 4); r.key.nrt = (int)pl_rd32(q + 8);
+            r.key.rtfmt = pl_rd32(q + 12); r.key.exp32 = (int)pl_rd32(q + 16); r.key.ucode_hash = pl_rd32(q + 20);
+            r.key.cmask = pl_rd32(q + 24); r.key.cull = pl_rd32(q + 28); r.key.cube_mask = pl_rd32(q + 32);
+            r.key.fp_addr = pl_rd32(q + 36); r.key.vs_idx = -1;
+            r.len = pl_rd32(q + 40); r.ucode = q + 44;
+            if (pl_known_add(pl_fp_id(&r.key)) && s_pl_nfp < PL_MAX_FP) {
+                if (s_pl_nfp == cap_fp) {
+                    cap_fp = cap_fp ? cap_fp * 2 : 1024;
+                    PlFp* t = (PlFp*)realloc(s_pl_fp, (size_t)cap_fp * sizeof *t);
+                    if (!t) break;
+                    s_pl_fp = t;
+                }
+                s_pl_fp[s_pl_nfp++] = r;
+            }
+        }
+        at += 12u + plen;
+    }
+    s_pl_good = at;
+    if (at != sz) s_pl_rewrite = 1;   /* cut off mid-record (the game was closed while writing) */
+    s_pl_vs_index_cap = 16;
+    while (s_pl_vs_index_cap < (u32)s_pl_nvs * 2u) s_pl_vs_index_cap *= 2;
+    s_pl_vs_index = (int*)calloc(s_pl_vs_index_cap, sizeof *s_pl_vs_index);
+    if (!s_pl_vs_index) s_pl_vs_index_cap = 0;
+    for (int i = 0; i < s_pl_nvs && s_pl_vs_index; i++) {
+        u32 j = (s_pl_vs[i].hash * 0x9E3779B1u) & (s_pl_vs_index_cap - 1);
+        while (s_pl_vs_index[j]) j = (j + 1) & (s_pl_vs_index_cap - 1);
+        s_pl_vs_index[j] = i + 1;
+    }
+    fprintf(stderr, "[PRELOAD] %s: %d vertex programs, %d pipelines listed%c", s_pl_path, s_pl_nvs, s_pl_nfp, 10);
+    return TRUE;
+}
+static int pl_ready(void)
+{
+    InitOnceExecuteOnce(&s_pl_once, pl_load, NULL, NULL);
+    return s_pl_on;
+}
+static PlVs* pl_vs_find(u32 hash)
+{
+    if (!s_pl_vs_index_cap) return NULL;
+    for (u32 j = (hash * 0x9E3779B1u) & (s_pl_vs_index_cap - 1);; j = (j + 1) & (s_pl_vs_index_cap - 1)) {
+        const int v = s_pl_vs_index[j];
+        if (!v) return NULL;
+        if (s_pl_vs[v - 1].hash == hash) return &s_pl_vs[v - 1];
+    }
+}
+static const PlVs* pl_vs_ready(u32 hash)
+{
+    if (!pl_ready()) return NULL;
+    const PlVs* v = pl_vs_find(hash);
+    return v && v->state == 1 && v->vs ? v : NULL;
+}
+static void pl_record_vs(u32 hash, u32 vstart, u32 vtex_mask, const u8* ucode, u32 len)
+{
+    if (!ucode || !len || !pl_ready()) return;
+    const u32 head[4] = { hash, vstart, vtex_mask, len };
+    AcquireSRWLockExclusive(&s_pl_lock);
+    if (pl_known_add(pl_vs_id(hash))) pl_put_record(PL_REC_VS, head, 4, ucode, len);
+    ReleaseSRWLockExclusive(&s_pl_lock);
+}
+/* The primary vertex program (vs_hash 0) is not listed: it is not rebuilt
+ * from a listed program, and the game builds it at once anyway. */
+static void pl_record_fp(const VPFPEntry* k, const u8* ucode, u32 len)
+{
+    if (!k->vs_hash || !ucode || !len || !pl_ready()) return;
+    const u32 head[11] = { k->vs_hash, k->blend, (u32)k->nrt, k->rtfmt, (u32)k->exp32, k->ucode_hash,
+                           k->cmask, k->cull, k->cube_mask, k->fp_addr, len };
+    AcquireSRWLockExclusive(&s_pl_lock);
+    if (pl_known_add(pl_fp_id(k))) pl_put_record(PL_REC_FP, head, 11, ucode, len);
+    ReleaseSRWLockExclusive(&s_pl_lock);
+}
+/* New records reach the file within a second: the game is usually closed
+ * with the window's X. */
+static void pl_flush(void)
+{
+    const ULONGLONG now = GetTickCount64();
+    if (now - s_pl_flushed_at < 1000) return;
+    s_pl_flushed_at = now;
+    AcquireSRWLockExclusive(&s_pl_lock);
+    u8* buf = s_pl_out; const size_t n = s_pl_out_n;
+    const int rewrite = s_pl_rewrite;
+    if (!n && !rewrite) { ReleaseSRWLockExclusive(&s_pl_lock); return; }
+    s_pl_out = NULL; s_pl_out_n = s_pl_out_cap = 0; s_pl_rewrite = 0;
+    ReleaseSRWLockExclusive(&s_pl_lock);
+    if (rewrite) {   /* the header, what was good of the old list, then the new records */
+        char tmp[300];
+        snprintf(tmp, sizeof tmp, "%s.tmp", s_pl_path);
+        FILE* f = fopen(tmp, "wb");
+        if (f) {
+            int ok;
+            if (s_pl_good >= 8) ok = fwrite(s_pl_file, 1, s_pl_good, f) == s_pl_good;
+            else { const u32 hdr[2] = { PL_MAGIC, PL_VERSION }; ok = fwrite(hdr, 1, 8, f) == 8; }
+            ok = ok && (!n || fwrite(buf, 1, n, f) == n);
+            ok = (fclose(f) == 0) && ok;
+            if (!ok || !MoveFileExA(tmp, s_pl_path, MOVEFILE_REPLACE_EXISTING)) DeleteFileA(tmp);
+        }
+    } else {
+        FILE* f = fopen(s_pl_path, "ab");
+        if (f) { fwrite(buf, 1, n, f); fclose(f); }
+    }
+    free(buf);
+}
+
+static void pl_build_vs(PlVs* v)
+{
+    extern int rsx_vp_decompile_ex(const uint8_t*, u32, u32, char*, u32);
+    extern void rsx_vp_set_branch_base(u32);
+    enum { CAP = 262144 };
+    char* hlsl = (char*)malloc(CAP);
+    int ok = 0;
+    /* The same identity vp_get_vs gives the program, or it is not this one. */
+    u32 hash = vp_hash_ucode(v->ucode, v->len) ^ (v->vtex_mask * 0x9E3779B1u) ^ ((v->vstart / 16u + 1u) * 0x85EBCA6Bu);
+    if (!hash) hash = 1u;
+    if (hlsl && hash == v->hash) {
+        rsx_vp_set_branch_base(v->vstart / 16u);
+        if (rsx_vp_decompile_ex(v->ucode, v->len, v->vtex_mask, hlsl, CAP) > 0) {
+            ID3DBlob* b = NULL; ID3DBlob* e = NULL;
+            const HRESULT hr = shader_compile_cached(hlsl, strlen(hlsl), "guest_vp2", "vs_5_0", &b, &e);
+            if (e) e->lpVtbl->Release(e);
+            if (SUCCEEDED(hr) && b) {
+                v->uses_c03 = (strstr(hlsl, "vp_c[0]") || strstr(hlsl, "vp_c[1]") ||
+                               strstr(hlsl, "vp_c[2]") || strstr(hlsl, "vp_c[3]")) ? 1 : 0;
+                char* kept = (char*)realloc(hlsl, strlen(hlsl) + 1);
+                v->hlsl = kept ? kept : hlsl; hlsl = NULL;
+                v->vs = b; ok = 1;
+            }
+        }
+    }
+    free(hlsl);
+    InterlockedExchange(&v->state, ok ? 1 : 2);
+}
+
+static DWORD WINAPI pl_worker(LPVOID arg)
+{
+    (void)arg;
+    for (;;) {   /* the vertex programs first: the pipelines are built with them */
+        const LONG i = InterlockedIncrement(&s_pl_next_vs) - 1;
+        if (i >= s_pl_nvs) break;
+        pl_build_vs(&s_pl_vs[i]);
+        InterlockedIncrement(&s_pl_done_vs);
+    }
+    while (s_pl_done_vs < s_pl_nvs) Sleep(1);
+    FpJob j;
+    memset(&j, 0, sizeof j);   /* one job, its HLSL buffer reused */
+    for (;;) {
+        const LONG i = InterlockedIncrement(&s_pl_next_fp) - 1;
+        if (i >= s_pl_nfp) break;
+        const PlFp* r = &s_pl_fp[i];
+        const PlVs* v = pl_vs_find(r->key.vs_hash);
+        if (v && v->state == 1 && v->vs) {
+            j.key = r->key; j.ucode = (u8*)r->ucode; j.ucode_bytes = r->len;
+            j.vsb = v->vs; j.pso = NULL;
+            const int st = fp_build_pso(&j);
+            PlDone* d = (st == FPB_OK && j.pso) || st == FPB_SKIP ? (PlDone*)malloc(sizeof *d) : NULL;
+            if (d) {
+                d->key = r->key; d->pso = j.pso; d->skip = st == FPB_SKIP;
+                AcquireSRWLockExclusive(&s_pl_lock);
+                d->next = s_pl_done; s_pl_done = d;
+                ReleaseSRWLockExclusive(&s_pl_lock);
+                InterlockedIncrement(&s_pl_built);
+            } else if (j.pso) j.pso->lpVtbl->Release(j.pso);
+        }
+        InterlockedIncrement(&s_pl_done_fp);
+    }
+    free(j.hlsl);
+    InterlockedDecrement(&s_pl_threads_left);
+    return 0;
+}
+
+/* Render thread: hand the preloaded pipelines to the cache. */
+static void pl_drain(void)
+{
+    AcquireSRWLockExclusive(&s_pl_lock);
+    PlDone* d = s_pl_done; s_pl_done = NULL;
+    ReleaseSRWLockExclusive(&s_pl_lock);
+    while (d) {
+        PlDone* nx = d->next;
+        VPFPEntry key = d->key;
+        key.gen = s_d3d.vp_gen;
+        const int idx = fp_index_find(&key);
+        if (idx < 0) fp_cache_insert(&key, d->pso, 0, d->skip);
+        else if (s_d3d.vp_fp[idx].pending) {   /* the game asked first: its own build is dropped */
+            VPFPEntry* e = &s_d3d.vp_fp[idx];
+            e->pso = d->pso; e->pending = 0; e->skip = (u8)d->skip;
+        } else if (d->pso) d->pso->lpVtbl->Release(d->pso);
+        free(d);
+        d = nx;
+    }
+}
+
+/* Frame start, render thread. The preload starts once the base vertex
+ * pipeline exists: the cache keys its pipelines with that generation. */
+static void pl_tick(void)
+{
+    if (!pl_ready()) return;
+    pl_flush();
+    if (!s_pl_started && s_pl_mode && (s_pl_nvs || s_pl_nfp) && s_d3d.vp_ready && s_d3d.vp_root_sig) {
+        s_pl_started = 1;
+        SYSTEM_INFO si; GetSystemInfo(&si);
+        const int cores = (int)si.dwNumberOfProcessors;
+        int nt = s_pl_mode == 2 ? cores - 1 : cores / 4;   /* waiting, the game needs no CPU */
+        if (nt < 1) nt = 1; if (nt > 12) nt = 12;
+        { const char* e = getenv("SHADER_PRELOAD_PARALLEL"); if (e && e[0] == '0') nt = 1; }
+        s_pl_t0 = perf_now();
+        for (int i = 0; i < nt; i++) {
+            InterlockedIncrement(&s_pl_threads_left);
+            HANDLE th = CreateThread(NULL, 0, pl_worker, NULL, 0, NULL);
+            if (!th) { InterlockedDecrement(&s_pl_threads_left); continue; }
+            SetThreadPriority(th, s_pl_mode == 2 ? THREAD_PRIORITY_NORMAL : THREAD_PRIORITY_LOWEST);
+            ps3_host_thread_name(th, "shader:preload %d", i);
+            CloseHandle(th);
+        }
+        fprintf(stderr, "[PRELOAD] loading %d vertex programs and %d pipelines on %d thread(s)%s%c",
+                s_pl_nvs, s_pl_nfp, nt, s_pl_mode == 2 ? ", the game waits" : "", 10);
+    }
+    if (s_pl_mode == 2 && s_pl_threads_left > 0) {   /* hold the frame, a little at a time: the note stays drawn */
+        const double t0 = perf_now();
+        while (s_pl_threads_left > 0 && perf_now() - t0 < 0.1) Sleep(2);
+    }
+    pl_drain();
+    if (s_pl_started && !s_pl_reported && s_pl_threads_left <= 0) {
+        s_pl_reported = 1;
+        fprintf(stderr, "[PRELOAD] %ld pipelines ready in %.1f s (%d listed)%c",
+                (long)s_pl_built, perf_now() - s_pl_t0, s_pl_nfp, 10);
+    }
+}
+
+/* For the corner note (rsx_perf_overlay.c): 1 while the preload runs. */
+int rsx_shader_preload_progress(int* done, int* total)
+{
+    if (done) *done = (int)(s_pl_done_vs + s_pl_done_fp);
+    if (total) *total = s_pl_nvs + s_pl_nfp;
+    return s_pl_started && s_pl_threads_left > 0;
 }
 
 /* Upload the guest texture for a VP draw into a per-frame texture slot
@@ -7053,6 +7460,7 @@ static void render_frame_impl(void)
     plib_init();          /* first frame: open shader_cache/pipelines.bin */
     fp_async_drain();     /* pipelines the shader workers finished */
     plib_maybe_save();
+    pl_tick();            /* the shader preload: start it, hand over what it built */
       if (perf_on()) _h_misc = perf_now() - _m0; }
 
     off_rt_writeback_flush();   /* GPU is idle: last frame's copies are ready */
