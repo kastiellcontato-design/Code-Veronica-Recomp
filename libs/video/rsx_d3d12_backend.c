@@ -262,6 +262,7 @@ typedef struct {
     int uses_c03;
     char* hlsl;             /* decompiled source, kept for rsxcap */
     u64 last_used;          /* frame of the last lookup: the least recent is replaced */
+    volatile LONG pending;  /* compiling in the background: vs is still NULL */
 } VPVSEntry;
 /* 4096: Code Veronica's outdoor areas went past 256 distinct programs (log:
  * "VS cache full"). A full cache replaces its least recently used slot in
@@ -2477,6 +2478,8 @@ static void rsx_capture_frame(u32 fi, u32 ndraws, u32 capidx)
  * off. Safe from the record and render threads (distinct files; temp file
  * then rename). */
 static volatile LONG s_shc_hits = 0, s_shc_miss = 0;
+/* HITCHDBG=1: where a long frame's time went. */
+static volatile LONG s_hd_vs_us = 0, s_hd_vs_n = 0, s_hd_fpi_us = 0, s_hd_fpi_n = 0, s_hd_wait_us = 0;
 
 static HRESULT shader_compile_cached(const char* src, size_t len, const char* name,
                                      const char* target, ID3DBlob** out, ID3DBlob** err)
@@ -2949,6 +2952,34 @@ static void vtex_record(D3D12DrawRecord* dr, const rsx_state* st)
 
 static void render_wait_idle(void);   /* render thread, see render_frame() */
 
+/* Background VS compile. A first-time vertex program took FXC 30-170 ms on
+ * the thread recording the guest's commands -- and a room brings a dozen at
+ * once, which held the game for over half a second. The slot is published
+ * with vs = NULL and pending set; draws that need it are left out (or, if
+ * urgent, waited for) until the blob lands. */
+typedef struct VsJob { int slot; u32 hash; char* hlsl; } VsJob;
+static VOID CALLBACK vs_compile_job(PTP_CALLBACK_INSTANCE inst, PVOID ctx)
+{
+    (void)inst;
+    VsJob* j = (VsJob*)ctx;
+    ID3DBlob* vb = NULL; ID3DBlob* e = NULL;
+    const double t0 = perf_now();
+    HRESULT hr = shader_compile_cached(j->hlsl, strlen(j->hlsl), "guest_vp2", "vs_5_0", &vb, &e);
+    InterlockedAdd(&s_hd_vs_us, (LONG)((perf_now() - t0) * 1e6)); InterlockedIncrement(&s_hd_vs_n);
+    if (e) e->lpVtbl->Release(e);
+    if (FAILED(hr) || !vb) {
+        static int _e = 0; if (_e++ < 4) printf("[VP] per-draw VS compile FAIL (hash=0x%08X)%c", j->hash, 10);
+        vb = NULL;
+    }
+    VPVSEntry* v = &s_d3d.vp_vs[j->slot];
+    /* The slot cannot be replaced while pending (see the LRU pick). A failed
+     * compile leaves vs NULL: its draws fall back to the primary program, as
+     * an inline failure always did (-1). */
+    if (vb) InterlockedExchangePointer((PVOID volatile*)&v->vs, vb);
+    InterlockedExchange(&v->pending, 0);
+    free(j->hlsl); free(j);
+}
+
 static int vp_get_vs(const rsx_state* st)
 {
     extern int rsx_vp_decompile_ex(const uint8_t*, u32, u32, char*, u32);
@@ -3054,19 +3085,13 @@ static int vp_get_vs(const rsx_state* st)
             at += n;
         }
     }
-    ID3DBlob* vb = NULL; ID3DBlob* e = NULL;
-    HRESULT hr = shader_compile_cached(hlsl, strlen(hlsl), "guest_vp2", "vs_5_0", &vb, &e);
-    if (e) e->lpVtbl->Release(e);
-    if (FAILED(hr) || !vb) {
-        static int _e=0; if (_e++<4) printf("[VP] per-draw VS compile FAIL (hash=0x%08X)\n", hash);
-        return -1;
-    }
     int slot;
     if (s_d3d.vp_vs_n < VP_VS_CACHE) slot = s_d3d.vp_vs_n++;
     else {  /* replace the least recently used slot, in place */
         slot = 0;
-        for (int i = 1; i < VP_VS_CACHE; i++)
-            if (s_d3d.vp_vs[i].last_used < s_d3d.vp_vs[slot].last_used) slot = i;
+        while (slot < VP_VS_CACHE - 1 && s_d3d.vp_vs[slot].pending) slot++;
+        for (int i = slot + 1; i < VP_VS_CACHE; i++)
+            if (!s_d3d.vp_vs[i].pending && s_d3d.vp_vs[i].last_used < s_d3d.vp_vs[slot].last_used) slot = i;
         render_wait_idle();   /* the render thread may still read the old program */
         { static int _w=0; if (_w++<3) printf("[VP] VS cache full (%d): replacing the least recently used program%c", VP_VS_CACHE, 10); }
         if (s_d3d.vp_vs[slot].vs) s_d3d.vp_vs[slot].vs->lpVtbl->Release(s_d3d.vp_vs[slot].vs);
@@ -3079,8 +3104,15 @@ static int vp_get_vs(const rsx_state* st)
       if ((++built & 255u) == 0) printf("[VP] %u vertex programs built (%d cached, frame %llu)%c",
                                         built, s_d3d.vp_vs_n, (unsigned long long)s_d3d.frame_count, 10); }
     s_d3d.vp_vs[slot].hash = hash;
-    s_d3d.vp_vs[slot].vs   = vb;
+    s_d3d.vp_vs[slot].vs   = NULL;
     s_d3d.vp_vs[slot].hlsl = _strdup(hlsl);
+    { VsJob* j = (VsJob*)calloc(1, sizeof *j);
+      s_d3d.vp_vs[slot].pending = 1;
+      if (j) { j->slot = slot; j->hash = hash; j->hlsl = _strdup(hlsl); }
+      if (!j || !j->hlsl) { if (j) free(j); s_d3d.vp_vs[slot].pending = 0; }
+      else if (!TrySubmitThreadpoolCallback(vs_compile_job, j, NULL))
+          vs_compile_job(NULL, j);   /* no pool: compile here */
+    }
     s_d3d.vp_vs[slot].uses_c03 =
         (strstr(hlsl, "vp_c[0]") || strstr(hlsl, "vp_c[1]") ||
          strstr(hlsl, "vp_c[2]") || strstr(hlsl, "vp_c[3]")) ? 1 : 0;
@@ -3437,6 +3469,7 @@ typedef struct FpJob {
     u32 ucode_bytes;
     char* hlsl;                /* grows only while this pipeline is built */
     u32 hlsl_cap;
+    int urgent;                /* a draw that must not be left out: the frame waits */
 } FpJob;
 
 static void fp_job_free(FpJob* j)
@@ -3450,7 +3483,8 @@ static void fp_job_free(FpJob* j)
 static volatile LONG s_fp_async_skips = 0, s_fp_async_built = 0;
 static volatile LONG s_fp_build_us = 0;  /* worker build time, for PERF */
 static LONG s_fp_drawn_skips = 0;   /* draws really left out (render thread), for PERF */
-static volatile LONG s_fp_inflight = 0;                /* submitted, not yet built */
+static volatile LONG s_fp_inflight = 0;
+static volatile LONG s_fp_urgent_inflight = 0;   /* urgent builds the frame waits for */                /* submitted, not yet built */
 static SRWLOCK s_fpq_lock = SRWLOCK_INIT;
 static CONDITION_VARIABLE s_fpq_cv = CONDITION_VARIABLE_INIT;
 static CONDITION_VARIABLE s_fpq_done_cv = CONDITION_VARIABLE_INIT;
@@ -3469,13 +3503,18 @@ static DWORD WINAPI fp_worker(LPVOID p)
         FpJob* j = s_fpq_head;
         s_fpq_head = j->next; if (!s_fpq_head) s_fpq_tail = NULL;
         ReleaseSRWLockExclusive(&s_fpq_lock);
+        /* The frame is waiting on an urgent build: compete for the CPU at
+         * the game's own priority rather than below it. */
+        if (j->urgent) SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_NORMAL);
         { const double t0 = perf_now();
           j->status = fp_build_pso(j);
           InterlockedAdd(&s_fp_build_us, (LONG)((perf_now() - t0) * 1e6)); }
+        if (j->urgent) SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
         InterlockedIncrement(&s_fp_async_built);
         AcquireSRWLockExclusive(&s_fpq_lock);
         j->next = s_fpq_done; s_fpq_done = j;
         InterlockedDecrement(&s_fp_inflight);
+        if (j->urgent) InterlockedDecrement(&s_fp_urgent_inflight);
         ReleaseSRWLockExclusive(&s_fpq_lock);
         WakeAllConditionVariable(&s_fpq_done_cv);
     }
@@ -3509,9 +3548,15 @@ static int fp_async_on(void)
 static void fp_async_submit(FpJob* j)
 {
     AcquireSRWLockExclusive(&s_fpq_lock);
-    j->next = NULL;
-    if (s_fpq_tail) s_fpq_tail->next = j; else s_fpq_head = j;
-    s_fpq_tail = j;
+    if (j->urgent) {             /* ahead of the queue: the frame is waiting */
+        j->next = s_fpq_head; s_fpq_head = j;
+        if (!s_fpq_tail) s_fpq_tail = j;
+        InterlockedIncrement(&s_fp_urgent_inflight);
+    } else {
+        j->next = NULL;
+        if (s_fpq_tail) s_fpq_tail->next = j; else s_fpq_head = j;
+        s_fpq_tail = j;
+    }
     InterlockedIncrement(&s_fp_inflight);
     ReleaseSRWLockExclusive(&s_fpq_lock);
     WakeConditionVariable(&s_fpq_cv);
@@ -3544,7 +3589,7 @@ static void fp_cache_insert(const VPFPEntry* key, ID3D12PipelineState* pso, int 
 static int fp_async_wait_ms(void)
 {
     static int budget = -1;
-    if (budget < 0) { const char* e = getenv("FP_ASYNC_WAIT_MS"); budget = e ? atoi(e) : 8; }
+    if (budget < 0) { const char* e = getenv("FP_ASYNC_WAIT_MS"); budget = e ? atoi(e) : 4; }
     return budget;
 }
 static void fp_async_wait_for(double lim)
@@ -3555,6 +3600,22 @@ static void fp_async_wait_for(double lim)
     while (s_fp_inflight > 0 && perf_now() - t0 < lim)
         SleepConditionVariableSRW(&s_fpq_done_cv, &s_fpq_lock, 1, 0);   /* woken per finished build */
     ReleaseSRWLockExclusive(&s_fpq_lock);
+    InterlockedAdd(&s_hd_wait_us, (LONG)((perf_now() - t0) * 1e6));
+}
+
+/* The urgent builds this frame queued: composites and full-screen passes,
+ * which would black out the frame if left out. They used to be built inline,
+ * one after another -- ten first-time programs held the frame for a second.
+ * On the workers they build in parallel; the frame waits for all of them. */
+static void fp_async_wait_urgent(void)
+{
+    if (s_fp_async <= 0 || !s_fp_urgent_inflight) return;
+    const double t0 = perf_now();
+    AcquireSRWLockExclusive(&s_fpq_lock);
+    while (s_fp_urgent_inflight > 0 && perf_now() - t0 < 2.0)
+        SleepConditionVariableSRW(&s_fpq_done_cv, &s_fpq_lock, 1, 0);
+    ReleaseSRWLockExclusive(&s_fpq_lock);
+    InterlockedAdd(&s_hd_wait_us, (LONG)((perf_now() - t0) * 1e6));
 }
 
 /* Render thread, frame start: hand finished builds to their cache entries. */
@@ -4134,9 +4195,17 @@ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, in
     /* Resolve the VS: the draw's cached per-VP blob, else the primary. */
     ID3DBlob* vsb = NULL; u32 vs_hash = 0;
     if (vs_idx >= 0 && vs_idx < s_d3d.vp_vs_n) {
-        vsb = s_d3d.vp_vs[vs_idx].vs; vs_hash = s_d3d.vp_vs[vs_idx].hash;
+        VPVSEntry* v = &s_d3d.vp_vs[vs_idx];
+        if (v->pending) {   /* its VS is still compiling */
+            if (!urgent) { s_fp_skip_draw = 1; return NULL; }
+            const double t0 = perf_now();
+            while (v->pending && perf_now() - t0 < 2.0) Sleep(1);
+            InterlockedAdd(&s_hd_wait_us, (LONG)((perf_now() - t0) * 1e6));
+        }
+        vsb = (ID3DBlob*)InterlockedCompareExchangePointer((PVOID volatile*)&v->vs, NULL, NULL);
+        vs_hash = v->hash;
     }
-    if (!vsb) { vsb = s_d3d.vp_vs_blob; vs_idx = -1; }
+    if (!vsb) { vsb = s_d3d.vp_vs_blob; vs_idx = -1; vs_hash = 0; }
     if (!vsb) return NULL;
 
     /* SET_SHADER_PROGRAM low bits = location+1 (same as textures): 1 = LOCAL
@@ -4288,14 +4357,17 @@ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, in
     /* Background build: mark the key pending, skip this draw, and let a
      * worker build it. The finished pipeline is picked up by fp_async_drain
      * at the start of a later frame. */
-    if (!urgent && fp_async_on()) {
+    if (fp_async_on()) {
+        j->urgent = urgent;
         fp_cache_insert(&key, NULL, 1, 0);
         fp_async_submit(j);
         s_fp_skip_draw = 1;
         InterlockedIncrement(&s_fp_async_skips);
         return NULL;
     }
+    const double _hf0 = perf_now();
     int st = fp_build_pso(j);
+    InterlockedAdd(&s_hd_fpi_us, (LONG)((perf_now() - _hf0) * 1e6)); InterlockedIncrement(&s_hd_fpi_n);
     ID3D12PipelineState* pso = j->pso;
     fp_job_free(j);
     fp_cache_insert(&key, pso, 0, st == FPB_SKIP);
@@ -7494,10 +7566,18 @@ static void render_frame_impl(void)
 
     /* Pipelines the prepass just queued: wait briefly, then pick them up so
      * the draw loop below (which looks each one up again) can use them. */
-    if (s_fp_inflight) { fp_async_wait_for(fp_async_wait_ms() / 1000.0); fp_async_drain(); }
-    /* Draws whose pipeline is first asked for in the draw loop below (the
-     * prepass keys some of them differently) share this frame's budget. */
+    /* One budget for the frame, shared with the draw loop below (the prepass
+     * keys some draws differently). A build from the disk caches takes about
+     * a millisecond; a first-time compile takes 30-100, and waiting longer
+     * for one only stretched the frame -- the stutter on every new shader. */
     double draw_wait_left = fp_async_wait_ms() / 1000.0;
+    if (s_fp_inflight) {
+        fp_async_wait_urgent();
+        const double tw = perf_now();
+        fp_async_wait_for(draw_wait_left);
+        draw_wait_left -= perf_now() - tw;
+        fp_async_drain();
+    }
     if (perf_on()) s_perf_pre += perf_now() - _pre0;
     /* Set render target + depth */
     s_d3d.cmd_list->lpVtbl->OMSetRenderTargets(s_d3d.cmd_list, 1, &rtv_handle, FALSE, &dsv_handle);
@@ -7917,7 +7997,9 @@ static void render_frame_impl(void)
                  * of the frame's budget) rather than drop the draw -- the
                  * character and props vanished for a frame or more each time
                  * a room's pipelines came back from disk. */
-                if (!dpso && dr->fp_addr && s_fp_skip_draw && s_fp_inflight && draw_wait_left > 0.0) {
+                if (!dpso && dr->fp_addr && s_fp_skip_draw &&
+                    ((s_fp_inflight && (draw_wait_left > 0.0 || s_fp_urgent_inflight)) || s_fpq_done)) {
+                    fp_async_wait_urgent();
                     const double tw = perf_now();
                     fp_async_wait_for(draw_wait_left);
                     draw_wait_left -= perf_now() - tw;
@@ -8607,6 +8689,21 @@ skip_dump_consider: ;
     move_to_next_frame();
 
     s_d3d.frame_count++;
+    { static int on = -1; static double last = 0.0;
+      if (on < 0) on = getenv("HITCHDBG") ? 1 : 0;
+      if (on) {
+          const double now = perf_now(), dt = last > 0.0 ? now - last : 0.0; last = now;
+          const LONG vs = InterlockedExchange(&s_hd_vs_us, 0), vn = InterlockedExchange(&s_hd_vs_n, 0);
+          const LONG fi = InterlockedExchange(&s_hd_fpi_us, 0), fn = InterlockedExchange(&s_hd_fpi_n, 0);
+          const LONG wt = InterlockedExchange(&s_hd_wait_us, 0);
+          { static double mx = 0.0; static int k = 0; if (dt > mx) mx = dt;
+            if (++k == 300) { fprintf(stderr, "[HITCH] longest frame of the last 300: %.1f ms%c", mx * 1000.0, 10); k = 0; mx = 0.0; } }
+          if (dt > 0.045)
+              fprintf(stderr, "[HITCH] frame %llu took %.1f ms: VS compiles %ld (%.1f ms), inline FP builds %ld (%.1f ms),"
+                     " waits %.1f ms, background in flight %ld%c",
+                     (unsigned long long)s_d3d.frame_count, dt * 1000.0, (long)vn, vs / 1000.0,
+                     (long)fn, fi / 1000.0, wt / 1000.0, (long)s_fp_inflight, 10);
+      } }
 
     /* RPCS3-style titlebar stats, refreshed once a second: presented FPS,
      * draw count of the last frame, and the render (backbuffer) size. */
