@@ -228,7 +228,8 @@ typedef struct {
 /* Per-draw vertex-texture windows (t16-t19), indexed like the t0-t3 ones. */
 #define VTEX_SRV_BASE (ZCONV_SRV + FP_TEX_UNITS)
 #define AA_SRV_BASE   (VTEX_SRV_BASE + MAX_DRAWS * 4)   /* anti-aliasing pass: 5 views */
-#define SRV_HEAP_SIZE (AA_SRV_BASE + 8)
+#define DISPLAY_SRV_BASE (AA_SRV_BASE + 8)   /* display pass: 5 views per frame slot */
+#define SRV_HEAP_SIZE (DISPLAY_SRV_BASE + 5 * FRAME_COUNT)
 
 /* Per-frame VP texture slot: a guest texture uploaded for this frame's VP
  * draws (re-uploaded every frame -- gcm/cube's plasma animates in guest
@@ -488,6 +489,76 @@ void rsx_d3d12_set_ui_quads(const rsx_ui_quad* quads,u32 count)
 /* Draw `count` quads into back buffer `fi` with the flat UI pipeline, `mvp`
  * mapping their coordinates to clip space. Holds no lock: the caller keeps
  * `quads` alive until this returns. */
+/* The display layer. The game renders at its render size into its own
+ * targets (s_d3d.render_targets); the swap chain is the window's client size,
+ * and each presented frame is the game image scaled into it, with the
+ * port's overlays (SRT, performance panel, notices) drawn on top at the
+ * window's own pixels, so they stay sharp whatever the render size.
+ * DISPLAY_SCALE=0 goes back to the swap chain at render size, stretched by
+ * DXGI, with the overlays drawn into the game image. */
+static int s_display = 0;
+static ID3D12Resource* s_disp_bufs[FRAME_COUNT];
+static ID3D12DescriptorHeap* s_disp_rtv;
+static u32 s_disp_w, s_disp_h;
+/* Where quad_batch_draw draws: the game target of the frame by default. */
+static int s_qb_display;
+static D3D12_CPU_DESCRIPTOR_HANDLE s_qb_rtv;
+static u32 s_qb_w, s_qb_h;
+
+static ID3D12Resource* game_rt_new(u32 w, u32 h)
+{
+    D3D12_HEAP_PROPERTIES hp = {0}; hp.Type = D3D12_HEAP_TYPE_DEFAULT;
+    D3D12_RESOURCE_DESC td = {0};
+    td.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    td.Width = w; td.Height = h; td.DepthOrArraySize = 1; td.MipLevels = 1;
+    td.Format = DXGI_FORMAT_R8G8B8A8_UNORM; td.SampleDesc.Count = 1;
+    td.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+    D3D12_CLEAR_VALUE cv = {0}; cv.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    memcpy(cv.Color, s_d3d.clear_color, sizeof cv.Color);
+    ID3D12Resource* r = NULL;
+    /* PRESENT (= COMMON): the frame's barriers treat it like a swap chain buffer */
+    if (FAILED(s_d3d.device->lpVtbl->CreateCommittedResource(s_d3d.device, &hp, D3D12_HEAP_FLAG_NONE, &td,
+            D3D12_RESOURCE_STATE_PRESENT, &cv, &IID_ID3D12Resource, (void**)&r))) return NULL;
+    return r;
+}
+
+/* (Re)creates the game targets at the render size, and their RTVs. */
+static int game_rts_create(void)
+{
+    D3D12_CPU_DESCRIPTOR_HANDLE rtv;
+    s_d3d.rtv_heap->lpVtbl->GetCPUDescriptorHandleForHeapStart(s_d3d.rtv_heap, &rtv);
+    for (u32 i = 0; i < FRAME_COUNT; i++) {
+        s_d3d.render_targets[i] = game_rt_new(rs_dim(s_d3d.width, s_rs), rs_dim(s_d3d.height, s_rs));
+        if (!s_d3d.render_targets[i]) return 0;
+        s_d3d.device->lpVtbl->CreateRenderTargetView(s_d3d.device, s_d3d.render_targets[i], NULL, rtv);
+        rtv.ptr += s_d3d.rtv_descriptor_size;
+    }
+    return 1;
+}
+
+/* The swap chain buffers (window size) and their RTVs. */
+static int display_bufs_get(void)
+{
+    D3D12_CPU_DESCRIPTOR_HANDLE rtv;
+    s_disp_rtv->lpVtbl->GetCPUDescriptorHandleForHeapStart(s_disp_rtv, &rtv);
+    for (u32 i = 0; i < FRAME_COUNT; i++) {
+        if (FAILED(s_d3d.swap_chain->lpVtbl->GetBuffer(s_d3d.swap_chain, i, &IID_ID3D12Resource,
+                                                       (void**)&s_disp_bufs[i]))) return 0;
+        s_d3d.device->lpVtbl->CreateRenderTargetView(s_d3d.device, s_disp_bufs[i], NULL, rtv);
+        rtv.ptr += s_d3d.rtv_descriptor_size;
+    }
+    return 1;
+}
+
+static int window_client(u32* w, u32* h)
+{
+    RECT cr;
+    if (!s_d3d.hwnd || !GetClientRect(s_d3d.hwnd, &cr)) return 0;
+    if (cr.right - cr.left < 64 || cr.bottom - cr.top < 64) return 0;   /* minimised */
+    *w = (u32)(cr.right - cr.left); *h = (u32)(cr.bottom - cr.top);
+    return 1;
+}
+
 static void quad_batch_draw(u32 fi, const rsx_ui_quad* quads, u32 count, const float mvp[16], QuadVb* vbs)
 {
     ID3D12GraphicsCommandList* cl=s_d3d.cmd_list;
@@ -538,6 +609,7 @@ static void quad_batch_draw(u32 fi, const rsx_ui_quad* quads, u32 count, const f
     D3D12_CPU_DESCRIPTOR_HANDLE rtv;
     s_d3d.rtv_heap->lpVtbl->GetCPUDescriptorHandleForHeapStart(s_d3d.rtv_heap,&rtv);
     rtv.ptr+=(u64)fi*s_d3d.rtv_descriptor_size;
+    if(s_qb_display) {rtv=s_qb_rtv;w=s_qb_w;h=s_qb_h;}
     cl->lpVtbl->OMSetRenderTargets(cl,1,&rtv,FALSE,NULL);
     D3D12_VIEWPORT vp={0,0,(float)w,(float)h,0,1};
     D3D12_RECT sc={0,0,(LONG)w,(LONG)h};
@@ -576,6 +648,7 @@ const rsx_ui_quad* (*g_rsx_srt_hook)(uint32_t,uint32_t,uint32_t*);
 static void perf_overlay_draw(u32 fi)
 {
     u32 w=rs_dim(s_d3d.width,s_rs),h=rs_dim(s_d3d.height,s_rs),count=0;
+    if(s_qb_display) {w=s_qb_w;h=s_qb_h;}
     float mvp[16]={0};
     mvp[0]=2.f/(float)w;mvp[5]=-2.f/(float)h;mvp[10]=mvp[15]=1;mvp[12]=-1;mvp[13]=1;
     if(g_rsx_srt_hook) {
@@ -1092,6 +1165,14 @@ static int init_d3d12(u32 width, u32 height)
     DXGI_SWAP_CHAIN_DESC1 sc_desc = {0};
     sc_desc.Width = rs_dim(width, s_rs);
     sc_desc.Height = rs_dim(height, s_rs);
+    { const char* e = getenv("DISPLAY_SCALE");
+      s_display = !(e && *e == '0'); }
+    if (s_display) {
+        u32 cw = sc_desc.Width, ch = sc_desc.Height;
+        window_client(&cw, &ch);
+        sc_desc.Width = cw; sc_desc.Height = ch;
+        s_disp_w = cw; s_disp_h = ch;
+    }
     sc_desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
     sc_desc.SampleDesc.Count = 1;
     sc_desc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
@@ -1160,6 +1241,15 @@ static int init_d3d12(u32 width, u32 height)
     D3D12_CPU_DESCRIPTOR_HANDLE rtv_handle;
     s_d3d.rtv_heap->lpVtbl->GetCPUDescriptorHandleForHeapStart(s_d3d.rtv_heap, &rtv_handle);
 
+    if (s_display) {
+        D3D12_DESCRIPTOR_HEAP_DESC dh = {0};
+        dh.NumDescriptors = FRAME_COUNT; dh.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
+        if (FAILED(s_d3d.device->lpVtbl->CreateDescriptorHeap(s_d3d.device, &dh, &IID_ID3D12DescriptorHeap,
+                                                             (void**)&s_disp_rtv))
+            || !display_bufs_get() || !game_rts_create()) return -1;
+        printf("[D3D12] display %ux%u, game rendered at %ux%u and scaled into it\n",
+               s_disp_w, s_disp_h, rs_dim(width, s_rs), rs_dim(height, s_rs));
+    } else
     for (u32 i = 0; i < FRAME_COUNT; i++) {
         hr = s_d3d.swap_chain->lpVtbl->GetBuffer(
             s_d3d.swap_chain, i, &IID_ID3D12Resource, (void**)&s_d3d.render_targets[i]);
@@ -1930,6 +2020,16 @@ static void apply_res_scale(void)
                                        s_d3d.render_targets[i] = NULL; }
     const float old = s_rs;
     s_rs = f;
+    if (s_display) {
+        if (!game_rts_create()) {   /* keep the old size */
+            printf("[D3D12] RES_SCALE %.2f: render targets failed\n", f);
+            for (u32 i = 0; i < FRAME_COUNT; i++)
+                if (s_d3d.render_targets[i]) { s_d3d.render_targets[i]->lpVtbl->Release(s_d3d.render_targets[i]);
+                                               s_d3d.render_targets[i] = NULL; }
+            s_rs = old;
+            game_rts_create();
+        }
+    } else {
     HRESULT hr = s_d3d.swap_chain->lpVtbl->ResizeBuffers(s_d3d.swap_chain, FRAME_COUNT,
         rs_dim(s_d3d.width, s_rs), rs_dim(s_d3d.height, s_rs), DXGI_FORMAT_R8G8B8A8_UNORM,
         s_tearing ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0);
@@ -1944,6 +2044,7 @@ static void apply_res_scale(void)
                                             (void**)&s_d3d.render_targets[i]);
         s_d3d.device->lpVtbl->CreateRenderTargetView(s_d3d.device, s_d3d.render_targets[i], NULL, rtv);
         rtv.ptr += s_d3d.rtv_descriptor_size;
+    }
     }
     /* depth: same description as at init, at the new scale */
     D3D12_RESOURCE_DESC dd; s_d3d.depth_buffer->lpVtbl->GetDesc(s_d3d.depth_buffer, &dd);
@@ -7551,6 +7652,91 @@ static void aa_apply(u32 fi)
     aa_barrier(s_aa_weights, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET);
 }
 
+/* Display pass: the game target of frame fi, scaled into the window-sized
+ * swap chain buffer, then the overlays at the window's pixels. Both buffers
+ * are in PRESENT on entry and on exit. */
+static ID3D12PipelineState* s_disp_pso;
+static int s_disp_failed;
+static const char k_disp_hlsl[] =
+    "struct V { float4 p : SV_Position; float2 uv : TEXCOORD0; };\n"
+    "V vs_up(uint id : SV_VertexID) { V o; fs_tri(id, o.p, o.uv); return o; }\n"
+    "float4 ps_up(V i) : SV_Target { return float4(colorTex.SampleLevel(LinearSampler, i.uv, 0).rgb, 1); }\n";
+
+static void display_resize(u32 w, u32 h)
+{
+    wait_for_gpu();
+    for (u32 i = 0; i < FRAME_COUNT; i++)
+        if (s_disp_bufs[i]) { s_disp_bufs[i]->lpVtbl->Release(s_disp_bufs[i]); s_disp_bufs[i] = NULL; }
+    HRESULT hr = s_d3d.swap_chain->lpVtbl->ResizeBuffers(s_d3d.swap_chain, FRAME_COUNT, w, h,
+        DXGI_FORMAT_R8G8B8A8_UNORM, s_tearing ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0);
+    if (SUCCEEDED(hr)) { s_disp_w = w; s_disp_h = h; }
+    else printf("[D3D12] display resize to %ux%u failed (0x%08lX)\n", w, h, hr);
+    display_bufs_get();
+}
+
+static void display_present(u32 fi)
+{
+    u32 w = s_disp_w, h = s_disp_h;
+    if (window_client(&w, &h) && (w != s_disp_w || h != s_disp_h)) display_resize(w, h);
+    w = s_disp_w; h = s_disp_h;
+    const u32 di = s_d3d.swap_chain->lpVtbl->GetCurrentBackBufferIndex(s_d3d.swap_chain);
+    ID3D12Resource *game = s_d3d.render_targets[fi], *out = s_disp_bufs[di];
+    if (!game || !out) return;
+    if (!s_disp_pso && !s_disp_failed) {
+        size_t n = sizeof k_aa_common + sizeof k_disp_hlsl;
+        char* src = (char*)malloc(n);
+        if (src && aa_init_rs()) {
+            snprintf(src, n, "%s%s", k_aa_common, k_disp_hlsl);
+            s_disp_pso = aa_pso(src, strlen(src), "vs_up", "ps_up");
+        }
+        free(src);
+        if (!s_disp_pso) { s_disp_failed = 1; printf("[D3D12] display pass unavailable: game copied unscaled\n"); }
+    }
+    ID3D12GraphicsCommandList* cl = s_d3d.cmd_list;
+    D3D12_CPU_DESCRIPTOR_HANDLE rtv;
+    s_disp_rtv->lpVtbl->GetCPUDescriptorHandleForHeapStart(s_disp_rtv, &rtv);
+    rtv.ptr += (u64)di * s_d3d.rtv_descriptor_size;
+    aa_barrier(out, D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
+    if (s_disp_pso) {
+        aa_barrier(game, D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        const u32 slot = DISPLAY_SRV_BASE + fi * 5;
+        srv_write(slot, game, DXGI_FORMAT_R8G8B8A8_UNORM, D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING);
+        cl->lpVtbl->SetDescriptorHeaps(cl, 1, &s_d3d.srv_heap);
+        cl->lpVtbl->SetGraphicsRootSignature(cl, s_aa_rs);
+        const float k[12] = {0};
+        cl->lpVtbl->SetGraphicsRoot32BitConstants(cl, 0, 12, k, 0);
+        D3D12_GPU_DESCRIPTOR_HANDLE gh;
+        s_d3d.srv_heap->lpVtbl->GetGPUDescriptorHandleForHeapStart(s_d3d.srv_heap, &gh);
+        gh.ptr += (u64)slot * s_d3d.srv_inc;
+        cl->lpVtbl->SetGraphicsRootDescriptorTable(cl, 1, gh);
+        D3D12_VIEWPORT vp = {0, 0, (float)w, (float)h, 0.0f, 1.0f};
+        D3D12_RECT sc = {0, 0, (LONG)w, (LONG)h};
+        cl->lpVtbl->RSSetViewports(cl, 1, &vp);
+        cl->lpVtbl->RSSetScissorRects(cl, 1, &sc);
+        cl->lpVtbl->IASetPrimitiveTopology(cl, D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        aa_draw(s_disp_pso, rtv, 0);
+        aa_barrier(game, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_PRESENT);
+    } else {   /* no shader: the game image in the corner, unscaled */
+        const float z[4] = {0, 0, 0, 1};
+        cl->lpVtbl->ClearRenderTargetView(cl, rtv, z, 0, NULL);
+        aa_barrier(out, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_COPY_DEST);
+        aa_barrier(game, D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_COPY_SOURCE);
+        D3D12_TEXTURE_COPY_LOCATION sl = {0}, dl = {0};
+        sl.pResource = game; dl.pResource = out;
+        sl.Type = dl.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+        D3D12_BOX box = {0, 0, 0, rs_dim(s_d3d.width, s_rs), rs_dim(s_d3d.height, s_rs), 1};
+        if (box.right > w) box.right = w;
+        if (box.bottom > h) box.bottom = h;
+        cl->lpVtbl->CopyTextureRegion(cl, &dl, 0, 0, 0, &sl, &box);
+        aa_barrier(game, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_PRESENT);
+        aa_barrier(out, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_RENDER_TARGET);
+    }
+    s_qb_display = 1; s_qb_rtv = rtv; s_qb_w = w; s_qb_h = h;
+    perf_overlay_draw(fi);
+    s_qb_display = 0;
+    aa_barrier(out, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
+}
+
 static void composite_present(u32 fi)
 {
     u32 want = s_composite_src;
@@ -9194,7 +9380,7 @@ skip_dump_consider: ;
     composite_present(fi);
     if (s_rb.present) ui_batch_draw(fi);
     if (s_rb.present) aa_apply(fi);   /* anti-aliasing on the finished frame */
-    if (s_rb.present) perf_overlay_draw(fi);
+    if (s_rb.present && !s_display) perf_overlay_draw(fi);
     int dumping = (s_d3d.dump_frames_left > 0 && s_d3d.readback_buf
                    && s_d3d.dump_skip_left == 0);
     { static int mind2 = -1;
@@ -9242,6 +9428,7 @@ skip_dump_consider: ;
         barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PRESENT;
         s_d3d.cmd_list->lpVtbl->ResourceBarrier(s_d3d.cmd_list, 1, &barrier);
     }
+    if (s_rb.present && s_display) display_present(fi);
 
     off_rt_writeback_record();
 
@@ -11427,7 +11614,9 @@ void rsx_d3d12_backend_shutdown(void)
     for (u32 i = 0; i < FRAME_COUNT; i++) {
         if (s_d3d.cmd_allocators[i]) s_d3d.cmd_allocators[i]->lpVtbl->Release(s_d3d.cmd_allocators[i]);
         if (s_d3d.render_targets[i]) s_d3d.render_targets[i]->lpVtbl->Release(s_d3d.render_targets[i]);
+        if (s_disp_bufs[i]) { s_disp_bufs[i]->lpVtbl->Release(s_disp_bufs[i]); s_disp_bufs[i] = NULL; }
     }
+    if (s_disp_rtv) { s_disp_rtv->lpVtbl->Release(s_disp_rtv); s_disp_rtv = NULL; }
     if (s_d3d.rtv_heap) s_d3d.rtv_heap->lpVtbl->Release(s_d3d.rtv_heap);
     if (s_d3d.swap_chain) s_d3d.swap_chain->lpVtbl->Release(s_d3d.swap_chain);
     if (s_d3d.cmd_queue) s_d3d.cmd_queue->lpVtbl->Release(s_d3d.cmd_queue);

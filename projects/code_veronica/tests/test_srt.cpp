@@ -282,8 +282,8 @@ int main(int argc,char** argv) {
     _putenv_s("SRT_CREDIT","");cv_srt_configure_env();
     const auto localized_saved=state;
     const std::string saved_words=std::getenv("SRT_TEXT");
-    state.hp=max;state.condition=SRT_FINE;state.equipped=1;
-    state.inventory[0]={9,10,0,1,0};state.inventory[1]={12,15,0,1,0};state.inventory[2]={0x37,0,0,0,0};state.inventory[3]={0x91,0,0,0,0};
+    state.hp=max;state.condition=SRT_FINE;state.equipped=2;
+    state.inventory[0]={0x37,0,0,0,0};state.inventory[1]={9,10,0,1,0};state.inventory[2]={12,15,0,1,0};state.inventory[3]={0x91,0,0,0,0};
     _putenv_s("SRT_TEXT","");
     for(int lang=0;lang<LANG_COUNT;lang++) {
         _putenv_s("SRT_LANGUAGE",k_lang_id[lang]);cv_srt_configure_env();
@@ -292,16 +292,16 @@ int main(int argc,char** argv) {
     }
     _putenv_s("SRT_LANGUAGE","pt-BR");
     for(int character=0;character<4;character++)for(int ammo:{10,0}) {
-        state.character=character;state.inventory[0].quantity=ammo;cv_srt_configure_env();
+        state.character=character;state.inventory[1].quantity=ammo;cv_srt_configure_env();
         const auto* preview=cv_srt_design(&state,1600,900,&count);assert(preview&&count<131072);
         if(argc>1) {char file[1024];std::snprintf(file,sizeof file,"%s/srt-%s-character-%d-ammo-%d.png",argv[1],CV_TITLE_ID,character,ammo);export_png(file,preview,count,1600,900,false,true);}
     }
     // Percent magazine and infinite ammunition have the same presentation in
     // the inventory and equipped block; no totals or capacities are invented.
-    state.character=0;state.inventory[0]={2,48,1,1,0};cv_srt_configure_env();
+    state.character=0;state.inventory[1]={2,48,1,1,0};cv_srt_configure_env();
     const auto* percent=cv_srt_design(&state,1600,900,&count);assert(percent&&count<131072);
     if(argc>1) {char file[1024];std::snprintf(file,sizeof file,"%s/srt-%s-equipped-percent.png",argv[1],CV_TITLE_ID);export_png(file,percent,count,1600,900,false,true);}
-    state.inventory[0].infinite=1;const auto* infinite=cv_srt_design(&state,1600,900,&count);assert(infinite&&count<131072);
+    state.inventory[1].infinite=1;const auto* infinite=cv_srt_design(&state,1600,900,&count);assert(infinite&&count<131072);
     // Bosses go to the top of the list in their framed block, inside the enemy limit.
     {
         const auto saved_state=state;
@@ -315,15 +315,33 @@ int main(int argc,char** argv) {
         for(int b:{2,12,14,15,17,22,23}) {state.enemy_count=1;state.enemies[0]={b,10,100,0};assert(cv_srt_design(&state,3840,2160,&count)&&count<131072);peak=std::max(peak,count);}
         state=saved_state;_putenv_s("SRT_ENEMIES",saved_limit.c_str());_putenv_s("SRT_LANGUAGE","pt-BR");cv_srt_configure_env();
     }
+    // The fixed slot (entry 0, the lighter) sits above the equipped weapon; the
+    // inventory can also go under the enemies, in the same column.
+    {
+        const auto saved_state=state;
+        const std::string saved_corner=std::getenv("SRT_CORNER")?std::getenv("SRT_CORNER"):"tl";
+        state.inventory[0]={0x37,0,0,0,0};state.inventory[1]={9,10,0,1,0};state.inventory[2]={12,15,0,1,0};state.inventory[3]={0x91,0,0,0,0};state.equipped=2;
+        state.enemy_count=2;state.enemies[0]={19,504,700,0};state.enemies[1]={1,72,72,0};
+        for(const char* where:{"side","below"})for(const char* corner:{"tl","br"}) {
+            _putenv_s("SRT_INVENTORY_POS",where);_putenv_s("SRT_CORNER",corner);cv_srt_configure_env();
+            for(const auto& size:std::vector<std::pair<uint32_t,uint32_t>>{{1280,720},{1600,900},{3840,2160}}) {
+                const auto* q=cv_srt_design(&state,size.first,size.second,&count);assert(q&&count<131072);peak=std::max(peak,count);
+                for(uint32_t i=0;i<count;i++)assert(q[i].x>=15.9f&&q[i].y>=15.9f&&q[i].x+q[i].w<=size.first-15.9f&&q[i].y+q[i].h<=size.second-15.9f);
+                if(argc>1&&size.first==1600) {char file[1024];std::snprintf(file,sizeof file,"%s/srt-%s-inventory-%s-%s.png",argv[1],CV_TITLE_ID,where,corner);export_png(file,q,count,1600,900,false,true);}
+            }
+        }
+        _putenv_s("SRT_INVENTORY_POS","side");_putenv_s("SRT_CORNER",saved_corner.c_str());state=saved_state;cv_srt_configure_env();
+    }
     state=localized_saved;_putenv_s("SRT_LANGUAGE","pt-BR");_putenv_s("SRT_TEXT",saved_words.c_str());cv_srt_configure_env();
     state.condition=SRT_FINE;state.hp=max;
     // Preview from the production renderer, using synthetic inventory only.
     // Three two-slot weapons must each occupy one full-width row, followed by
     // narrow ammo/knife slots. No writes to guest inventory or real settings.
     const auto preview_saved=state;
-    state.equipped=1;std::fill(std::begin(state.inventory),std::end(state.inventory),cv_srt_item{});
-    state.inventory[0]={0x21,100,1,1,0};state.inventory[1]={0x22,100,1,1,0};state.inventory[2]={1,4,1,1,0};
-    state.inventory[3]={12,47,0,1,0};state.inventory[4]={8,0,0,0,0};state.inventory[5]={0x37,0,0,0,0};state.inventory[6]={0x91,0,0,0,0};
+    // Entry 0 (the fixed slot) stays empty here, so the grid starts at the top.
+    state.equipped=2;std::fill(std::begin(state.inventory),std::end(state.inventory),cv_srt_item{});
+    state.inventory[1]={0x21,100,1,1,0};state.inventory[2]={0x22,100,1,1,0};state.inventory[3]={1,4,1,1,0};
+    state.inventory[4]={12,47,0,1,0};state.inventory[5]={8,0,0,0,0};state.inventory[6]={0x37,0,0,0,0};state.inventory[7]={0x91,0,0,0,0};
     _putenv_s("SRT_SCALE","100");_putenv_s("SRT_CORNER","tl");
     const std::string pt_labels=std::getenv("SRT_TEXT");
     for(const char* language:{"pt-BR","en"}) {
@@ -338,9 +356,9 @@ int main(int argc,char** argv) {
         for(float y:{145.5f,185.5f,225.5f})assert(pixel(351.5f,y)==pixel(484.5f,y));
         assert(pixel(351.5f,282.5f)!=pixel(484.5f,282.5f));
         if(argc>1) {char file[1024];std::snprintf(file,sizeof file,"%s/srt-%s-two-slots-%s.png",argv[1],CV_TITLE_ID,language);export_png(file,preview,count,1600,900,false,true);}
-        state.equipped=4;const auto* ammo=cv_srt_design(&state,1600,900,&count);assert(ammo&&count<131072);
+        state.equipped=5;const auto* ammo=cv_srt_design(&state,1600,900,&count);assert(ammo&&count<131072);
         if(argc>1) {char file[1024];std::snprintf(file,sizeof file,"%s/srt-%s-wrapped-ammo-%s.png",argv[1],CV_TITLE_ID,language);export_png(file,ammo,count,1600,900,false,true);}
-        state.equipped=1;
+        state.equipped=2;
     }
     state=preview_saved;_putenv_s("SRT_LANGUAGE","pt-BR");_putenv_s("SRT_TEXT",pt_labels.c_str());cv_srt_configure_env();
     const auto* animated=cv_srt_design(&state,1280,720,&count);

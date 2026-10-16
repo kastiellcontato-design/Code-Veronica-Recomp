@@ -159,7 +159,7 @@ static float rr_cover(float x, float y, float w, float h, float r)
     return fminf(1.0f, fmaxf(0.0f, r - d + 0.5f));
 }
 
-typedef struct { wchar_t label[16], value[24]; } Seg;
+typedef struct { wchar_t label[16], value[24], extra[24]; } Seg;   /* extra: grey, after the value */
 
 static uint32_t px_argb(const Px* p)
 {
@@ -229,23 +229,30 @@ static void build(uint32_t bw, uint32_t bh, int corner, int column, const Seg* s
     HGDIOBJ old_font = SelectObject(dc, font);
     /* where each piece goes: a row of label/value pairs, or a column with the
      * names on the left and the numbers lined up on the right */
-    int lx[8], vx[8], ly[8], W = pad;
+    int lx[8], vx[8], ex[8], ly[8], W = pad;
+    int vws[8], ews[8];
+    for (int i = 0; i < nseg; i++) {
+        SIZE sz;
+        GetTextExtentPoint32W(dc, segs[i].value, (int)wcslen(segs[i].value), &sz); vws[i] = sz.cx;
+        ews[i] = 0;
+        if (segs[i].extra[0]) { GetTextExtentPoint32W(dc, segs[i].extra, (int)wcslen(segs[i].extra), &sz); ews[i] = lgap + sz.cx; }
+    }
     if (column) {
-        int lw = 0, vw = 0, vws[8];
+        int lw = 0, vw = 0;
         for (int i = 0; i < nseg; i++) {
             SIZE sz;
             GetTextExtentPoint32W(dc, segs[i].label, (int)wcslen(segs[i].label), &sz); if (sz.cx > lw) lw = sz.cx;
-            GetTextExtentPoint32W(dc, segs[i].value, (int)wcslen(segs[i].value), &sz); vws[i] = sz.cx; if (sz.cx > vw) vw = sz.cx;
+            if (vws[i] + ews[i] > vw) vw = vws[i] + ews[i];
         }
         W = pad + lw + gap + vw + pad;
-        for (int i = 0; i < nseg; i++) { lx[i] = pad; vx[i] = W - pad - vws[i]; ly[i] = vpad + i * row_h; }
+        for (int i = 0; i < nseg; i++) { lx[i] = pad; vx[i] = W - pad - vws[i] - ews[i]; ex[i] = vx[i] + vws[i] + lgap; ly[i] = vpad + i * row_h; }
     } else {
         for (int i = 0; i < nseg; i++) {
             SIZE sz;
             if (i) W += gap;
             if (segs[i].label[0]) { lx[i] = W; GetTextExtentPoint32W(dc, segs[i].label, (int)wcslen(segs[i].label), &sz); W += sz.cx + lgap; }
             else lx[i] = -1;
-            vx[i] = W; GetTextExtentPoint32W(dc, segs[i].value, (int)wcslen(segs[i].value), &sz); W += sz.cx;
+            vx[i] = W; W += vws[i]; ex[i] = W + lgap; W += ews[i];
             ly[i] = 0;
         }
         W += pad;
@@ -266,6 +273,7 @@ static void build(uint32_t bw, uint32_t bh, int corner, int column, const Seg* s
         const int ty = (line_h - tm.tmHeight) / 2;
         for (int i = 0; i < nseg; i++) {
             if (pass == 0 && lx[i] >= 0) TextOutW(dc, lx[i], ly[i] + ty, segs[i].label, (int)wcslen(segs[i].label));
+            if (pass == 0 && segs[i].extra[0]) TextOutW(dc, ex[i], ly[i] + ty, segs[i].extra, (int)wcslen(segs[i].extra));
             if (pass == 1) TextOutW(dc, vx[i], ly[i] + ty, segs[i].value, (int)wcslen(segs[i].value));
         }
         GdiFlush();
@@ -544,10 +552,9 @@ const rsx_ui_quad* perf_overlay_quads(uint32_t w, uint32_t h, uint32_t* count)
             if (c >= 0) cpu = c;
             Seg segs[6]; int n = 0;
             memset(segs, 0, sizeof segs);
-            /* in a column every line has a name: FPS and frame time get one */
-            if (items & OV_FPS) { if (column) { wcscpy(segs[n].label, L"FPS"); swprintf(segs[n++].value, 24, L"%.0f", fps); }
-                                  else swprintf(segs[n++].value, 24, L"%.0f FPS", fps); }
-            if (items & OV_MS)  { if (column) wcscpy(segs[n].label, L"Frame"); swprintf(segs[n++].value, 24, L"%.1f ms", ms); }
+            /* FPS carries the frame time after it, in grey: "FPS 30 33.3 ms" */
+            if (items & OV_FPS) { wcscpy(segs[n].label, L"FPS"); swprintf(segs[n].value, 24, L"%.0f", fps);
+                                  swprintf(segs[n].extra, 24, L"%.1f ms", ms); n++; }
             if (items & OV_CPU) { wcscpy(segs[n].label, L"CPU"); if (cpu >= 0) swprintf(segs[n].value, 24, L"%d%%", cpu); else wcscpy(segs[n].value, L"-"); n++; }
             if (items & OV_GPU) { const LONG g = s_gpu_pct; wcscpy(segs[n].label, L"GPU");
                                   if (g >= 0) swprintf(segs[n].value, 24, L"%ld%%", g); else wcscpy(segs[n].value, L"-"); n++; }
@@ -557,7 +564,7 @@ const rsx_ui_quad* perf_overlay_quads(uint32_t w, uint32_t h, uint32_t* count)
                                   else wcscpy(segs[n].value, L"-");
                                   n++; }
             if (items & OV_VRAM) { wcscpy(segs[n].label, L"VRAM"); swprintf(segs[n].value, 24, L"%.2f GB", vram_used() / 1073741824.0); n++; }
-            build(w, h, corner, column, segs, n);
+            if (n) build(w, h, corner, column, segs, n); else { s_panel.n = 0; s_panel_h = 0; }   /* "ms" alone shows nothing */
             last_items = items; last_corner = corner; last_column = column; last_w = w; last_h = h; last_build = now;
         }
     }

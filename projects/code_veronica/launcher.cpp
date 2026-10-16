@@ -184,7 +184,7 @@ struct Settings {
     bool tex_replace = false, tex_dump = false;
     bool srt=false;
     bool srt_parts[5]={true,true,true,true,false}; // name, health, time, stats, inventory
-    int srt_enemies=3, srt_corner=0, srt_scale=100, srt_language=0, srt_opacity=70; // 0 follow, 1 EN, 2 PT-BR; 3..13 other launcher languages
+    int srt_enemies=3, srt_corner=0, srt_scale=100, srt_language=0, srt_opacity=70, srt_inventory_below=0, srt_window=0; // 0 follow, 1 EN, 2 PT-BR; 3..13 other launcher languages
     std::wstring game, rap, fw, saves;
     std::wstring patch_dir;                 /* patch files (patch_files.h) */
     std::vector<std::string> patch_files_on; /* ids of the file patches turned on */
@@ -192,7 +192,8 @@ struct Settings {
     int btn[PA_COUNT][PAD_BTN_SLOTS];   /* -1: empty */
 };
 /* What the performance overlay can show, in its order; the ids are
- * PERF_OVERLAY's. A name of 0 takes S_OV_FRAMETIME. */
+ * PERF_OVERLAY's. The frame time now rides with FPS: "ms" keeps its bit so
+ * saved settings still line up, but it has no box of its own. */
 const struct { const char* id; const wchar_t* name; } k_overlay_items[] = {
     { "fps", L"FPS" }, { "ms", nullptr }, { "cpu", L"CPU" }, { "gpu", L"GPU" }, { "ram", L"RAM" }, { "vram", L"VRAM" } };
 const int NOVERLAY = sizeof k_overlay_items / sizeof k_overlay_items[0];
@@ -349,6 +350,8 @@ Settings load_settings()
     s.srt_corner=std::clamp(_wtoi(ini_get(L"srt",L"posicao",L"0").c_str()),0,3);
     s.srt_scale=std::clamp(_wtoi(ini_get(L"srt",L"tamanho",L"100").c_str()),50,200);
     s.srt_opacity=std::clamp(_wtoi(ini_get(L"srt",L"opacidade",L"70").c_str()),0,100);
+    s.srt_inventory_below=std::clamp(_wtoi(ini_get(L"srt",L"inventario_embaixo",L"0").c_str()),0,1);
+    s.srt_window=std::clamp(_wtoi(ini_get(L"srt",L"janela",L"0").c_str()),0,1);
     s.srt_language=std::clamp(_wtoi(ini_get(L"srt",L"idioma",L"0").c_str()),0,int(LANG_COUNT));
     s.overlay = _wtoi(ini_get(L"overlay", L"mostrar", L"0").c_str()) != 0;
     for (int i = 0; i < NSHADER_OPTS; i++)
@@ -413,6 +416,8 @@ void save_settings(const Settings& s)
     ini_set(L"srt",L"tamanho",std::to_wstring(s.srt_scale));
     ini_set(L"srt",L"idioma",std::to_wstring(s.srt_language));
     ini_set(L"srt",L"opacidade",std::to_wstring(s.srt_opacity));
+    ini_set(L"srt",L"inventario_embaixo",std::to_wstring(s.srt_inventory_below));
+    ini_set(L"srt",L"janela",std::to_wstring(s.srt_window));
     ini_set(L"overlay", L"mostrar", s.overlay ? L"1" : L"0");
     ini_set(L"overlay", L"itens", std::to_wstring(s.overlay_items));
     ini_set(L"overlay", L"posicao", std::to_wstring(s.overlay_corner));
@@ -598,7 +603,7 @@ enum {
     ID_LOG_VIEW = 2100, ID_LOG_COPY, ID_LOG_SAVE, ID_LOG_FOLDER,
     ID_SHADER_OPT = 2200,                                          /* + k_shader_opts index */
     ID_SRT=2400, ID_SRT_PART=2410, ID_DD_SRT_ENEMIES=2420, ID_DD_SRT_CORNER, ID_DD_SRT_LANGUAGE, ID_SRT_SCALE, ID_SRT_OPACITY,
-    ID_DD_OV_CORNER = 2450, ID_DD_OV_LAYOUT,
+    ID_DD_OV_CORNER = 2450, ID_DD_OV_LAYOUT, ID_DD_SRT_INVPOS, ID_DD_SRT_WINDOW,
     ID_TEX_BROWSE = 2300, ID_TEX_OPEN, ID_TEX_REPLACE, ID_TEX_DUMP, ID_TEX_DUMP_BROWSE, ID_TEX_DUMP_OPEN,
 };
 
@@ -1415,7 +1420,8 @@ void draw_avancado(Graphics& gr, const Font& head, const Font& body, const Font&
     StringFormat sf(StringFormat::GenericTypographic());
     float cx = x + 4;
     for (int i = 0; i < NOVERLAY; i++) {
-        const std::wstring name = k_overlay_items[i].name ? k_overlay_items[i].name : T(S_OV_FRAMETIME);
+        if (!k_overlay_items[i].name) continue;   /* ms: shown with FPS */
+        const std::wstring name = k_overlay_items[i].name;
         const bool ticked = (g.s.overlay_items >> i) & 1, hot = g.hover == ID_OVERLAY_ITEM + i;
         const Color ink = !g.s.overlay ? C_DIM : C_TEXT;
         RectF box(cx, y + 6, 16, 16);
@@ -1530,7 +1536,12 @@ void draw_srt(Graphics& gr,const Font& head,const Font& body,const Font& fsm)
     text(gr,T(S_SRT_OPACITY)+std::wstring(L"  (0–100%)"),right,490,body,C_TEXT,StringAlignmentNear,col,24);
     srt_slider(gr,ID_SRT_OPACITY,g.s.srt_opacity,0,100,body);
     StringFormat sf;sf.SetLineAlignment(StringAlignmentNear);SolidBrush brush(C_DIM);
-    gr.DrawString(T(S_SRT_HOTKEY),-1,&fsm,RectF(x,577,w,42),&sf,&brush);
+    text(gr,T(S_SRT_INV_POS),x,575,body,C_TEXT,StringAlignmentNear,col,24);
+    dropdown(gr,RectF(x,604,col,32),T(g.s.srt_inventory_below?S_SRT_INV_BELOW:S_SRT_INV_SIDE),ID_DD_SRT_INVPOS,body);
+    text(gr,T(S_SRT_SHOW_IN),right,575,body,C_TEXT,StringAlignmentNear,col,24);
+    dropdown(gr,RectF(right,604,col,32),T(g.s.srt_window?S_SRT_IN_WINDOW:S_SRT_IN_GAME),ID_DD_SRT_WINDOW,body);
+    gr.DrawString(T(S_SRT_HOTKEY),-1,&fsm,RectF(x,648,col,42),&sf,&brush);
+    if(g.s.srt_window)gr.DrawString(T(S_SRT_WINDOW_HINT),-1,&fsm,RectF(right,648,col,42),&sf,&brush);
 }
 
 void draw_desempenho(Graphics& gr, const Font& head, const Font& body, const Font& fsm)
@@ -1648,6 +1659,8 @@ void paint(HDC hdc)
         else if (g.open_dd == ID_DD_AA) { for (int i = 0; i < 3; i++) items.push_back(aa_name(i)); sel = g.s.aa; }
         else if (g.open_dd == ID_DD_SRT_ENEMIES) { for(int i=0;i<=5;i++)items.push_back(srt_enemy_value(i));items.push_back(T(S_SRT_ALL));sel=g.s.srt_enemies==99?6:g.s.srt_enemies; }
         else if (g.open_dd == ID_DD_SRT_CORNER) {for(int i=0;i<4;i++)items.push_back(T(S_SRT_TL+i));sel=g.s.srt_corner;}
+        else if (g.open_dd == ID_DD_SRT_INVPOS) { items = { T(S_SRT_INV_SIDE), T(S_SRT_INV_BELOW) }; sel = g.s.srt_inventory_below; }
+        else if (g.open_dd == ID_DD_SRT_WINDOW) { items = { T(S_SRT_IN_GAME), T(S_SRT_IN_WINDOW) }; sel = g.s.srt_window; }
         else if (g.open_dd == ID_DD_OV_CORNER) { for (int i = 0; i < 4; i++) items.push_back(T(S_SRT_TL + i)); sel = g.s.overlay_corner; }
         else if (g.open_dd == ID_DD_OV_LAYOUT) { items = { T(S_OV_ROW), T(S_OV_COLUMN) }; sel = g.s.overlay_layout; }
         else if (g.open_dd == ID_DD_SRT_LANGUAGE) {
@@ -1892,6 +1905,8 @@ void click(int id)
             else if(g.open_dd==ID_DD_SRT_ENEMIES)g.s.srt_enemies=i==6?99:i;
             else if(g.open_dd==ID_DD_SRT_CORNER)g.s.srt_corner=i;
             else if(g.open_dd==ID_DD_SRT_LANGUAGE)g.s.srt_language=i;
+            else if (g.open_dd == ID_DD_SRT_INVPOS) g.s.srt_inventory_below = i;
+            else if (g.open_dd == ID_DD_SRT_WINDOW) g.s.srt_window = i;
             else if (g.open_dd == ID_DD_OV_CORNER) { g.s.overlay_corner = i; set_overlay_env(); }
             else if (g.open_dd == ID_DD_OV_LAYOUT) { g.s.overlay_layout = i; set_overlay_env(); }
             else { set_lang_pick(i == 0 ? -1 : k_lang_order[i - 1]); set_note_text_env(); }
@@ -1907,7 +1922,7 @@ void click(int id)
         if (g.page == P_MODS) g.tex_rep = -1;        /* count the textures again */
     }
     else if (id >= ID_PATCH && id < ID_PATCH + NPATCHES) { g.s.patch[id - ID_PATCH] ^= true; changed(); }
-    else if (id == ID_DD_MODE || id == ID_DD_RES || id == ID_DD_AA || id == ID_DD_LANG || id==ID_DD_SRT_ENEMIES || id==ID_DD_SRT_CORNER || id==ID_DD_SRT_LANGUAGE || id == ID_DD_OV_CORNER || id == ID_DD_OV_LAYOUT) {
+    else if (id == ID_DD_MODE || id == ID_DD_RES || id == ID_DD_AA || id == ID_DD_LANG || id==ID_DD_SRT_ENEMIES || id==ID_DD_SRT_CORNER || id==ID_DD_SRT_LANGUAGE || id == ID_DD_OV_CORNER || id == ID_DD_OV_LAYOUT || id == ID_DD_SRT_INVPOS || id == ID_DD_SRT_WINDOW) {
         g.open_dd = id; g.dd_scroll = 0;
         if (id == ID_DD_LANG && g_lang_pick >= 0)   /* open with the chosen language in view */
             for (int i = 0; i < LANG_COUNT; i++)
@@ -2210,6 +2225,8 @@ void set_srt_env()
     const char* keys[]={"SRT_NAME","SRT_HEALTH","SRT_TIME","SRT_STATS","SRT_INVENTORY"};
     for(int i=0;i<5;i++)set_env(keys[i],g.s.srt_parts[i]?"1":"0");
     set_env("SRT_OPACITY",std::to_string(g.s.srt_opacity));
+    set_env("SRT_INVENTORY_POS",g.s.srt_inventory_below?"below":"side");
+    set_env("SRT_WINDOW",g.s.srt_window?"1":"0");
     set_env("SRT_ENEMIES",std::to_string(g.s.srt_enemies));set_env("SRT_SCALE",std::to_string(g.s.srt_scale));
     const char* corners[]={"tl","tr","bl","br"};set_env("SRT_CORNER",corners[g.s.srt_corner]);
     set_env("SRT_LANGUAGE",k_lang_id[lang]);

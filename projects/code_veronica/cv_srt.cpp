@@ -24,7 +24,7 @@
 using namespace Gdiplus;
 namespace {
 struct Config {
-    bool enabled=false,name=true,health=true,time=true,stats=true,inventory=false;
+    bool enabled=false,name=true,health=true,time=true,stats=true,inventory=false,inventory_below=false,window=false;
     cv_srt_i18n::Language lang=cv_srt_i18n::EN;
     int enemies=3,scale=100,corner=0,opacity=70;
     std::wstring credit=L"by Kastiel",game_root;
@@ -43,10 +43,12 @@ const wchar_t* character_name(int id) {
 std::wstring number(int n) {return std::to_wstring(n);}
 using cv_srt_text::upper;
 struct Tile {int index,slot,wide;};
+// Entry 0 is the fixed slot (lighter, lockpick...): drawn on its own above
+// the equipped weapon, never in the grid.
 std::vector<Tile> tiles(const cv_srt_state& state) {
-    std::vector<Tile> out;int last=0;for(int i=0;i<CV_SRT_INVENTORY_SIZE;i++)if(state.inventory[i].id)last=i;
+    std::vector<Tile> out;int last=1;for(int i=1;i<CV_SRT_INVENTORY_SIZE;i++)if(state.inventory[i].id)last=i;
     int slot=0;
-    for(int i=0;i<CV_SRT_INVENTORY_SIZE && slot<12;i++) {
+    for(int i=1;i<CV_SRT_INVENTORY_SIZE && slot<12;i++) {
         if(i>last&&slot>=10)break;
         const int wide=state.inventory[i].wide?2:1;if(wide==2&&(slot&1))slot++;
         if(slot+wide>12)break;out.push_back({i,slot,wide});slot+=wide;
@@ -223,7 +225,7 @@ struct Canvas {
     }
 };
 std::vector<rsx_ui_quad> quads;
-size_t base_count=0;
+size_t base_count=0;uint64_t base_gen=0;
 struct PulseArea {float x=0,y=0,w=0,scale=1;uint32_t color=0;bool dead=false;} pulse;
 // Boss blocks, in logical units while the layout is drawn, then in screen
 // pixels: the bar's filled part and the frame, animated over the cache.
@@ -303,10 +305,11 @@ void build(const cv_srt_state& st,const Config& cfg,uint32_t width,uint32_t heig
     int h=16+(cfg.name?28:0)+(cfg.health?104:0)+(cfg.time?40:0)+(cfg.stats?45:0);
     if(cfg.enemies)h+=28+std::max(1,count)*39+bosses*45;
     h+=credit_wrap?42:26;
-    const bool side=st.valid&&cfg.inventory;
-    if(side)item_images.load(cfg.game_root);
+    // The inventory goes beside the main panel, or under the enemies.
+    const bool inventory=st.valid&&cfg.inventory,below=inventory&&cfg.inventory_below,side=inventory&&!below;
+    if(inventory)item_images.load(cfg.game_root);
     const bool right=cfg.corner==1||cfg.corner==3;
-    const float main_x=side&&right?316.f:0.f,inventory_x=right?0.f:316.f;
+    const float main_x=side&&right?316.f:0.f,inventory_x=below?main_x:right?0.f:316.f;
     // Measure labels once per snapshot, at the original font size. Reserve a
     // separate quantity line, and let both cells in a row share its max height.
     Font item_font(cv_srt_i18n::font_face(cfg.lang),13,FontStyleRegular,UnitPixel),equipped_font(cv_srt_i18n::font_face(cfg.lang),14,FontStyleRegular,UnitPixel);
@@ -323,7 +326,14 @@ void build(const cv_srt_state& st,const Config& cfg,uint32_t width,uint32_t heig
     const cv_srt_item equipped=st.equipped>0&&st.equipped<=CV_SRT_INVENTORY_SIZE?st.inventory[st.equipped-1]:cv_srt_item{};
     float equipped_icon=0,equipped_height=44;
     std::vector<std::wstring> equipped_lines;
-    if(side) {
+    const cv_srt_item fixed=st.inventory[0];
+    ItemLabel fixed_label;float fixed_height=0;
+    if(inventory) {
+        if(fixed.id) {
+            fixed_label.icon=item_images.get(fixed.id)?34.f:0.f;
+            fixed_label.lines=label(cv_srt_i18n::item(fixed.id,cfg.lang),256-fixed_label.icon,item_font);
+            fixed_height=std::max(33.f,4.f+fixed_label.lines.size()*item_line+(fixed.counted?15.f:0.f));
+        }
         equipped_icon=item_images.get(equipped.id)?(equipped.wide?66.f:42.f):0.f;
         equipped_lines=label(equipped.id?cv_srt_i18n::item(equipped.id,cfg.lang):cfg.words[14],250-equipped_icon,equipped_font);
         equipped_height=std::max(44.f,23.f+equipped_lines.size()*equipped_line);
@@ -337,9 +347,9 @@ void build(const cv_srt_state& st,const Config& cfg,uint32_t width,uint32_t heig
     }
     float grid_height=0;
     for(int row=0;row<gridrows;row++) {row_top[row]=grid_height;grid_height+=row_height[row]+3;}
-    const int inventory_height=int(std::ceil(12+30+equipped_height+8+grid_height+13));
+    const int inventory_height=int(std::ceil(12+30+(fixed.id?fixed_height+6:0)+equipped_height+8+grid_height+13));
     const int logical_width=!st.valid?260:side?620:304;
-    if(!st.valid)h=44;else if(side)h=std::max(h,inventory_height);
+    if(!st.valid)h=44;else if(side)h=std::max(h,inventory_height);else if(below)h+=inventory_height-8;
     float scale=float(height)/900.f*cfg.scale/100.f;
     scale=std::min(scale,float(height-32)/float(h));scale=std::min(scale,float(width-32)/float(logical_width));
     Canvas c(logical_width,h,scale,cfg.opacity,cfg.lang);
@@ -420,9 +430,17 @@ void build(const cv_srt_state& st,const Config& cfg,uint32_t width,uint32_t heig
                 c.bar(ex,y+22,286-ex,11,e.maximum?float(e.hp)/e.maximum:0,Color(255,163,51,44));y+=39;
             }
         }
-        if(cfg.inventory) {
-            y=12;c.g.TranslateTransform(inventory_x-main_x,0);
+        if(inventory) {
+            if(side) {y=12;c.g.TranslateTransform(inventory_x-main_x,0);} else y+=4;
             c.heading(cfg.words[5],y);y+=30;
+            if(fixed.id) {
+                c.background(18,y,268,fixed_height,Color(90,31,28,28));c.line(18,y,286,y,Color(150,66,52,45));
+                if(fixed_label.icon)c.icon(fixed.id,23,y+(fixed_height-25)*.5f,fixed_label.icon-6,25);
+                const float tx=24+fixed_label.icon,available=256-fixed_label.icon;
+                c.item_text(fixed_label.lines,tx,y+1,available,13,c.cream,item_line);
+                if(fixed.counted)c.text(cv_srt_i18n::quantity(fixed),tx,y+1+fixed_label.lines.size()*item_line,available,12,c.dim,false,true,false,15);
+                y+=fixed_height+6;
+            }
             c.background(18,y,268,equipped_height,Color(100,55,43,23));c.line(18,y,286,y,c.gold);
             if(equipped_icon)c.icon(equipped.id,25,y+(equipped_height-32)*.5f,equipped_icon-8,32);
             const auto loaded=cv_srt_i18n::quantity(equipped);
@@ -440,7 +458,7 @@ void build(const cv_srt_state& st,const Config& cfg,uint32_t width,uint32_t heig
                 c.item_text(name.lines,tx,top+1,available,13,item.id?c.cream:c.dim,item_line);
                 if(item.id&&item.counted)c.text(cv_srt_i18n::quantity(item),tx,top+1+name.lines.size()*item_line,available,12,selected?c.gold:c.dim,false,true,false,15);
             }
-            c.g.TranslateTransform(main_x-inventory_x,0);
+            if(side)c.g.TranslateTransform(main_x-inventory_x,0);
         }
         c.text(L"SRT · CODE:VERONICA",18,float(h-(credit_wrap?41:25)),credit_wrap?268:156,12,c.dim,false,false,false,22);
         c.text(cfg.credit,credit_wrap?18:178,float(h-25),credit_wrap?268:108,12,c.cream,false,true,false,22);
@@ -490,7 +508,7 @@ void build(const cv_srt_state& st,const Config& cfg,uint32_t width,uint32_t heig
       if(quads.size()+size_t(166*scale)*6<=120000 || step>=256)break;
     }
     c.bitmap.UnlockBits(&pixels);
-    base_count=quads.size();
+    base_count=quads.size();base_gen++;
     fx_scale=scale;
     for(auto& b:boss_fx) {   // logical -> screen pixels, on the same pixel grid as the cache
         const float fill=b.w*b.fill;
@@ -504,13 +522,141 @@ void build(const cv_srt_state& st,const Config& cfg,uint32_t width,uint32_t heig
     }
 }
 }
+// ---- The SRT in a window of its own (SRT_WINDOW=1) ------------------------
+// The same quads, rasterised on the CPU into a premultiplied 32-bit image and
+// shown by a borderless, always-on-top layered window that can be dragged
+// anywhere. Its position is kept in cv_launcher.ini ([srt] janela_x/y).
+// The render thread builds the image; the window's own thread shows it.
+namespace srt_window {
+constexpr UINT WM_SRT_SHOW=WM_APP+1,WM_SRT_HIDE=WM_APP+2;
+SRWLOCK lock=SRWLOCK_INIT;
+std::vector<uint32_t> shared;int shared_w=0,shared_h=0;   // under lock
+HWND hwnd=nullptr;volatile LONG started=0;
+std::vector<uint32_t> base,frame;int bw=0,bh=0;float bx=0,by=0;uint64_t cached_gen=0;
+
+std::wstring ini() {
+    wchar_t exe[MAX_PATH];GetModuleFileNameW(nullptr,exe,MAX_PATH);
+    std::wstring path(exe);const size_t slash=path.find_last_of(L"\\/");
+    return (slash==std::wstring::npos?std::wstring():path.substr(0,slash+1))+L"cv_launcher.ini";
+}
+void save_position() {
+    RECT r;if(!GetWindowRect(hwnd,&r))return;
+    const std::wstring path=ini();
+    WritePrivateProfileStringW(L"srt",L"janela_x",std::to_wstring(r.left).c_str(),path.c_str());
+    WritePrivateProfileStringW(L"srt",L"janela_y",std::to_wstring(r.top).c_str(),path.c_str());
+}
+POINT initial_position() {
+    const std::wstring path=ini();wchar_t bx_[32],by_[32];
+    GetPrivateProfileStringW(L"srt",L"janela_x",L"",bx_,32,path.c_str());GetPrivateProfileStringW(L"srt",L"janela_y",L"",by_,32,path.c_str());
+    if(bx_[0]&&by_[0]) {
+        POINT p{_wtoi(bx_),_wtoi(by_)};
+        if(MonitorFromPoint(POINT{p.x+20,p.y+20},MONITOR_DEFAULTTONULL))return p;   // still on a monitor
+    }
+    // First time: just right of the game window, or its top-left corner.
+    RECT g;HWND game=FindWindowW(L"ps3recomp_d3d12",nullptr);
+    if(game&&GetWindowRect(game,&g)) {
+        HMONITOR m=MonitorFromWindow(game,MONITOR_DEFAULTTONEAREST);MONITORINFO mi{sizeof mi};GetMonitorInfoW(m,&mi);
+        if(g.right+340<=mi.rcWork.right)return POINT{g.right+8,g.top};
+        return POINT{g.left+16,g.top+40};
+    }
+    return POINT{40,40};
+}
+void show() {
+    std::vector<uint32_t> px;int w,h;
+    AcquireSRWLockShared(&lock);px=shared;w=shared_w;h=shared_h;ReleaseSRWLockShared(&lock);
+    if(!w||!h)return;
+    BITMAPINFO bi{};bi.bmiHeader={sizeof(BITMAPINFOHEADER),w,-h,1,32,BI_RGB};
+    void* bits=nullptr;HDC screen=GetDC(nullptr),mem=CreateCompatibleDC(screen);
+    HBITMAP dib=CreateDIBSection(screen,&bi,DIB_RGB_COLORS,&bits,nullptr,0);
+    if(dib) {
+        std::memcpy(bits,px.data(),size_t(w)*h*4);
+        HGDIOBJ old=SelectObject(mem,dib);
+        SIZE size{w,h};POINT src{0,0};BLENDFUNCTION blend{AC_SRC_OVER,0,255,AC_SRC_ALPHA};
+        UpdateLayeredWindow(hwnd,screen,nullptr,&size,mem,&src,0,&blend,ULW_ALPHA);
+        SelectObject(mem,old);DeleteObject(dib);
+    }
+    DeleteDC(mem);ReleaseDC(nullptr,screen);
+    if(!IsWindowVisible(hwnd))ShowWindow(hwnd,SW_SHOWNOACTIVATE);
+}
+// Dragged by hand (button down anywhere, move, release): the system move
+// loop would activate the window and take the keyboard from the game.
+POINT grab{};bool dragging=false;
+LRESULT CALLBACK proc(HWND w,UINT msg,WPARAM wp,LPARAM lp) {
+    switch(msg) {
+    case WM_MOUSEACTIVATE:return MA_NOACTIVATE;         // never take the game's focus
+    case WM_LBUTTONDOWN: {
+        POINT c;GetCursorPos(&c);RECT r;GetWindowRect(w,&r);
+        grab={c.x-r.left,c.y-r.top};dragging=true;SetCapture(w);return 0;
+    }
+    case WM_MOUSEMOVE:
+        if(dragging) {POINT c;GetCursorPos(&c);SetWindowPos(w,nullptr,c.x-grab.x,c.y-grab.y,0,0,SWP_NOSIZE|SWP_NOZORDER|SWP_NOACTIVATE);}
+        return 0;
+    case WM_LBUTTONUP:case WM_CAPTURECHANGED:
+        if(dragging) {dragging=false;if(msg==WM_LBUTTONUP)ReleaseCapture();save_position();}
+        return 0;
+    case WM_SRT_SHOW:show();return 0;
+    case WM_SRT_HIDE:ShowWindow(w,SW_HIDE);return 0;
+    case WM_CLOSE:return 0;                             // closes with the game
+    }
+    return DefWindowProcW(w,msg,wp,lp);
+}
+DWORD WINAPI thread(LPVOID) {
+    WNDCLASSEXW wc{sizeof wc};wc.lpfnWndProc=proc;wc.hInstance=GetModuleHandleW(nullptr);
+    wc.hCursor=LoadCursor(nullptr,IDC_SIZEALL);wc.lpszClassName=L"cv_srt_window";
+    wc.hIcon=LoadIconW(wc.hInstance,MAKEINTRESOURCEW(1));RegisterClassExW(&wc);   // the game's icon, if any
+    const POINT p=initial_position();
+    // A normal top-level window (in the taskbar), so OBS's window capture
+    // lists it as "SRT · Code: Veronica".
+    hwnd=CreateWindowExW(WS_EX_LAYERED|WS_EX_TOPMOST|WS_EX_APPWINDOW|WS_EX_NOACTIVATE,L"cv_srt_window",L"SRT · Code: Veronica",
+                         WS_POPUP,p.x,p.y,16,16,nullptr,nullptr,wc.hInstance,nullptr);
+    MSG m;while(GetMessageW(&m,nullptr,0,0)>0) {TranslateMessage(&m);DispatchMessageW(&m);}
+    return 0;
+}
+void hide() {if(hwnd&&IsWindowVisible(hwnd))PostMessageW(hwnd,WM_SRT_HIDE,0,0);}
+// Over in premultiplied BGRA, one quad at a time, in order.
+void fill(std::vector<uint32_t>& img,int w,int h,const rsx_ui_quad& q) {
+    const uint32_t a=q.argb>>24;if(!a)return;
+    const int x0=std::max(0,int(std::floor(q.x-bx))),y0=std::max(0,int(std::floor(q.y-by)));
+    const int x1=std::min(w,int(std::ceil(q.x-bx+q.w))),y1=std::min(h,int(std::ceil(q.y-by+q.h)));
+    const uint32_t r=(q.argb>>16&255)*a/255,g=(q.argb>>8&255)*a/255,b=(q.argb&255)*a/255,inv=255-a;
+    for(int y=y0;y<y1;y++) {
+        uint32_t* row=img.data()+size_t(y)*w;
+        for(int x=x0;x<x1;x++) {
+            const uint32_t d=row[x];
+            row[x]=(a+((d>>24)*inv)/255)<<24|(r+((d>>16&255)*inv)/255)<<16|(g+((d>>8&255)*inv)/255)<<8|(b+((d&255)*inv)/255);
+        }
+    }
+}
+// The design's quads -> the window. The cached part is rasterised again only
+// when the layout was rebuilt; the animated quads go over a copy each frame.
+void present(const rsx_ui_quad* q,uint32_t count) {
+    if(!InterlockedExchange(&started,1))CloseHandle(CreateThread(nullptr,0,thread,nullptr,0,nullptr));
+    if(!hwnd||!count)return;
+    if(cached_gen!=base_gen) {
+        cached_gen=base_gen;
+        float x0=1e9f,y0=1e9f,x1=0,y1=0;
+        for(uint32_t i=0;i<count;i++) {x0=std::min(x0,q[i].x);y0=std::min(y0,q[i].y);x1=std::max(x1,q[i].x+q[i].w);y1=std::max(y1,q[i].y+q[i].h);}
+        bx=std::floor(x0);by=std::floor(y0);bw=std::max(1,int(std::ceil(x1-bx)));bh=std::max(1,int(std::ceil(y1-by)));
+        base.assign(size_t(bw)*bh,0x01000000u);   // alpha 1: invisible, but the whole rectangle takes the mouse
+        for(size_t i=0;i<std::min<size_t>(base_count,count);i++)fill(base,bw,bh,q[i]);
+    }
+    frame=base;
+    for(size_t i=base_count;i<count;i++)fill(frame,bw,bh,q[i]);
+    AcquireSRWLockExclusive(&lock);shared.swap(frame);shared_w=bw;shared_h=bh;ReleaseSRWLockExclusive(&lock);
+    PostMessageW(hwnd,WM_SRT_SHOW,0,0);
+}
+}
 extern "C" void cv_srt_configure_env() {
     Config c;c.game_root=utf8(std::getenv("PS3_VFS_ROOT"));c.enabled=env_int("SRT",0)!=0;c.name=env_int("SRT_NAME",1)!=0;c.health=env_int("SRT_HEALTH",1)!=0;
     c.time=env_int("SRT_TIME",1)!=0;c.stats=env_int("SRT_STATS",1)!=0;c.inventory=env_int("SRT_INVENTORY",0)!=0;
+    if(const char* where=std::getenv("SRT_INVENTORY_POS"))c.inventory_below=!strcmp(where,"below");
     c.enemies=std::clamp(env_int("SRT_ENEMIES",3),0,99);if(c.enemies>5&&c.enemies!=99)c.enemies=5;
     c.opacity=std::clamp(env_int("SRT_OPACITY",70),0,100);
     c.scale=std::clamp(env_int("SRT_SCALE",100),50,200);
     const char* corner=std::getenv("SRT_CORNER");if(corner)c.corner=!strcmp(corner,"tr")?1:!strcmp(corner,"bl")?2:!strcmp(corner,"br")?3:0;
+    // In its own window the panel starts at the window's corner; the corner
+    // choice only applies over the game.
+    c.window=env_int("SRT_WINDOW",0)!=0;if(c.window)c.corner=0;
     c.lang=cv_srt_i18n::language(std::getenv("SRT_LANGUAGE"));c.words=cv_srt_i18n::labels(c.lang);
     c.credit=cv_srt_i18n::credit(c.lang);
     const auto credit=utf8(std::getenv("SRT_CREDIT"));if(!credit.empty())c.credit=credit;
@@ -534,9 +680,17 @@ extern "C" const rsx_ui_quad* cv_srt_quads(uint32_t width,uint32_t height,uint32
     *count=0;
     AcquireSRWLockShared(&config_lock);const bool enabled=config.enabled;const bool ready=generation!=0;ReleaseSRWLockShared(&config_lock);
     if(!ready) {cv_srt_configure_env();return cv_srt_quads(width,height,count);}
+    AcquireSRWLockShared(&config_lock);const bool own_window=config.window;ReleaseSRWLockShared(&config_lock);
+    if(!enabled||!own_window)srt_window::hide();
     if(!enabled)return nullptr;
     static cv_srt_state state{};static ULONGLONG last=0;
     const ULONGLONG now=GetTickCount64();if(!last||now-last>=33) {cv_srt_sample(&state);last=now;}
+    if(own_window) {
+        // Laid out for the game window's size, so the panel keeps the size it
+        // has over the game; nothing is drawn over the game itself.
+        uint32_t n=0;const rsx_ui_quad* q=cv_srt_design(&state,width,height,&n);
+        srt_window::present(q,n);return nullptr;
+    }
     return cv_srt_design(&state,width,height,count);
 }
 #else

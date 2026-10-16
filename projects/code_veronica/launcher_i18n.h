@@ -61,6 +61,8 @@ enum StrId {
     S_SRT_OPACITY,
     S_OV_POSITION, S_OV_LAYOUT, S_OV_ROW, S_OV_COLUMN,
     S_SRT_BOSS, S_SRT_PHASE,
+    S_SRT_INV_POS, S_SRT_INV_SIDE, S_SRT_INV_BELOW,
+    S_SRT_SHOW_IN, S_SRT_IN_GAME, S_SRT_IN_WINDOW, S_SRT_WINDOW_HINT,
     S_COUNT
 };
 
@@ -215,6 +217,13 @@ static const wchar_t* const k_str_pt[] = {
     L"Em coluna",
     L"Chefe",
     L"Fase",
+    L"Posição do inventário",
+    L"Ao lado",
+    L"Embaixo dos inimigos",
+    L"Onde mostrar o SRT",
+    L"Na tela do jogo",
+    L"Em janela separada",
+    L"Arraste a janela do SRT para onde quiser; a posição fica salva.",
 };
 static_assert(sizeof k_str_pt / sizeof k_str_pt[0] == S_COUNT, "k_str_pt: one text per StrId");
 
@@ -369,6 +378,13 @@ static const wchar_t* const k_str_en[] = {
     L"Column",
     L"Boss",
     L"Phase",
+    L"Inventory position",
+    L"Beside",
+    L"Below the enemies",
+    L"Where to show the SRT",
+    L"Over the game",
+    L"In its own window",
+    L"Drag the SRT window anywhere; its position is saved.",
 };
 static_assert(sizeof k_str_en / sizeof k_str_en[0] == S_COUNT, "k_str_en: one text per StrId");
 
@@ -523,6 +539,13 @@ static const wchar_t* const k_str_es[] = {
     L"En columna",
     L"Jefe",
     L"Fase",
+    L"Posición del inventario",
+    L"Al lado",
+    L"Debajo de los enemigos",
+    L"Dónde mostrar el SRT",
+    L"Sobre el juego",
+    L"En una ventana aparte",
+    L"Arrastra la ventana del SRT a donde quieras; la posición se guarda.",
 };
 static_assert(sizeof k_str_es / sizeof k_str_es[0] == S_COUNT, "k_str_es: one text per StrId");
 
@@ -677,6 +700,13 @@ static const wchar_t* const k_str_ja[] = {
     L"縦並び",
     L"ボス",
     L"フェーズ",
+    L"インベントリの位置",
+    L"横",
+    L"敵の下",
+    L"SRTの表示場所",
+    L"ゲーム画面の上",
+    L"別ウィンドウ",
+    L"SRTのウィンドウは好きな場所へドラッグできます。位置は保存されます。",
 };
 static_assert(sizeof k_str_ja / sizeof k_str_ja[0] == S_COUNT, "k_str_ja: one text per StrId");
 
@@ -885,6 +915,13 @@ static const wchar_t* const k_str_fr[] = {
     L"En colonne",
     L"Boss",
     L"Phase",
+    L"Position de l'inventaire",
+    L"À côté",
+    L"Sous les ennemis",
+    L"Où afficher le SRT",
+    L"Sur le jeu",
+    L"Dans une fenêtre à part",
+    L"Faites glisser la fenêtre du SRT où vous voulez ; sa position est enregistrée.",
 };
 static_assert(sizeof k_str_fr / sizeof k_str_fr[0] == S_COUNT, "k_str_fr: one text per StrId");
 
@@ -1093,6 +1130,13 @@ static const wchar_t* const k_str_de[] = {
     L"Untereinander",
     L"Boss",
     L"Phase",
+    L"Position des Inventars",
+    L"Daneben",
+    L"Unter den Gegnern",
+    L"Wo der SRT erscheint",
+    L"Über dem Spiel",
+    L"In eigenem Fenster",
+    L"Zieh das SRT-Fenster an eine beliebige Stelle; die Position wird gespeichert.",
 };
 static_assert(sizeof k_str_de / sizeof k_str_de[0] == S_COUNT, "k_str_de: one text per StrId");
 
@@ -1301,6 +1345,13 @@ static const wchar_t* const k_str_it[] = {
     L"In colonna",
     L"Boss",
     L"Fase",
+    L"Posizione dell'inventario",
+    L"Accanto",
+    L"Sotto i nemici",
+    L"Dove mostrare l'SRT",
+    L"Sopra il gioco",
+    L"In una finestra a parte",
+    L"Trascina la finestra dell'SRT dove vuoi; la posizione viene salvata.",
 };
 static_assert(sizeof k_str_it / sizeof k_str_it[0] == S_COUNT, "k_str_it: one text per StrId");
 
@@ -1509,6 +1560,13 @@ static const wchar_t* const k_str_pl[] = {
     L"W pionie",
     L"Boss",
     L"Faza",
+    L"Położenie ekwipunku",
+    L"Obok",
+    L"Pod przeciwnikami",
+    L"Gdzie pokazać SRT",
+    L"Na ekranie gry",
+    L"W osobnym oknie",
+    L"Przeciągnij okno SRT, gdzie chcesz; jego położenie zostanie zapisane.",
 };
 static_assert(sizeof k_str_pl / sizeof k_str_pl[0] == S_COUNT, "k_str_pl: one text per StrId");
 
@@ -1717,6 +1775,13 @@ static const wchar_t* const k_str_tr[] = {
     L"Dikey",
     L"Boss",
     L"Aşama",
+    L"Envanter konumu",
+    L"Yanında",
+    L"Düşmanların altında",
+    L"SRT nerede gösterilsin",
+    L"Oyunun üzerinde",
+    L"Ayrı pencerede",
+    L"SRT penceresini istediğiniz yere sürükleyin; konumu kaydedilir.",
 };
 static_assert(sizeof k_str_tr / sizeof k_str_tr[0] == S_COUNT, "k_str_tr: one text per StrId");
 
@@ -1925,6 +1990,13 @@ static const wchar_t* const k_str_ar[] = {
     L"عمودي",
     L"زعيم",
     L"المرحلة",
+    L"موضع المخزون",
+    L"بجانبه",
+    L"أسفل الأعداء",
+    L"مكان عرض SRT",
+    L"فوق اللعبة",
+    L"في نافذة منفصلة",
+    L"اسحب نافذة SRT إلى أي مكان؛ يُحفظ موضعها.",
 };
 static_assert(sizeof k_str_ar / sizeof k_str_ar[0] == S_COUNT, "k_str_ar: one text per StrId");
 
@@ -2133,6 +2205,13 @@ static const wchar_t* const k_str_zh[] = {
     L"纵向",
     L"首领",
     L"阶段",
+    L"物品栏位置",
+    L"旁边",
+    L"敌人下方",
+    L"SRT 显示位置",
+    L"游戏画面上",
+    L"单独窗口",
+    L"可将 SRT 窗口拖到任意位置，位置会被保存。",
 };
 static_assert(sizeof k_str_zh / sizeof k_str_zh[0] == S_COUNT, "k_str_zh: one text per StrId");
 
@@ -2341,6 +2420,13 @@ static const wchar_t* const k_str_ko[] = {
     L"세로",
     L"보스",
     L"페이즈",
+    L"인벤토리 위치",
+    L"옆",
+    L"적 아래",
+    L"SRT 표시 위치",
+    L"게임 화면 위",
+    L"별도 창",
+    L"SRT 창을 원하는 곳으로 끌어다 놓으세요. 위치가 저장됩니다.",
 };
 static_assert(sizeof k_str_ko / sizeof k_str_ko[0] == S_COUNT, "k_str_ko: one text per StrId");
 
@@ -2549,6 +2635,13 @@ static const wchar_t* const k_str_ru[] = {
     L"В столбец",
     L"Босс",
     L"Фаза",
+    L"Положение инвентаря",
+    L"Рядом",
+    L"Под врагами",
+    L"Где показывать SRT",
+    L"Поверх игры",
+    L"В отдельном окне",
+    L"Перетащите окно SRT куда угодно; его положение сохраняется.",
 };
 static_assert(sizeof k_str_ru / sizeof k_str_ru[0] == S_COUNT, "k_str_ru: one text per StrId");
 

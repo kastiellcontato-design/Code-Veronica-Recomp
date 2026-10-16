@@ -1,7 +1,7 @@
 /* rsx_perf_overlay.h -- the performance overlay in the corner of the game.
  *
  * PERF_OVERLAY lists what it shows, in this order, joined by commas:
- * fps, ms (frame time), cpu (whole system), gpu (3D engine, whole system),
+ * fps (with the frame time beside it), cpu (whole system), gpu (3D engine, whole system),
  * ram (this process's working set) and vram (this process's video memory).
  * Unset or empty: no overlay. PERF_OVERLAY_CORNER (tl, tr, bl, br; tr by
  * default) places it, and PERF_OVERLAY_LAYOUT (row or column) puts the
