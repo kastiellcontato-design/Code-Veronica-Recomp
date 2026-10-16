@@ -21,6 +21,9 @@ void cv_srt_configure_env(void);
 const rsx_ui_quad* cv_srt_quads(uint32_t width,uint32_t height,uint32_t* count);
 /* Native layout, also used by the isolated design/regression test. */
 const rsx_ui_quad* cv_srt_design(const cv_srt_state* state,uint32_t width,uint32_t height,uint32_t* count);
+/* The images drawn with the quads just returned (the boss bar's art), and the
+ * atlas they sample: RGBA8, straight alpha, `gen` changes when it does. */
+const rsx_ui_sprite* cv_srt_sprites(uint32_t* count,const uint32_t** rgba,uint32_t* w,uint32_t* h,uint64_t* gen);
 #ifdef __cplusplus
 }
 #endif

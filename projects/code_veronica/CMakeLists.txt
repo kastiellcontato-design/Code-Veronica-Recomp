@@ -280,6 +280,8 @@ if(WIN32)
 ")
     endif()
     file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/launcher_art.rc" "${_launcher_rc}")
+    # An image redrawn under the same name rebuilds the resources too.
+    set_source_files_properties("${CMAKE_CURRENT_BINARY_DIR}/launcher_art.rc" PROPERTIES OBJECT_DEPENDS "${LAUNCHER_ART}")
     target_sources(${PROJECT_NAME} PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/launcher_art.rc")
     set_source_files_properties(launcher.cpp PROPERTIES
         INCLUDE_DIRECTORIES "${PS3RECOMP_DIR}/libs/input")

@@ -229,7 +229,8 @@ typedef struct {
 #define VTEX_SRV_BASE (ZCONV_SRV + FP_TEX_UNITS)
 #define AA_SRV_BASE   (VTEX_SRV_BASE + MAX_DRAWS * 4)   /* anti-aliasing pass: 5 views */
 #define DISPLAY_SRV_BASE (AA_SRV_BASE + 8)   /* display pass: 5 views per frame slot */
-#define SRV_HEAP_SIZE (DISPLAY_SRV_BASE + 5 * FRAME_COUNT)
+#define SPRITE_SRV    (DISPLAY_SRV_BASE + 5 * FRAME_COUNT)   /* the SRT's image atlas */
+#define SRV_HEAP_SIZE (SPRITE_SRV + 4)
 
 /* Per-frame VP texture slot: a guest texture uploaded for this frame's VP
  * draws (re-uploaded every frame -- gcm/cube's plasma animates in guest
@@ -475,7 +476,7 @@ static u32 s_ui_count[UI_SLOTS], s_ui_frame[UI_SLOTS];
 static u32 s_ui_render_flip;   /* the frame being rendered: s_rb's, set by render_frame */
 /* A per-frame upload buffer of quad vertices, grown on demand. */
 typedef struct QuadVb { ID3D12Resource* vb[FRAME_COUNT]; void* mapped[FRAME_COUNT]; u32 quads[FRAME_COUNT]; } QuadVb;
-static QuadVb s_ui_vbs, s_ov_vbs, s_srt_vbs;   /* the game's UI batch; the performance overlay */
+static QuadVb s_ui_vbs, s_ov_vbs, s_srt_vbs, s_spr_vbs;   /* the game's UI batch; the performance overlay; the SRT and its images */
 typedef struct UiVertex { float x,y,z,r,g,b,a,u,v; } UiVertex;
 void rsx_d3d12_set_ui_quads(const rsx_ui_quad* quads,u32 count)
 {
@@ -486,9 +487,6 @@ void rsx_d3d12_set_ui_quads(const rsx_ui_quad* quads,u32 count)
     s_ui_count[slot]=count;s_ui_frame[slot]=frame;
     ReleaseSRWLockExclusive(&s_ui_lock);
 }
-/* Draw `count` quads into back buffer `fi` with the flat UI pipeline, `mvp`
- * mapping their coordinates to clip space. Holds no lock: the caller keeps
- * `quads` alive until this returns. */
 /* The display layer. The game renders at its render size into its own
  * targets (s_d3d.render_targets); the swap chain is the window's client size,
  * and each presented frame is the game image scaled into it, with the
@@ -559,10 +557,10 @@ static int window_client(u32* w, u32* h)
     return 1;
 }
 
-static void quad_batch_draw(u32 fi, const rsx_ui_quad* quads, u32 count, const float mvp[16], QuadVb* vbs)
+/* Room for `count` quads in this frame's slot of `vbs`; the count that fits. */
+static u32 quad_vb_reserve(u32 fi, u32 count, QuadVb* vbs)
 {
-    ID3D12GraphicsCommandList* cl=s_d3d.cmd_list;
-    if(!count || !s_d3d.pipeline_state_ui || fi>=FRAME_COUNT)return;
+    if(!count || fi>=FRAME_COUNT)return 0;
     if(!vbs->vb[fi] || vbs->quads[fi] < count) {
         u32 capacity=vbs->quads[fi] ? vbs->quads[fi] : 1024u;
         while(capacity<count && capacity<UI_MAX_QUADS)capacity*=2;
@@ -582,12 +580,19 @@ static void quad_batch_draw(u32 fi, const rsx_ui_quad* quads, u32 count, const f
         if(SUCCEEDED(hr))hr=grown->lpVtbl->Map(grown,0,&no_read,&grown_mapped);
         if(FAILED(hr)) {
             if(grown)grown->lpVtbl->Release(grown);
-            return;
+            return 0;
         }
         if(vbs->vb[fi])vbs->vb[fi]->lpVtbl->Release(vbs->vb[fi]);
         vbs->vb[fi]=grown;vbs->mapped[fi]=grown_mapped;vbs->quads[fi]=capacity;
     }
-    UiVertex* dst=(UiVertex*)vbs->mapped[fi];
+    return count<vbs->quads[fi]?count:vbs->quads[fi];
+}
+
+/* Writes `quads` into this frame's slot of `vbs`; the count written. */
+static u32 quad_vb_fill(u32 fi, const rsx_ui_quad* quads, u32 count, QuadVb* vbs)
+{
+    count=quad_vb_reserve(fi,count,vbs);
+    UiVertex* dst=count?(UiVertex*)vbs->mapped[fi]:NULL;
     /* Two triangles per quad, split along the diagonal whose corners agree
      * best, so interpolated corner alphas follow an edge instead of crossing
      * it. */
@@ -605,6 +610,14 @@ static void quad_batch_draw(u32 fi, const rsx_ui_quad* quads, u32 count, const f
             dst[q*6+k]=v;
         }
     }
+    return count;
+}
+
+/* Draws quads [first, first+n) of this frame's slot of `vbs` with `pso`. */
+static void quad_vb_draw(u32 fi, QuadVb* vbs, u32 first, u32 n, const float mvp[16], ID3D12PipelineState* pso)
+{
+    ID3D12GraphicsCommandList* cl=s_d3d.cmd_list;
+    if(!n || !pso || fi>=FRAME_COUNT || !vbs->vb[fi])return;
     u32 w=rs_dim(s_d3d.width,s_rs),h=rs_dim(s_d3d.height,s_rs);
     D3D12_CPU_DESCRIPTOR_HANDLE rtv;
     s_d3d.rtv_heap->lpVtbl->GetCPUDescriptorHandleForHeapStart(s_d3d.rtv_heap,&rtv);
@@ -615,13 +628,159 @@ static void quad_batch_draw(u32 fi, const rsx_ui_quad* quads, u32 count, const f
     D3D12_RECT sc={0,0,(LONG)w,(LONG)h};
     cl->lpVtbl->RSSetViewports(cl,1,&vp);cl->lpVtbl->RSSetScissorRects(cl,1,&sc);
     cl->lpVtbl->SetGraphicsRootSignature(cl,s_d3d.root_signature);
-    cl->lpVtbl->SetPipelineState(cl,s_d3d.pipeline_state_ui);
+    cl->lpVtbl->SetPipelineState(cl,pso);
     cl->lpVtbl->SetGraphicsRoot32BitConstants(cl,0,16,mvp,0);
     D3D12_VERTEX_BUFFER_VIEW vb={vbs->vb[fi]->lpVtbl->GetGPUVirtualAddress(vbs->vb[fi]),
-        count*6*sizeof(UiVertex),sizeof(UiVertex)};
+        (first+n)*6*sizeof(UiVertex),sizeof(UiVertex)};
     cl->lpVtbl->IASetVertexBuffers(cl,0,1,&vb);
     cl->lpVtbl->IASetPrimitiveTopology(cl,D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-    cl->lpVtbl->DrawInstanced(cl,count*6,1,0,0);
+    cl->lpVtbl->DrawInstanced(cl,n*6,1,first*6,0);
+}
+
+/* Draw `count` quads into back buffer `fi` with the flat UI pipeline, `mvp`
+ * mapping their coordinates to clip space. Holds no lock: the caller keeps
+ * `quads` alive until this returns. */
+static void quad_batch_draw(u32 fi, const rsx_ui_quad* quads, u32 count, const float mvp[16], QuadVb* vbs)
+{
+    if(!count || !s_d3d.pipeline_state_ui)return;
+    count=quad_vb_fill(fi,quads,count,vbs);
+    quad_vb_draw(fi,vbs,0,count,mvp,s_d3d.pipeline_state_ui);
+}
+
+/* The SRT's images (rsx_ui_sprite): one atlas texture, uploaded through the
+ * frame's command list when its generation changes, drawn by a pipeline like
+ * the flat UI one that samples it. */
+static void wait_for_gpu(void);
+static void srv_write(u32 heap_slot, ID3D12Resource* res, DXGI_FORMAT fmt, UINT mapping);
+static ID3D12PipelineState* s_spr_pso;
+static ID3D12Resource *s_spr_tex, *s_spr_up;
+static u64 s_spr_gen;
+static int s_spr_failed;
+static int sprite_pso(void)
+{
+    if(s_spr_pso || s_spr_failed)return s_spr_pso!=NULL;
+    static const char vs[] =
+        "cbuffer cb0 : register(b0){float4 c0;float4 c1;float4 c2;float4 c3;};\n"
+        "struct VSIn { float3 pos:POSITION; float4 col:COLOR; float2 uv:TEXCOORD; };\n"
+        "struct VSOut{ float4 pos:SV_POSITION; float4 col:COLOR; float2 uv:TEXCOORD; };\n"
+        "VSOut main(VSIn i){ VSOut o; float4 p=float4(i.pos,1.0);\n"
+        "  o.pos=c0*p.x+c1*p.y+c2*p.z+c3*p.w; o.col=i.col; o.uv=i.uv; return o; }\n";
+    static const char ps[] =
+        "Texture2D tex : register(t0);\n"
+        "SamplerState smp : register(s0);\n"
+        "struct PSIn{ float4 pos:SV_POSITION; float4 col:COLOR; float2 uv:TEXCOORD; };\n"
+        "float4 main(PSIn i):SV_TARGET{ return tex.SampleLevel(smp, i.uv, 0) * i.col; }\n";
+    ID3DBlob *vb=NULL,*pb=NULL,*err=NULL;
+    D3DCompile(vs,sizeof vs-1,"vs_sprite",NULL,NULL,"main","vs_5_0",0,0,&vb,&err);
+    if(err){err->lpVtbl->Release(err);err=NULL;}
+    D3DCompile(ps,sizeof ps-1,"ps_sprite",NULL,NULL,"main","ps_5_0",0,0,&pb,&err);
+    if(err){err->lpVtbl->Release(err);err=NULL;}
+    if(vb&&pb) {
+        D3D12_INPUT_ELEMENT_DESC il[] = {
+            {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0,  D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+            {"COLOR",    0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+            {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 28, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+        };
+        D3D12_GRAPHICS_PIPELINE_STATE_DESC pd={0};
+        pd.pRootSignature=s_d3d.root_signature;
+        pd.VS.pShaderBytecode=vb->lpVtbl->GetBufferPointer(vb);pd.VS.BytecodeLength=vb->lpVtbl->GetBufferSize(vb);
+        pd.PS.pShaderBytecode=pb->lpVtbl->GetBufferPointer(pb);pd.PS.BytecodeLength=pb->lpVtbl->GetBufferSize(pb);
+        pd.InputLayout.pInputElementDescs=il;pd.InputLayout.NumElements=3;
+        pd.RasterizerState.FillMode=D3D12_FILL_MODE_SOLID;pd.RasterizerState.CullMode=D3D12_CULL_MODE_NONE;
+        pd.BlendState.RenderTarget[0].BlendEnable=TRUE;
+        pd.BlendState.RenderTarget[0].SrcBlend=D3D12_BLEND_SRC_ALPHA;
+        pd.BlendState.RenderTarget[0].DestBlend=D3D12_BLEND_INV_SRC_ALPHA;
+        pd.BlendState.RenderTarget[0].BlendOp=D3D12_BLEND_OP_ADD;
+        pd.BlendState.RenderTarget[0].SrcBlendAlpha=D3D12_BLEND_ONE;
+        pd.BlendState.RenderTarget[0].DestBlendAlpha=D3D12_BLEND_INV_SRC_ALPHA;
+        pd.BlendState.RenderTarget[0].BlendOpAlpha=D3D12_BLEND_OP_ADD;
+        pd.BlendState.RenderTarget[0].RenderTargetWriteMask=D3D12_COLOR_WRITE_ENABLE_ALL;
+        pd.SampleMask=UINT_MAX;pd.PrimitiveTopologyType=D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+        pd.NumRenderTargets=1;pd.RTVFormats[0]=DXGI_FORMAT_R8G8B8A8_UNORM;pd.DSVFormat=DXGI_FORMAT_UNKNOWN;
+        pd.SampleDesc.Count=1;
+        if(FAILED(s_d3d.device->lpVtbl->CreateGraphicsPipelineState(s_d3d.device,&pd,&IID_ID3D12PipelineState,(void**)&s_spr_pso)))s_spr_pso=NULL;
+    }
+    if(vb)vb->lpVtbl->Release(vb);
+    if(pb)pb->lpVtbl->Release(pb);
+    if(!s_spr_pso) {s_spr_failed=1;printf("[D3D12] SRT image pipeline unavailable\n");}
+    return s_spr_pso!=NULL;
+}
+static int sprite_atlas(const uint32_t* rgba, u32 w, u32 h, u64 gen)
+{
+    if(!rgba || !w || !h || !s_d3d.srv_heap)return 0;
+    if(s_spr_tex && s_spr_gen==gen)return 1;
+    if(s_spr_tex || s_spr_up) {   /* rare: the overlay's size changed */
+        wait_for_gpu();
+        if(s_spr_tex){s_spr_tex->lpVtbl->Release(s_spr_tex);s_spr_tex=NULL;}
+        if(s_spr_up){s_spr_up->lpVtbl->Release(s_spr_up);s_spr_up=NULL;}
+    }
+    const u32 pitch=(w*4+255)&~255u;
+    D3D12_HEAP_PROPERTIES hp={0};hp.Type=D3D12_HEAP_TYPE_UPLOAD;
+    D3D12_RESOURCE_DESC bd={0};
+    bd.Dimension=D3D12_RESOURCE_DIMENSION_BUFFER;bd.Width=(u64)pitch*h;bd.Height=1;
+    bd.DepthOrArraySize=1;bd.MipLevels=1;bd.SampleDesc.Count=1;bd.Layout=D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+    if(FAILED(s_d3d.device->lpVtbl->CreateCommittedResource(s_d3d.device,&hp,D3D12_HEAP_FLAG_NONE,&bd,
+            D3D12_RESOURCE_STATE_GENERIC_READ,NULL,&IID_ID3D12Resource,(void**)&s_spr_up))){s_spr_up=NULL;return 0;}
+    u8* m=NULL;D3D12_RANGE nr={0,0};
+    if(FAILED(s_spr_up->lpVtbl->Map(s_spr_up,0,&nr,(void**)&m))||!m)return 0;
+    for(u32 y=0;y<h;y++)memcpy(m+(u64)y*pitch,rgba+(size_t)y*w,(size_t)w*4);
+    s_spr_up->lpVtbl->Unmap(s_spr_up,0,NULL);
+    D3D12_HEAP_PROPERTIES th={0};th.Type=D3D12_HEAP_TYPE_DEFAULT;
+    D3D12_RESOURCE_DESC td={0};
+    td.Dimension=D3D12_RESOURCE_DIMENSION_TEXTURE2D;td.Width=w;td.Height=h;td.DepthOrArraySize=1;td.MipLevels=1;
+    td.Format=DXGI_FORMAT_R8G8B8A8_UNORM;td.SampleDesc.Count=1;
+    if(FAILED(s_d3d.device->lpVtbl->CreateCommittedResource(s_d3d.device,&th,D3D12_HEAP_FLAG_NONE,&td,
+            D3D12_RESOURCE_STATE_COPY_DEST,NULL,&IID_ID3D12Resource,(void**)&s_spr_tex))){s_spr_tex=NULL;return 0;}
+    D3D12_TEXTURE_COPY_LOCATION src={0},dst={0};
+    src.pResource=s_spr_up;src.Type=D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+    src.PlacedFootprint.Footprint.Format=DXGI_FORMAT_R8G8B8A8_UNORM;
+    src.PlacedFootprint.Footprint.Width=w;src.PlacedFootprint.Footprint.Height=h;
+    src.PlacedFootprint.Footprint.Depth=1;src.PlacedFootprint.Footprint.RowPitch=pitch;
+    dst.pResource=s_spr_tex;dst.Type=D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+    s_d3d.cmd_list->lpVtbl->CopyTextureRegion(s_d3d.cmd_list,&dst,0,0,0,&src,NULL);
+    D3D12_RESOURCE_BARRIER br={0};
+    br.Type=D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;br.Transition.pResource=s_spr_tex;
+    br.Transition.Subresource=D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    br.Transition.StateBefore=D3D12_RESOURCE_STATE_COPY_DEST;br.Transition.StateAfter=D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+    s_d3d.cmd_list->lpVtbl->ResourceBarrier(s_d3d.cmd_list,1,&br);
+    srv_write(SPRITE_SRV,s_spr_tex,DXGI_FORMAT_R8G8B8A8_UNORM,D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING);
+    s_spr_gen=gen;
+    return 1;
+}
+/* The SRT's quads with its images between them: each image right after the
+ * first `after` quads. */
+static void srt_layers_draw(u32 fi, const rsx_ui_quad* q, u32 nq, const rsx_ui_sprite* sp, u32 ns, const float mvp[16])
+{
+    ID3D12GraphicsCommandList* cl=s_d3d.cmd_list;
+    nq=nq&&s_d3d.pipeline_state_ui?quad_vb_fill(fi,q,nq,&s_srt_vbs):0;
+    ns=quad_vb_reserve(fi,ns,&s_spr_vbs);
+    UiVertex* dst=ns?(UiVertex*)s_spr_vbs.mapped[fi]:NULL;
+    for(u32 i=0;i<ns;i++) {
+        const rsx_ui_sprite* r=&sp[i];
+        const float c[4]={((r->argb>>16)&255)/255.f,((r->argb>>8)&255)/255.f,(r->argb&255)/255.f,(r->argb>>24)/255.f};
+        static const unsigned order[6]={0,1,2,2,1,3};
+        for(unsigned k=0;k<6;k++) {
+            const unsigned corner=order[k];
+            UiVertex v={r->x+((corner&2)?r->w:0),r->y+((corner&1)?r->h:0),0,c[0],c[1],c[2],c[3],
+                (corner&2)?r->u1:r->u0,(corner&1)?r->v1:r->v0};
+            dst[i*6+k]=v;
+        }
+    }
+    D3D12_GPU_DESCRIPTOR_HANDLE gh;
+    s_d3d.srv_heap->lpVtbl->GetGPUDescriptorHandleForHeapStart(s_d3d.srv_heap,&gh);
+    gh.ptr+=(u64)SPRITE_SRV*s_d3d.srv_inc;
+    u32 done=0;
+    for(u32 i=0;i<ns;) {
+        const u32 upto=sp[i].after<nq?sp[i].after:nq;
+        if(upto>done){quad_vb_draw(fi,&s_srt_vbs,done,upto-done,mvp,s_d3d.pipeline_state_ui);done=upto;}
+        u32 j=i;while(j<ns&&sp[j].after==sp[i].after)j++;
+        cl->lpVtbl->SetDescriptorHeaps(cl,1,&s_d3d.srv_heap);
+        cl->lpVtbl->SetGraphicsRootSignature(cl,s_d3d.root_signature);
+        cl->lpVtbl->SetGraphicsRootDescriptorTable(cl,1,gh);
+        quad_vb_draw(fi,&s_spr_vbs,i,j-i,mvp,s_spr_pso);
+        i=j;
+    }
+    if(nq>done)quad_vb_draw(fi,&s_srt_vbs,done,nq-done,mvp,s_d3d.pipeline_state_ui);
 }
 
 /* The game's UI batch: logical 640x480, centred at 4:3. */
@@ -645,6 +804,8 @@ static void ui_batch_draw(u32 fi)
 /* Optional port-owned, read-only telemetry overlay. Independent GPU buffers
  * keep its vertices alive alongside the performance panel in the same frame. */
 const rsx_ui_quad* (*g_rsx_srt_hook)(uint32_t,uint32_t,uint32_t*);
+/* The images that go with the quads g_rsx_srt_hook just returned. */
+const rsx_ui_sprite* (*g_rsx_srt_sprites_hook)(uint32_t*,const uint32_t**,uint32_t*,uint32_t*,uint64_t*);
 static void perf_overlay_draw(u32 fi)
 {
     u32 w=rs_dim(s_d3d.width,s_rs),h=rs_dim(s_d3d.height,s_rs),count=0;
@@ -653,7 +814,10 @@ static void perf_overlay_draw(u32 fi)
     mvp[0]=2.f/(float)w;mvp[5]=-2.f/(float)h;mvp[10]=mvp[15]=1;mvp[12]=-1;mvp[13]=1;
     if(g_rsx_srt_hook) {
         const rsx_ui_quad* srt=g_rsx_srt_hook(w,h,&count);
-        if(count)quad_batch_draw(fi,srt,count,mvp,&s_srt_vbs);
+        u32 ns=0,aw=0,ah=0;u64 gen=0;const uint32_t* atlas=NULL;
+        const rsx_ui_sprite* sp=g_rsx_srt_sprites_hook?g_rsx_srt_sprites_hook(&ns,&atlas,&aw,&ah,&gen):NULL;
+        if(ns&&sp&&sprite_pso()&&sprite_atlas(atlas,aw,ah,gen))srt_layers_draw(fi,srt,count,sp,ns,mvp);
+        else if(count)quad_batch_draw(fi,srt,count,mvp,&s_srt_vbs);
     }
     const rsx_ui_quad* quads=perf_overlay_quads(w,h,&count);
     if(count)quad_batch_draw(fi,quads,count,mvp,&s_ov_vbs);
@@ -11604,6 +11768,7 @@ void rsx_d3d12_backend_shutdown(void)
         if(s_ui_vbs.vb[i])s_ui_vbs.vb[i]->lpVtbl->Release(s_ui_vbs.vb[i]);
         if(s_ov_vbs.vb[i])s_ov_vbs.vb[i]->lpVtbl->Release(s_ov_vbs.vb[i]);
         if(s_srt_vbs.vb[i])s_srt_vbs.vb[i]->lpVtbl->Release(s_srt_vbs.vb[i]);
+        if(s_spr_vbs.vb[i])s_spr_vbs.vb[i]->lpVtbl->Release(s_spr_vbs.vb[i]);
     }
     if (s_d3d.depth_buffer) s_d3d.depth_buffer->lpVtbl->Release(s_d3d.depth_buffer);
     if (s_d3d.dsv_heap)     s_d3d.dsv_heap->lpVtbl->Release(s_d3d.dsv_heap);

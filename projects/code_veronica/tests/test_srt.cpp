@@ -17,6 +17,7 @@
 #include <vector>
 #include <string>
 #include <cmath>
+#include <memory>
 #include <cstdlib>
 static std::vector<uint8_t> memory(16*1024*1024);
 extern "C" {
@@ -37,9 +38,12 @@ static void export_png(const char* path,const rsx_ui_quad* quads,uint32_t count,
     GdiplusStartupInput input;ULONG_PTR token;assert(GdiplusStartup(&token,&input,nullptr)==Ok);
     {
         int left=0,top=0;
+        uint32_t ns=0,aw=0,ah=0;uint64_t gen=0;const uint32_t* rgba=nullptr;
+        const rsx_ui_sprite* sprites=cv_srt_sprites(&ns,&rgba,&aw,&ah,&gen);
         if(crop&&count) {
             float x=float(w),y=float(h),right=0,bottom=0;
             for(uint32_t i=0;i<count;i++) {x=std::min(x,quads[i].x);y=std::min(y,quads[i].y);right=std::max(right,quads[i].x+quads[i].w);bottom=std::max(bottom,quads[i].y+quads[i].h);}
+            for(uint32_t i=0;i<ns;i++) {x=std::min(x,sprites[i].x);y=std::min(y,sprites[i].y);right=std::max(right,sprites[i].x+sprites[i].w);bottom=std::max(bottom,sprites[i].y+sprites[i].h);}
             left=std::max(0,int(std::floor(x))-8);top=std::max(0,int(std::floor(y))-8);
             w=uint32_t(std::ceil(right)+8-left);h=uint32_t(std::ceil(bottom)+8-top);
         }
@@ -49,7 +53,26 @@ static void export_png(const char* path,const rsx_ui_quad* quads,uint32_t count,
             g.FillRectangle(&cell,int(x),int(y),64,64);
         }
         g.TranslateTransform(REAL(-left),REAL(-top));
-        for(uint32_t i=0;i<count;i++) {const auto& q=quads[i];SolidBrush b(Color(q.argb));g.FillRectangle(&b,q.x,q.y,q.w,q.h);}
+        std::unique_ptr<Bitmap> atlas;
+        if(ns) {
+            atlas=std::make_unique<Bitmap>(int(aw),int(ah),PixelFormat32bppARGB);
+            Rect r(0,0,int(aw),int(ah));BitmapData d{};assert(atlas->LockBits(&r,ImageLockModeWrite,PixelFormat32bppARGB,&d)==Ok);
+            for(uint32_t y=0;y<ah;y++)for(uint32_t x=0;x<aw;x++) {
+                const uint32_t c=rgba[size_t(y)*aw+x];
+                reinterpret_cast<uint32_t*>(static_cast<uint8_t*>(d.Scan0)+y*d.Stride)[x]=(c&0xff00ff00u)|(c>>16&255)|(c&255)<<16;
+            }
+            atlas->UnlockBits(&d);
+        }
+        uint32_t next=0;
+        auto images=[&](uint32_t upto) {
+            for(;next<ns&&sprites[next].after<=upto;next++) {
+                const auto& s=sprites[next];const GraphicsState saved=g.Save();g.SetInterpolationMode(InterpolationModeNearestNeighbor);
+                g.DrawImage(atlas.get(),RectF(s.x,s.y,s.w,s.h),s.u0*aw,s.v0*ah,(s.u1-s.u0)*aw,(s.v1-s.v0)*ah,UnitPixel);
+                g.Restore(saved);
+            }
+        };
+        for(uint32_t i=0;i<count;i++) {images(i);const auto& q=quads[i];SolidBrush b(Color(q.argb));g.FillRectangle(&b,q.x,q.y,q.w,q.h);}
+        images(count);
         UINT bytes=0,n=0;GetImageEncodersSize(&n,&bytes);std::vector<uint8_t> data(bytes);
         auto* codecs=reinterpret_cast<ImageCodecInfo*>(data.data());GetImageEncoders(n,bytes,codecs);
         CLSID png{};for(UINT i=0;i<n;i++)if(!wcscmp(codecs[i].MimeType,L"image/png"))png=codecs[i].Clsid;
@@ -106,6 +129,7 @@ int main(int argc,char** argv) {
         for(int enemy:{1,2,3,4,5,6,7,9,12,13,14,15,17,19,21,22,23,26,29,30})assert(!loc::enemy(enemy,language).empty());
     }
     for(const wchar_t* name:{L"SRT_CLAIRE",L"SRT_CHRIS",L"SRT_STEVE",L"SRT_WESKER",
+        L"SRT_BOSSBAR_FILL",L"SRT_BOSSBAR_EMPTY",L"SRT_BOSSBAR_SMALL_FILL",L"SRT_BOSSBAR_SMALL_EMPTY",
         L"SRT_BOSS_TYRANT",L"SRT_BOSS_NOSFERATU",L"SRT_BOSS_STEVE",L"SRT_BOSS_ALBINOID",L"SRT_BOSS_GIANT_SPIDER",L"SRT_BOSS_GULP_WORM",
         L"SRT_BOSS_ALEXIA_1",L"SRT_BOSS_ALEXIA_2",L"SRT_BOSS_ALEXIA_3",L"SRT_ENEMY_ZOMBIE",L"SRT_ENEMY_DOG",L"SRT_ENEMY_SPIDER",
         L"SRT_ENEMY_HUNTER",L"SRT_ENEMY_MOTH",L"SRT_ENEMY_BAT",L"SRT_ENEMY_BANDERSNATCH",L"SRT_ENEMY_ALBINOID",
@@ -313,6 +337,39 @@ int main(int argc,char** argv) {
             if(argc>1) {char file[1024];std::snprintf(file,sizeof file,"%s/srt-%s-bosses-%s.png",argv[1],CV_TITLE_ID,lang);export_png(file,bosses,count,1600,900,false,true);}
         }
         for(int b:{2,12,14,15,17,22,23}) {state.enemy_count=1;state.enemies[0]={b,10,100,0};assert(cv_srt_design(&state,3840,2160,&count)&&count<131072);peak=std::max(peak,count);}
+        // The drawn bar: under the panel's quads and the life's glow, the frame last.
+        {
+            state.enemy_count=2;state.enemies[0]={19,504,700,0};state.enemies[1]={1,72,72,0};
+            _putenv_s("SRT_LANGUAGE","pt-BR");_putenv_s("SRT_BOSS_BAR","panel");cv_srt_configure_env();
+            const auto* q=cv_srt_design(&state,1600,900,&count);assert(q&&count<131072);
+            uint32_t ns=0,aw=0,ah=0;uint64_t gen=0;const uint32_t* rgba=nullptr;
+            const rsx_ui_sprite* sp=cv_srt_sprites(&ns,&rgba,&aw,&ah,&gen);
+            assert(sp&&ns==3&&rgba&&aw&&ah);
+            assert(sp[0].after<=sp[2].after&&sp[2].after==count);
+            assert(std::fabs(sp[1].w-sp[0].w*504/700.f)<=1.f);   // the life: 72% of the channel
+            for(const char* where:{"top","bottom"})for(const auto& size:std::vector<std::pair<uint32_t,uint32_t>>{{1280,720},{1600,900},{3840,2160}}) {
+                _putenv_s("SRT_BOSS_BAR",where);cv_srt_configure_env();
+                const auto* c=cv_srt_design(&state,size.first,size.second,&count);assert(c&&count<131072);peak=std::max(peak,count);
+                sp=cv_srt_sprites(&ns,&rgba,&aw,&ah,&gen);assert(sp&&ns==3);
+                // centred, inside the screen, at the chosen edge
+                // (at the top, beside the panel and its inventory on the same edge)
+                const float mid=sp[2].x+sp[2].w*.5f;
+                if(!strcmp(where,"bottom"))assert(std::fabs(mid-size.first*.5f)<=1.f);
+                else assert(sp[2].x>=16+620*size.second/900.f-1);
+                assert(sp[2].x>=0&&sp[2].x+sp[2].w<=size.first&&sp[2].y>=0&&sp[2].y+sp[2].h<=size.second);
+                if(!strcmp(where,"top"))assert(sp[2].y<size.second*.25f);else assert(sp[2].y>size.second*.6f);
+                for(uint32_t i=0;i<count;i++)assert(c[i].x>=0&&c[i].y>=0&&c[i].x+c[i].w<=size.first&&c[i].y+c[i].h<=size.second);
+                if(argc>1&&size.first==1600) {char file[1024];std::snprintf(file,sizeof file,"%s/srt-%s-boss-bar-%s.png",argv[1],CV_TITLE_ID,where);export_png(file,c,count,1600,900,true,false);}
+            }
+            // Alexia: the phase under the bar, in Japanese too
+            state.enemies[0]={13,266,700,0};
+            for(const char* lang:{"pt-BR","ja"}) {
+                _putenv_s("SRT_LANGUAGE",lang);cv_srt_configure_env();
+                const auto* c=cv_srt_design(&state,1600,900,&count);assert(c&&count<131072);
+                if(argc>1) {char file[1024];std::snprintf(file,sizeof file,"%s/srt-%s-boss-bar-alexia-%s.png",argv[1],CV_TITLE_ID,lang);export_png(file,c,count,1600,900,true,false);}
+            }
+            _putenv_s("SRT_BOSS_BAR","panel");_putenv_s("SRT_LANGUAGE","pt-BR");
+        }
         state=saved_state;_putenv_s("SRT_ENEMIES",saved_limit.c_str());_putenv_s("SRT_LANGUAGE","pt-BR");cv_srt_configure_env();
     }
     // The fixed slot (entry 0, the lighter) sits above the equipped weapon; the

@@ -408,6 +408,7 @@ static void harness_guest_caller(uint32_t opd, uint64_t a0, uint64_t a1,
 
 extern "C" int cv_launcher_run(char* eboot_out, size_t cap);
 extern "C" const rsx_ui_quad* (*g_rsx_srt_hook)(uint32_t,uint32_t,uint32_t*);
+extern "C" const rsx_ui_sprite* (*g_rsx_srt_sprites_hook)(uint32_t*,const uint32_t**,uint32_t*,uint32_t*,uint64_t*);
 extern "C" void cv_button_icons_init(void);   /* button_icons.cpp */
 extern "C" void ps3_patch_site(uint32_t addr, uint32_t word, const char* flag);   /* runtime/patches */
 extern "C" void ps3_patch_writes_from_env(void);
@@ -430,6 +431,7 @@ int main(int argc, char** argv)
     /* Xbox button icons: the game's own Xbox 360 art, swapped in per archive. */
     cv_button_icons_init();
     g_rsx_srt_hook = cv_srt_quads;
+    g_rsx_srt_sprites_hook = cv_srt_sprites;
     /* The switchable sites lifted into this build (projects/code_veronica/
      * patches.json, this version's sites): a patch file with the same write
      * switches them. */

@@ -398,3 +398,24 @@ Continuação do trabalho do GPT (fotos, munição do equipado, 13 idiomas).
   vieram no zip mas não têm tipo reconhecido no leitor.
 - Cada pixel distinto vira um quad: acima de 44 px na tela a foto é resolvida
   em 44×44 e ampliada em blocos. Pico testado 119402 quads (4K, 200%).
+
+## Barra de chefe desenhada e barra no centro da tela — 16/10/2026
+
+- Arte do usuário (Kastiel), autorizada para o GitHub, em duas versões:
+  `launcher_art/srt_bossbar_*` (larga, centro da tela) e
+  `srt_bossbar_small_*` (compacta, painel). Cada uma tem três camadas: a
+  moldura com o canal recortado, o canal cheio e o canal vazio. O texto
+  pintado na arte original foi apagado; nome, % e vida são escritos pelo SRT,
+  traduzidos e por chefe. O retângulo do canal está em `wide_art`/`small_art`.
+- As camadas são imagens de verdade, não quads: o SRT as redimensiona com
+  bicúbico para os pixels exatos da tela num atlas RGBA (`prepare_atlas`) e o
+  backend as desenha como textura (`rsx_ui_sprite`, `g_rsx_srt_sprites_hook`,
+  PSO próprio, SRV `SPRITE_SRV`), 1:1 e nítidas em qualquer resolução. Ordem:
+  quads do cache → canal vazio e vida → pulso/brilho/borda quente → moldura.
+- Opção no launcher "Barra de chefe" ([srt] barra_chefe, `SRT_BOSS_BAR`):
+  painel (padrão) | centro em cima | centro embaixo. No centro, os chefes
+  saem da lista do painel e o primeiro ganha a barra larga (860 unidades, nome
+  espaçado em serifa em cima, % e vida embaixo, fase da Alexia no meio). Se o
+  painel ocupa a mesma borda, a barra se centraliza no espaço que sobra.
+- Com o SRT em janela separada, o painel vai para a janela e a barra do
+  centro continua sobre o jogo (`design(...,panel,centre)`).

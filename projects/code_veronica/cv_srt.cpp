@@ -26,7 +26,7 @@ namespace {
 struct Config {
     bool enabled=false,name=true,health=true,time=true,stats=true,inventory=false,inventory_below=false,window=false;
     cv_srt_i18n::Language lang=cv_srt_i18n::EN;
-    int enemies=3,scale=100,corner=0,opacity=70;
+    int enemies=3,scale=100,corner=0,opacity=70,boss_bar=0;   // boss_bar: 0 in the panel, 1 top centre, 2 bottom centre
     std::wstring credit=L"by Kastiel",game_root;
     std::array<std::wstring,17> words={L"Health",L"Game time",L"Saves",L"Retries",L"Enemies",L"Inventory",L"Equipped",L"Fine",L"Caution",L"Danger",L"Poison",L"Gas",L"Dead",L"Waiting for a game",L"Empty",L"Boss",L"Phase"};
 };
@@ -74,25 +74,30 @@ struct ItemImages {
         return images.emplace(id,std::move(image)).first->second.get();
     }
 } item_images;
-// A square photo embedded from launcher_art/ (RCDATA named after the file).
+// An image embedded from launcher_art/ (RCDATA named after the file).
 // Missing or unreadable: nullptr, remembered, and the layout goes without.
-Bitmap* art(const wchar_t* name) {
+Bitmap* resource_image(const wchar_t* name) {
     static std::map<std::wstring,std::unique_ptr<Bitmap>> cache;
     auto found=cache.find(name);if(found!=cache.end())return found->second.get();
     auto& image=cache[name];
     const HMODULE module=GetModuleHandleW(nullptr);const HRSRC resource=FindResourceW(module,name,MAKEINTRESOURCEW(10));
     if(!resource)return nullptr;const DWORD size=SizeofResource(module,resource);
-    const void* data=LockResource(LoadResource(module,resource));if(!data||!size||size>1024*1024)return nullptr;
+    const void* data=LockResource(LoadResource(module,resource));if(!data||!size||size>4*1024*1024)return nullptr;
     HGLOBAL block=GlobalAlloc(GMEM_MOVEABLE,size);if(!block)return nullptr;
     void* bytes=GlobalLock(block);if(!bytes) {GlobalFree(block);return nullptr;}
     std::memcpy(bytes,data,size);GlobalUnlock(block);
     IStream* stream=nullptr;if(CreateStreamOnHGlobal(block,TRUE,&stream)!=S_OK) {GlobalFree(block);return nullptr;}
     {
         Bitmap source(stream);const UINT w=source.GetWidth(),h=source.GetHeight();
-        if(source.GetLastStatus()==Ok&&w&&w==h&&w<=512)image.reset(source.Clone(0,0,int(w),int(h),PixelFormat32bppARGB));
+        if(source.GetLastStatus()==Ok&&w&&h&&w<=4096&&h<=4096)image.reset(source.Clone(0,0,int(w),int(h),PixelFormat32bppARGB));
     }
     stream->Release();
     return image.get();
+}
+// A square photo (portraits, enemies).
+Bitmap* art(const wchar_t* name) {
+    Bitmap* image=resource_image(name);
+    return image&&image->GetWidth()==image->GetHeight()&&image->GetWidth()<=512?image:nullptr;
 }
 Bitmap* portrait(int character) {
     const wchar_t* names[]={L"SRT_CLAIRE",L"SRT_CHRIS",L"SRT_STEVE",L"SRT_WESKER"};
@@ -121,6 +126,54 @@ Bitmap* boss_photo(const Boss& b) {
     if(b.phase) {wchar_t name[48];swprintf(name,48,L"%s_%d",b.photo,b.phase);if(Bitmap* own=art(name))return own;}
     return art(b.photo);
 }
+// ---- The boss bar's art ----------------------------------------------------
+// Kastiel's drawing (launcher_art/srt_bossbar[_small]_*.png): the frame with
+// its channel cut out, and the channel full and empty. Sizes are in the
+// drawing's pixels; the channel is the rectangle the life fills.
+struct BarArt {const wchar_t *frame,*fill,*empty;float w,h,cx,cy,cw,ch;};
+const BarArt wide_art{L"SRT_BOSSBAR_FRAME",L"SRT_BOSSBAR_FILL",L"SRT_BOSSBAR_EMPTY",1642,180,157,86,1318,32};
+const BarArt small_art{L"SRT_BOSSBAR_SMALL_FRAME",L"SRT_BOSSBAR_SMALL_FILL",L"SRT_BOSSBAR_SMALL_EMPTY",912,172,146,86,608,32};
+float art_height(const BarArt& art,float width) {return width*art.h/art.w;}
+// Both designs, resized to the exact pixels they cover on screen and packed
+// into one atlas, so the backend draws them 1:1 and they stay sharp at any
+// resolution. Redone only when a size changes.
+struct AtlasRect {int x=0,y=0,w=0,h=0;};
+struct BarImages {AtlasRect frame,fill,empty;int cx=0,cy=0;bool ok=false;};
+struct Atlas {std::vector<uint32_t> rgba;uint32_t w=1,h=1;uint64_t gen=0;int small_w=-1,wide_w=-1;BarImages compact,wide;} atlas;
+void prepare_atlas(int small_w,int wide_w) {
+    if(atlas.small_w==small_w&&atlas.wide_w==wide_w)return;
+    atlas.small_w=small_w;atlas.wide_w=wide_w;atlas.compact={};atlas.wide={};
+    struct Piece {Bitmap* source;int w,h;AtlasRect* at;};std::vector<Piece> pieces;
+    auto plan=[&](const BarArt& art,int width,BarImages& out) {
+        Bitmap *frame=resource_image(art.frame),*fill=resource_image(art.fill),*empty=resource_image(art.empty);
+        if(width<8||!frame||!fill||!empty)return;
+        const float s=width/art.w;
+        out.cx=int(std::lround(art.cx*s));out.cy=int(std::lround(art.cy*s));
+        const int cw=std::max(1,int(std::lround((art.cx+art.cw)*s))-out.cx),ch=std::max(1,int(std::lround((art.cy+art.ch)*s))-out.cy);
+        pieces.push_back({frame,width,std::max(1,int(std::lround(art.h*s))),&out.frame});
+        pieces.push_back({fill,cw,ch,&out.fill});pieces.push_back({empty,cw,ch,&out.empty});out.ok=true;
+    };
+    plan(small_art,small_w,atlas.compact);plan(wide_art,wide_w,atlas.wide);
+    int w=1,h=0;for(auto& p:pieces) {*p.at={0,h,p.w,p.h};w=std::max(w,p.w);h+=p.h+2;}
+    atlas.w=uint32_t(w);atlas.h=uint32_t(std::max(1,h));atlas.rgba.assign(size_t(atlas.w)*atlas.h,0);atlas.gen++;
+    for(const auto& p:pieces) {
+        Bitmap out(p.w,p.h,PixelFormat32bppARGB);
+        {
+            Graphics g(&out);g.Clear(Color(0,0,0,0));g.SetCompositingMode(CompositingModeSourceCopy);
+            g.SetInterpolationMode(InterpolationModeHighQualityBicubic);g.SetPixelOffsetMode(PixelOffsetModeHalf);
+            ImageAttributes edges;edges.SetWrapMode(WrapModeTileFlipXY);   // no dark rim at the edges
+            g.DrawImage(p.source,Rect(0,0,p.w,p.h),0,0,int(p.source->GetWidth()),int(p.source->GetHeight()),UnitPixel,&edges);
+        }
+        BitmapData d{};Rect r(0,0,p.w,p.h);
+        if(out.LockBits(&r,ImageLockModeRead,PixelFormat32bppARGB,&d)!=Ok)continue;
+        for(int y=0;y<p.h;y++) {
+            const auto* row=reinterpret_cast<const uint32_t*>(static_cast<const uint8_t*>(d.Scan0)+y*d.Stride);
+            uint32_t* to=atlas.rgba.data()+size_t(p.at->y+y)*atlas.w+p.at->x;
+            for(int x=0;x<p.w;x++) {const uint32_t v=row[x];to[x]=(v&0xff00ff00u)|(v>>16&255)|(v&255)<<16;}   // BGRA -> RGBA
+        }
+        out.UnlockBits(&d);
+    }
+}
 struct Canvas {
     cv_srt_i18n::Language lang;
     float scale,opacity;Bitmap bitmap;Graphics g;Color cream{255,216,207,192},dim{255,149,142,134},red{255,163,51,44},gold{255,201,162,74};
@@ -128,7 +181,7 @@ struct Canvas {
     void box(float x,float y,float w,float h,Color color) {SolidBrush b(color);g.FillRectangle(&b,x,y,w,h);}
     void background(float x,float y,float w,float h,Color color) {box(x,y,w,h,Color(BYTE(std::lround(color.GetA()*opacity)),color.GetR(),color.GetG(),color.GetB()));}
     void line(float x,float y,float x2,float y2,Color c,float size=1) {Pen p(c,size);g.DrawLine(&p,x,y,x2,y2);}
-    void text(const std::wstring& value,float x,float y,float w,float size,Color c,bool bold=false,bool right=false,bool serif=false,float h=30,bool wrap=false,bool ellipsis=true) {
+    void text(const std::wstring& value,float x,float y,float w,float size,Color c,bool bold=false,bool right=false,bool serif=false,float h=30,bool wrap=false,bool ellipsis=true,bool centred=false) {
         // Resolve text at 2x into a cached, native-pixel tile. Only the text is
         // supersampled: the panel, game and per-frame ECG keep their own cost.
         using Key=std::tuple<std::wstring,std::wstring,int,int,int,int,uint32_t>;
@@ -136,7 +189,7 @@ struct Canvas {
         const int pw=std::max(1,int(std::ceil(w*scale))),ph=std::max(1,int(std::ceil(h*scale)));
         const bool rtl=cv_srt_i18n::rtl_text(value);
         const std::wstring face=serif?L"Georgia":cv_srt_i18n::font_face(lang,bold);
-        const int flags=(bold?1:0)|(right?2:0)|(serif?4:0)|(wrap?8:0)|(ellipsis?16:0)|(rtl?32:0);
+        const int flags=(bold?1:0)|(right?2:0)|(serif?4:0)|(wrap?8:0)|(ellipsis?16:0)|(rtl?32:0)|(centred?64:0);
         Key key{value,face,pw,ph,int(std::lround(size*scale*64)),flags,c.GetValue()};
         auto found=cache.find(key);
         if(found==cache.end()) {
@@ -149,7 +202,7 @@ struct Canvas {
             Font font(&family,size*scale,FontStyleRegular,UnitPixel);
             StringFormat format;format.SetLineAlignment(StringAlignmentCenter);
             // Under RTL, Near is the right edge: swap so Arabic keeps the same layout slots.
-            format.SetAlignment(right!=rtl?StringAlignmentFar:StringAlignmentNear);
+            format.SetAlignment(centred?StringAlignmentCenter:right!=rtl?StringAlignmentFar:StringAlignmentNear);
             format.SetTrimming(ellipsis?(wrap?StringTrimmingEllipsisWord:StringTrimmingEllipsisCharacter):StringTrimmingNone);format.SetFormatFlags((wrap?StringFormatFlagsLineLimit:StringFormatFlagsNoWrap)|(rtl?StringFormatFlagsDirectionRightToLeft:0));
             SolidBrush halo(Color(105,0,0,0)),shadow(Color(210,0,0,0)),ink(c);
             const float offsets[][2]={{-.65f,0},{.65f,0},{0,-.65f},{0,.65f}};
@@ -224,27 +277,28 @@ struct Canvas {
         box(x,y,w,h,Color(255,40,35,34));box(x,y,w*std::clamp(ratio,0.f,1.f),h,c);
     }
 };
-std::vector<rsx_ui_quad> quads;
+// What one part of the SRT draws, in screen pixels: its cached quads, then
+// its art (the channel under the animation, the frame over it), with the
+// animated quads in between. The panel and the boss bar in the middle of the
+// screen are separate, so the bar can stay over the game while the panel
+// goes to its own window.
+struct ArtSprite {float x,y,w,h;AtlasRect src;bool over;};
+struct BossFx {float x,y,w,h,fill,scale;};   // a channel and its filled width
+struct Layer {std::vector<rsx_ui_quad> base;std::vector<ArtSprite> art;std::vector<BossFx> fx;};
+Layer panel_layer,centre_layer;
+std::vector<rsx_ui_quad> quads;std::vector<rsx_ui_sprite> sprites;
 size_t base_count=0;uint64_t base_gen=0;
 struct PulseArea {float x=0,y=0,w=0,scale=1;uint32_t color=0;bool dead=false;} pulse;
-// Boss blocks, in logical units while the layout is drawn, then in screen
-// pixels: the bar's filled part and the frame, animated over the cache.
-struct BossFx {float x,y,w,h,fill,fx,fy,fw,fh;};
-std::vector<BossFx> boss_fx;float fx_scale=1;
-void animate_bosses() {
-    if(boss_fx.empty())return;
+void animate_bosses(const std::vector<BossFx>& fx) {
+    if(fx.empty())return;
     const double t=double(GetTickCount64()%1000000)/1000.0;
-    // The bar breathes once every 1.4 s; the frame brightens with it.
+    // The life breathes once every 1.4 s.
     const float bright=float(.5+.5*std::sin(t*4.5));
-    const float line=std::max(1.f,std::round(fx_scale));
-    for(const auto& b:boss_fx) {
-        const uint32_t frame=uint32_t(std::lround(200*bright))<<24|0xf3d27a;
-        quads.push_back({b.fx,b.fy,b.fw,line,frame,0});quads.push_back({b.fx,b.fy+b.fh-line,b.fw,line,frame,0});
-        quads.push_back({b.fx,b.fy,line,b.fh,frame,0});quads.push_back({b.fx+b.fw-line,b.fy,line,b.fh,frame,0});
+    for(const auto& b:fx) {
         if(b.fill<1)continue;
-        quads.push_back({b.x,b.y,b.fill,b.h,uint32_t(std::lround(110*bright))<<24|0xff6e5a,0});
+        quads.push_back({b.x,b.y,b.fill,b.h,uint32_t(std::lround(70*bright))<<24|0xff6e5a,0});
         // A glow that crosses only the life left, slowly, then rests.
-        const float band=40*fx_scale,speed=55*fx_scale,run=(b.fill+band)/speed,period=run+1.2f;
+        const float band=40*b.scale,speed=55*b.scale,run=(b.fill+band)/speed,period=run+1.2f;
         const float centre=float(std::fmod(t,double(period)))*speed-band*.5f;
         for(int x=int(std::floor(centre-band*.5f));x<int(std::ceil(centre+band*.5f));x++) {
             if(x<0||x>=int(b.fill))continue;
@@ -252,10 +306,14 @@ void animate_bosses() {
             const uint32_t alpha=uint32_t(std::lround(150*std::exp(-d*d)));
             if(alpha)quads.push_back({b.x+x,b.y,1,b.h,alpha<<24|0xffebc8,0});
         }
+        // The hot edge where the life ends, as in the drawing.
+        const float edge=std::max(1.f,std::round(1.5f*b.scale)),glow=std::min(b.fill,edge*4);
+        quads.push_back({b.x+b.fill-glow,b.y,glow,b.h,uint32_t(std::lround(60+50*bright))<<24|0xffa040,0});
+        quads.push_back({b.x+b.fill-edge,b.y,edge,b.h,0xe0ffe0a0u,0});
     }
 }
-void animate_pulse() {
-    quads.resize(base_count);animate_bosses();if(pulse.w<=0)return;
+void draw_pulse() {
+    if(pulse.w<=0)return;
     const float points[][2]={{0,0},{.08f,0},{.12f,-2},{.17f,0},{.28f,0},{.31f,3},{.34f,-11},{.37f,7},{.42f,0},{.55f,-3},{.66f,0},{1,0}};
     // A full cycle now takes ~2.2 seconds, instead of ~0.9 seconds.
     const double phase=double(GetTickCount64()%100000)/1000.0*.45;
@@ -288,22 +346,109 @@ void animate_pulse() {
       }
     }
 }
+// The frame's output: the chosen parts' cached quads, the art under the
+// animation, the animation (the ECG last), then the art over it.
+void compose(bool with_panel,bool with_centre) {
+    quads.clear();sprites.clear();
+    const Layer* parts[2]={with_panel?&panel_layer:nullptr,with_centre?&centre_layer:nullptr};
+    for(const Layer* l:parts)if(l)quads.insert(quads.end(),l->base.begin(),l->base.end());
+    base_count=quads.size();
+    auto art=[&](bool over) {
+        for(const Layer* l:parts)if(l)for(const auto& a:l->art)if(a.over==over)
+            sprites.push_back({a.x,a.y,a.w,a.h,a.src.x/float(atlas.w),a.src.y/float(atlas.h),
+                               (a.src.x+a.src.w)/float(atlas.w),(a.src.y+a.src.h)/float(atlas.h),0xffffffffu,uint32_t(quads.size())});
+    };
+    art(false);
+    for(const Layer* l:parts)if(l)animate_bosses(l->fx);
+    if(with_panel)draw_pulse();
+    art(true);
+}
+// A canvas's pixels as cached quads at (x0, y0). Equal adjacent rows merge as
+// well as horizontal runs, so solid areas do not cost one quad per pixel.
+// Extra antialias/shadow shades can create many runs at large HUD scales:
+// they are coarsened only when the result would not fit `budget`, instead of
+// dropping the tail at the backend's 131072-quad limit.
+void rasterize(Bitmap& bitmap,float x0,float y0,std::vector<rsx_ui_quad>& out,size_t budget) {
+    const int pw=int(bitmap.GetWidth()),ph=int(bitmap.GetHeight());
+    BitmapData pixels{};Rect r(0,0,pw,ph);out.clear();
+    if(bitmap.LockBits(&r,ImageLockModeRead,PixelFormat32bppARGB,&pixels)!=Ok)return;
+    struct Run {int x,end;uint32_t color;size_t quad;};
+    for(unsigned step=0;;step=step?step*2:4) {
+      out.clear();
+      auto color_at=[&](uint32_t color) {
+        if(!step || !(color>>24) || (color&0xffffff)==0x0c0c0e ||
+           color==0xffa3332c || color==0xff282322 || color==0xff000000)return color;
+        uint32_t result=0;
+        for(unsigned shift=0;shift<32;shift+=8) {
+            const unsigned channel=(color>>shift)&255;
+            result|=std::min(255u,((channel+step/2)/step)*step)<<shift;
+        }
+        return result;
+      };
+      std::vector<Run> previous,current;
+      for(int row=0;row<ph;row++) {
+        const auto* px=reinterpret_cast<const uint32_t*>(static_cast<const uint8_t*>(pixels.Scan0)+row*pixels.Stride);
+        current.clear();size_t search=0;
+        for(int x=0;x<pw;) {
+            const uint32_t color=color_at(px[x]);int end=x+1;while(end<pw&&color_at(px[end])==color)end++;
+            if(color>>24) {
+                while(search<previous.size()&&previous[search].x<x)search++;
+                size_t index=out.size();
+                if(search<previous.size()&&previous[search].x==x&&previous[search].end==end&&previous[search].color==color) {
+                    index=previous[search].quad;out[index].h+=1.f;
+                } else out.push_back({x0+x,y0+row,float(end-x),1.f,color,0});
+                current.push_back({x,end,color,index});
+            }
+            x=end;
+        }
+        previous.swap(current);
+      }
+      if(out.size()<=budget || step>=256)break;
+    }
+    bitmap.UnlockBits(&pixels);
+}
+// The art of one bar, placed with its frame's top-left at (x, y) in screen
+// pixels: the empty channel, the life over it, and the frame on top.
+void place_bar(Layer& layer,const BarImages& art,float x,float y,float ratio,float scale) {
+    const float cx=x+art.cx,cy=y+art.cy,cw=float(art.fill.w),ch=float(art.fill.h);
+    layer.art.push_back({cx,cy,cw,ch,art.empty,false});
+    const int filled=int(std::lround(cw*std::clamp(ratio,0.f,1.f)));
+    if(filled>0) {AtlasRect part=art.fill;part.w=filled;layer.art.push_back({cx,cy,float(filled),ch,part,false});}
+    layer.art.push_back({x,y,float(art.frame.w),float(art.frame.h),art.frame,true});
+    layer.fx.push_back({cx,cy,cw,ch,float(filled),scale});
+}
+// Latin, Greek and Cyrillic names are tracked out like engraved capitals;
+// other scripts keep their own spacing.
+std::wstring engraved(const std::wstring& name) {
+    for(wchar_t ch:name)if(ch>=0x0590)return name;
+    std::wstring out;
+    for(size_t i=0;i<name.size();i++) {out+=name[i];if(i+1<name.size())out+=name[i]==L' '?L" ":L" ";}
+    return out;
+}
 
 void build(const cv_srt_state& st,const Config& cfg,uint32_t width,uint32_t height) {
-    boss_fx.clear();
+    panel_layer={};centre_layer={};
     static ULONG_PTR token=0;if(!token) {GdiplusStartupInput input;GdiplusStartup(&token,&input,nullptr);}
     Bitmap measure_bitmap(1,1,PixelFormat32bppARGB);Graphics measure_graphics(&measure_bitmap);
     Font credit_font(L"Segoe UI",12,FontStyleRegular,UnitPixel);RectF credit_bounds;
     measure_graphics.MeasureString(cfg.credit.c_str(),-1,&credit_font,PointF(0,0),&credit_bounds);
     const bool credit_wrap=credit_bounds.Width>104;
     const auto grid=tiles(st);int gridrows=0;for(const auto& t:grid)gridrows=std::max(gridrows,t.slot/2+1);
-    // Bosses first, so a limit of one or two enemies still shows them.
     std::vector<cv_srt_enemy> shown(st.enemies,st.enemies+std::clamp(st.enemy_count,0,int(CV_SRT_MAX_ENEMIES)));
+    // With the boss bar in the middle of the screen, bosses leave the list
+    // and the first one gets the bar.
+    cv_srt_enemy centre_boss{};bool centre=false;
+    if(cfg.boss_bar&&st.valid) {
+        for(const auto& e:shown)if(boss(e.type)) {centre_boss=e;centre=true;break;}
+        shown.erase(std::remove_if(shown.begin(),shown.end(),[](const cv_srt_enemy& e){return boss(e.type)!=nullptr;}),shown.end());
+    }
+    // Bosses first, so a limit of one or two enemies still shows them.
     std::stable_partition(shown.begin(),shown.end(),[](const cv_srt_enemy& e){return boss(e.type)!=nullptr;});
     const int count=cfg.enemies==99?int(shown.size()):std::min(int(shown.size()),cfg.enemies);
     int bosses=0;for(int i=0;i<count;i++)if(boss(shown[i].type))bosses++;
+    const bool panel_on=cfg.name||cfg.health||cfg.time||cfg.stats||cfg.enemies||cfg.inventory;
     int h=16+(cfg.name?28:0)+(cfg.health?104:0)+(cfg.time?40:0)+(cfg.stats?45:0);
-    if(cfg.enemies)h+=28+std::max(1,count)*39+bosses*45;
+    if(cfg.enemies)h+=28+std::max(1,count)*39+bosses*69;
     h+=credit_wrap?42:26;
     // The inventory goes beside the main panel, or under the enemies.
     const bool inventory=st.valid&&cfg.inventory,below=inventory&&cfg.inventory_below,side=inventory&&!below;
@@ -352,6 +497,24 @@ void build(const cv_srt_state& st,const Config& cfg,uint32_t width,uint32_t heig
     if(!st.valid)h=44;else if(side)h=std::max(h,inventory_height);else if(below)h+=inventory_height-8;
     float scale=float(height)/900.f*cfg.scale/100.f;
     scale=std::min(scale,float(height-32)/float(h));scale=std::min(scale,float(width-32)/float(logical_width));
+    // The boss bar in the middle: 860 units wide (as the panel's 304), the
+    // name above it, the percentage and the life under the channel.
+    const float centre_w=860,centre_name=36,centre_h=centre_name+art_height(wide_art,centre_w);
+    float centre_scale=std::min(float(height)/900.f*cfg.scale/100.f,float(width)*.9f/centre_w);
+    // Over the game, a panel on the same edge would sit under the bar: the bar
+    // is then centred in the rest of that edge (when that leaves it room).
+    float centre_left=0,centre_right=float(width);
+    if(panel_on&&!cfg.window&&(cfg.boss_bar==1)==(cfg.corner<2)) {
+        const float taken=std::ceil(logical_width*scale)+32,free=float(width)-taken;
+        if((float(width)-centre_w*centre_scale)*.5f<taken&&free-16>=float(width)*.45f) {
+            if(right)centre_right=free;else centre_left=taken;
+            centre_scale=std::min(centre_scale,(free-16)/centre_w);
+        }
+    }
+    // The art, resized for these sizes (kept while a boss comes and goes).
+    prepare_atlas(cfg.enemies&&!cfg.boss_bar?int(std::lround(268*scale)):0,cfg.boss_bar?int(std::lround(centre_w*centre_scale)):0);
+    const bool small_art_ok=atlas.compact.ok;
+    struct PendingBar {float x,y,ratio;};std::vector<PendingBar> panel_bars;
     Canvas c(logical_width,h,scale,cfg.opacity,cfg.lang);
     auto panel=[&](float x,float ph,float pw=304) {
         c.background(x,0,pw,ph,Color(255,12,12,14));
@@ -399,28 +562,34 @@ void build(const cv_srt_state& st,const Config& cfg,uint32_t width,uint32_t heig
             for(int i=0;i<count;i++) {
                 const auto& e=shown[i];
                 if(const Boss* b=boss(e.type)) {
-                    // A framed block: photo, BOSS, the name large, a thicker bar
-                    // in quarters, Alexia's phase as three diamonds.
-                    const Color frame(255,201,162,74),hp_ink(255,222,116,107);
-                    c.background(18,y,268,76,Color(255,28,20,12));
-                    c.line(18,y,286,y,frame);c.line(18,y+75,286,y+75,frame);c.line(18,y,18,y+76,frame);c.line(285,y,285,y+76,frame);
-                    Bitmap* image=boss_photo(*b);const float tx=image?86.f:26.f,right=278;
-                    if(image)c.photo(image,26,y+12,52,frame);
+                    // Photo, BOSS (and Alexia's phase), the name large, then the
+                    // drawn bar the width of the panel, with the percentage and
+                    // the life under its channel.
+                    const Color gold(255,201,162,74);
+                    c.background(18,y,268,102,Color(255,28,20,12));
+                    Bitmap* image=boss_photo(*b);const float tx=image?76.f:26.f,right=280;
+                    if(image)c.photo(image,24,y+4,44,gold);
                     const float ratio=e.maximum?std::clamp(float(e.hp)/e.maximum,0.f,1.f):0;
-                    const std::wstring pct=number(int(ratio*100+.5f))+L"%";
-                    c.text(upper(cfg.words[15]),tx,y+3,120,11,frame,true,false,false,16);
-                    if(b->phase)for(int k=0;k<3;k++)c.diamond(right-28+k*12.f,y+11,4.5f,frame,k<b->phase);
-                    else c.text(pct,right-60,y+3,60,12,frame,false,true,false,16);
-                    c.text(upper(cv_srt_i18n::enemy(b->phase?12:e.type,cfg.lang)),tx,y+16,right-tx,18,c.cream,false,false,true,26);
-                    c.bar(tx,y+44,right-tx,12,ratio,Color(255,184,50,42));
-                    boss_fx.push_back({main_x+tx,y+44,right-tx,12,ratio,main_x+18,y,268,76});
-                    for(int q=1;q<4;q++)c.line(tx+(right-tx)*q/4.f,y+44,tx+(right-tx)*q/4.f,y+56,Color(255,12,12,14));
+                    const std::wstring pct=number(int(ratio*100+.5f))+L"%",life=number(e.hp)+L" / "+number(e.maximum);
+                    std::wstring title=upper(cfg.words[15]);
                     if(b->phase) {
                         static const wchar_t* roman[]={L"I",L"II",L"III"};
-                        c.text(upper(cfg.words[16])+L" "+roman[b->phase-1]+L" · "+pct,tx,y+57,140,12,frame,false,false,false,17);
+                        title+=L" · "+upper(cfg.words[16])+L" "+roman[b->phase-1];
+                        for(int k=0;k<3;k++)c.diamond(right-28+k*12.f,y+11,4.5f,gold,k<b->phase);
                     }
-                    c.text(number(e.hp)+L" / "+number(e.maximum),right-110,y+57,110,12,hp_ink,false,true,false,17);
-                    y+=84;continue;
+                    c.text(title,tx,y+3,right-tx-(b->phase?40:0),11,gold,true,false,false,16);
+                    c.text(upper(cv_srt_i18n::enemy(b->phase?12:e.type,cfg.lang)),tx,y+19,right-tx,18,c.cream,false,false,true,26);
+                    if(small_art_ok) {
+                        const float bar_y=y+50,under=bar_y+art_height(small_art,268)*(small_art.cy+small_art.ch)/small_art.h;
+                        panel_bars.push_back({main_x+18,bar_y,ratio});
+                        c.text(pct,64,under,80,12.5f,c.cream,false,false,true,16);
+                        c.text(life,130,under,110,12.5f,c.cream,false,true,true,16);
+                    } else {
+                        c.bar(tx,y+60,right-tx,12,ratio,Color(255,184,50,42));
+                        c.text(pct,tx,y+76,80,12,gold,false,false,false,17);
+                        c.text(life,right-110,y+76,110,12,Color(255,222,116,107),false,true,false,17);
+                    }
+                    y+=108;continue;
                 }
                 Bitmap* image=enemy_photo(e.type);const float ex=image?56.f:18.f;
                 if(image)c.photo(image,18,y+1,32,Color(255,67,39,35));
@@ -463,63 +632,40 @@ void build(const cv_srt_state& st,const Config& cfg,uint32_t width,uint32_t heig
         c.text(L"SRT · CODE:VERONICA",18,float(h-(credit_wrap?41:25)),credit_wrap?268:156,12,c.dim,false,false,false,22);
         c.text(cfg.credit,credit_wrap?18:178,float(h-25),credit_wrap?268:108,12,c.cream,false,true,false,22);
     }
+    // The boss bar in the middle of the screen: its words as cached quads, its
+    // art as images, at the top or the bottom, centred.
+    if(centre) {
+        const Boss* b=boss(centre_boss.type);
+        Canvas cc(int(centre_w),int(std::ceil(centre_h))+2,centre_scale,0,cfg.lang);
+        const Color gold(255,201,162,74);
+        const float ratio=centre_boss.maximum?std::clamp(float(centre_boss.hp)/centre_boss.maximum,0.f,1.f):0;
+        const float art_h=art_height(wide_art,centre_w),under=centre_name+art_h*(wide_art.cy+wide_art.ch)/wide_art.h;
+        cc.text(engraved(upper(cv_srt_i18n::enemy(b->phase?12:centre_boss.type,cfg.lang))),0,0,centre_w,28,cc.cream,false,false,true,centre_name,false,true,true);
+        cc.text(number(int(ratio*100+.5f))+L"%",centre_w*.104f,under,140,19,cc.cream,false,false,true,centre_h-under);
+        cc.text(number(centre_boss.hp)+L" / "+number(centre_boss.maximum),centre_w*.907f-200,under,200,19,cc.cream,false,true,true,centre_h-under);
+        if(b->phase) {
+            static const wchar_t* roman[]={L"I",L"II",L"III"};
+            cc.text(upper(cfg.words[16])+L" "+roman[b->phase-1],centre_w*.5f-120,under,240,13,gold,true,false,false,centre_h-under,false,true,true);
+        }
+        if(!atlas.wide.ok)cc.bar(centre_w*.1f,centre_name+art_h*.45f,centre_w*.8f,art_h*.2f,ratio,Color(255,184,50,42));
+        const float cw=std::ceil(centre_w*centre_scale),ch=std::ceil(centre_h*centre_scale);
+        const float cx=std::round(centre_left+(centre_right-centre_left-cw)*.5f);
+        const float cy=cfg.boss_bar==2?std::round(float(height)-ch-12*centre_scale):std::round(12*centre_scale);
+        rasterize(cc.bitmap,cx,cy,centre_layer.base,20000);
+        if(atlas.wide.ok)place_bar(centre_layer,atlas.wide,cx,cy+std::round(centre_name*centre_scale),ratio,centre_scale);
+    }
     // Rasterize at final back-buffer resolution: never point-scale the text.
-    // Coalesce equal adjacent rows as well as horizontal runs. Cached geometry
-    // remains one draw call and solid panel areas do not cost one quad/pixel.
     const int pw=int(c.bitmap.GetWidth()),ph=int(c.bitmap.GetHeight());
-    BitmapData pixels{};Rect r(0,0,pw,ph);quads.clear();
-    if(c.bitmap.LockBits(&r,ImageLockModeRead,PixelFormat32bppARGB,&pixels)!=Ok)return;
     const float x0=(cfg.corner==1||cfg.corner==3)?float(width)-16-pw:16.f;
     const float y0=cfg.corner>=2?float(height)-16-ph:16.f;
-    struct Run {int x,end;uint32_t color;size_t quad;};
-    // Extra antialias/shadow shades can create many runs at large HUD scales.
-    // Coarsen only those shades when needed, instead of dropping the tail of
-    // the panel at the backend's 131072-quad limit. Normal-size HUDs are exact.
-    for(unsigned step=0;;step=step?step*2:4) {
-      quads.clear();
-      auto color_at=[&](uint32_t color) {
-        if(!step || !(color>>24) || (color&0xffffff)==0x0c0c0e ||
-           color==0xffa3332c || color==0xff282322 || color==0xff000000)return color;
-        uint32_t out=0;
-        for(unsigned shift=0;shift<32;shift+=8) {
-            const unsigned channel=(color>>shift)&255;
-            out|=std::min(255u,((channel+step/2)/step)*step)<<shift;
-        }
-        return out;
-      };
-      std::vector<Run> previous,current;
-      for(int row=0;row<ph;row++) {
-        const auto* px=reinterpret_cast<const uint32_t*>(static_cast<const uint8_t*>(pixels.Scan0)+row*pixels.Stride);
-        current.clear();size_t search=0;
-        for(int x=0;x<pw;) {
-            const uint32_t color=color_at(px[x]);int end=x+1;while(end<pw&&color_at(px[end])==color)end++;
-            if(color>>24) {
-                while(search<previous.size()&&previous[search].x<x)search++;
-                size_t index=quads.size();
-                if(search<previous.size()&&previous[search].x==x&&previous[search].end==end&&previous[search].color==color) {
-                    index=previous[search].quad;quads[index].h+=1.f;
-                } else quads.push_back({x0+x,y0+row,float(end-x),1.f,color,0});
-                current.push_back({x,end,color,index});
-            }
-            x=end;
-        }
-        previous.swap(current);
-      }
-      if(quads.size()+size_t(166*scale)*6<=120000 || step>=256)break;
-    }
-    c.bitmap.UnlockBits(&pixels);
-    base_count=quads.size();base_gen++;
-    fx_scale=scale;
-    for(auto& b:boss_fx) {   // logical -> screen pixels, on the same pixel grid as the cache
-        const float fill=b.w*b.fill;
-        b={std::round(x0+b.x*scale),std::round(y0+b.y*scale),std::round(b.w*scale),std::round(b.h*scale),std::round(fill*scale),
-           std::round(x0+b.fx*scale),std::round(y0+b.fy*scale),std::round(b.fw*scale),std::round(b.fh*scale)};
-    }
+    if(panel_on)rasterize(c.bitmap,x0,y0,panel_layer.base,120000-size_t(166*scale)*6-centre_layer.base.size());
+    base_gen++;
+    for(const auto& bar:panel_bars)   // on the same pixel grid as the cache
+        place_bar(panel_layer,atlas.compact,std::round(x0+bar.x*scale),std::round(y0+bar.y*scale),bar.ratio,scale);
     pulse={};
-    if(ecg_y>=0) {
-        pulse={std::round(x0+(main_x+18)*scale),std::round(y0+ecg_y*scale),std::floor(166*scale),scale,ecg_color,st.condition==SRT_DEAD};
-        quads.reserve(base_count+size_t(pulse.w)*6+boss_fx.size()*size_t(8+48*scale)+1);
-    }
+    if(ecg_y>=0&&panel_on)pulse={std::round(x0+(main_x+18)*scale),std::round(y0+ecg_y*scale),std::floor(166*scale),scale,ecg_color,st.condition==SRT_DEAD};
+    const size_t fx=panel_layer.fx.size()+centre_layer.fx.size();
+    quads.reserve(panel_layer.base.size()+centre_layer.base.size()+size_t(pulse.w)*6+fx*size_t(8+48*std::max(scale,centre_scale))+1);
 }
 }
 // ---- The SRT in a window of its own (SRT_WINDOW=1) ------------------------
@@ -613,7 +759,7 @@ DWORD WINAPI thread(LPVOID) {
     return 0;
 }
 void hide() {if(hwnd&&IsWindowVisible(hwnd))PostMessageW(hwnd,WM_SRT_HIDE,0,0);}
-// Over in premultiplied BGRA, one quad at a time, in order.
+// Over in premultiplied BGRA, one quad or one image at a time, in order.
 void fill(std::vector<uint32_t>& img,int w,int h,const rsx_ui_quad& q) {
     const uint32_t a=q.argb>>24;if(!a)return;
     const int x0=std::max(0,int(std::floor(q.x-bx))),y0=std::max(0,int(std::floor(q.y-by)));
@@ -627,21 +773,39 @@ void fill(std::vector<uint32_t>& img,int w,int h,const rsx_ui_quad& q) {
         }
     }
 }
-// The design's quads -> the window. The cached part is rasterised again only
-// when the layout was rebuilt; the animated quads go over a copy each frame.
-void present(const rsx_ui_quad* q,uint32_t count) {
+// An image of the atlas, drawn 1:1 (straight alpha in the atlas).
+void blit(std::vector<uint32_t>& img,int w,int h,const rsx_ui_sprite& s) {
+    const int sx=int(std::lround(s.u0*atlas.w)),sy=int(std::lround(s.v0*atlas.h));
+    const int dx=int(std::lround(s.x-bx)),dy=int(std::lround(s.y-by)),sw=int(std::lround(s.w)),sh=int(std::lround(s.h));
+    for(int y=std::max(0,-dy);y<sh&&dy+y<h&&sy+y<int(atlas.h);y++) {
+        const uint32_t* src=atlas.rgba.data()+size_t(sy+y)*atlas.w+sx;uint32_t* row=img.data()+size_t(dy+y)*w+dx;
+        for(int x=std::max(0,-dx);x<sw&&dx+x<w&&sx+x<int(atlas.w);x++) {
+            const uint32_t c=src[x],a=c>>24;if(!a)continue;
+            const uint32_t r=(c&255)*a/255,g=(c>>8&255)*a/255,b=(c>>16&255)*a/255,inv=255-a,d=row[x];
+            row[x]=(a+((d>>24)*inv)/255)<<24|(r+((d>>16&255)*inv)/255)<<16|(g+((d>>8&255)*inv)/255)<<8|(b+((d&255)*inv)/255);
+        }
+    }
+}
+// The design's quads and images -> the window. The cached quads are
+// rasterised again only when the layout was rebuilt; the images and the
+// animated quads go over a copy each frame.
+void present(const rsx_ui_quad* q,uint32_t count,const rsx_ui_sprite* s,uint32_t ns) {
     if(!InterlockedExchange(&started,1))CloseHandle(CreateThread(nullptr,0,thread,nullptr,0,nullptr));
-    if(!hwnd||!count)return;
+    if(!hwnd||(!count&&!ns))return;
     if(cached_gen!=base_gen) {
         cached_gen=base_gen;
         float x0=1e9f,y0=1e9f,x1=0,y1=0;
         for(uint32_t i=0;i<count;i++) {x0=std::min(x0,q[i].x);y0=std::min(y0,q[i].y);x1=std::max(x1,q[i].x+q[i].w);y1=std::max(y1,q[i].y+q[i].h);}
+        for(uint32_t i=0;i<ns;i++) {x0=std::min(x0,s[i].x);y0=std::min(y0,s[i].y);x1=std::max(x1,s[i].x+s[i].w);y1=std::max(y1,s[i].y+s[i].h);}
         bx=std::floor(x0);by=std::floor(y0);bw=std::max(1,int(std::ceil(x1-bx)));bh=std::max(1,int(std::ceil(y1-by)));
         base.assign(size_t(bw)*bh,0x01000000u);   // alpha 1: invisible, but the whole rectangle takes the mouse
         for(size_t i=0;i<std::min<size_t>(base_count,count);i++)fill(base,bw,bh,q[i]);
     }
-    frame=base;
-    for(size_t i=base_count;i<count;i++)fill(frame,bw,bh,q[i]);
+    frame=base;size_t k=0;
+    for(size_t i=base_count;i<=count;i++) {
+        while(k<ns&&s[k].after<=i)blit(frame,bw,bh,s[k++]);
+        if(i<count)fill(frame,bw,bh,q[i]);
+    }
     AcquireSRWLockExclusive(&lock);shared.swap(frame);shared_w=bw;shared_h=bh;ReleaseSRWLockExclusive(&lock);
     PostMessageW(hwnd,WM_SRT_SHOW,0,0);
 }
@@ -657,6 +821,7 @@ extern "C" void cv_srt_configure_env() {
     // In its own window the panel starts at the window's corner; the corner
     // choice only applies over the game.
     c.window=env_int("SRT_WINDOW",0)!=0;if(c.window)c.corner=0;
+    if(const char* bar=std::getenv("SRT_BOSS_BAR"))c.boss_bar=!strcmp(bar,"top")?1:!strcmp(bar,"bottom")?2:0;
     c.lang=cv_srt_i18n::language(std::getenv("SRT_LANGUAGE"));c.words=cv_srt_i18n::labels(c.lang);
     c.credit=cv_srt_i18n::credit(c.lang);
     const auto credit=utf8(std::getenv("SRT_CREDIT"));if(!credit.empty())c.credit=credit;
@@ -664,17 +829,28 @@ extern "C" void cv_srt_configure_env() {
     for(auto& word:c.words) {const auto end=words.find(L'|',start);if(start<words.size())word=words.substr(start,end==std::wstring::npos?end:end-start);if(end==std::wstring::npos)break;start=end+1;}
     AcquireSRWLockExclusive(&config_lock);config=std::move(c);generation++;ReleaseSRWLockExclusive(&config_lock);
 }
-extern "C" const rsx_ui_quad* cv_srt_design(const cv_srt_state* state,uint32_t width,uint32_t height,uint32_t* count) {
-    *count=0;if(width<64||height<64)return nullptr;
+namespace {
+// The layout for this state and size (rebuilt only when either changes),
+// composed of the panel, the boss bar in the middle, or both.
+const rsx_ui_quad* design(const cv_srt_state* state,uint32_t width,uint32_t height,uint32_t* count,bool with_panel,bool with_centre) {
+    *count=0;sprites.clear();if(width<64||height<64)return nullptr;
     Config cfg;uint64_t gen;
     AcquireSRWLockShared(&config_lock);cfg=config;gen=generation;ReleaseSRWLockShared(&config_lock);
-    if(!gen) {cv_srt_configure_env();return cv_srt_design(state,width,height,count);}
-    if(!cfg.enabled||(!cfg.name&&!cfg.health&&!cfg.time&&!cfg.stats&&!cfg.enemies&&!cfg.inventory))return nullptr;
+    if(!gen) {cv_srt_configure_env();return design(state,width,height,count,with_panel,with_centre);}
+    if(!cfg.enabled||(!cfg.name&&!cfg.health&&!cfg.time&&!cfg.stats&&!cfg.enemies&&!cfg.inventory&&!cfg.boss_bar))return nullptr;
     static cv_srt_state previous{};static uint64_t built=0;static uint32_t w=0,h=0;
     if(built!=gen||w!=width||h!=height||std::memcmp(&previous,state,sizeof previous)) {
         build(*state,cfg,width,height);previous=*state;w=width;h=height;built=gen;
     }
-    animate_pulse();*count=uint32_t(quads.size());return quads.data();
+    compose(with_panel,with_centre);*count=uint32_t(quads.size());return quads.data();
+}
+}
+extern "C" const rsx_ui_quad* cv_srt_design(const cv_srt_state* state,uint32_t width,uint32_t height,uint32_t* count) {
+    return design(state,width,height,count,true,true);
+}
+extern "C" const rsx_ui_sprite* cv_srt_sprites(uint32_t* count,const uint32_t** rgba,uint32_t* w,uint32_t* h,uint64_t* gen) {
+    *count=uint32_t(sprites.size());*rgba=atlas.rgba.data();*w=atlas.w;*h=atlas.h;*gen=atlas.gen;
+    return sprites.empty()?nullptr:sprites.data();
 }
 extern "C" const rsx_ui_quad* cv_srt_quads(uint32_t width,uint32_t height,uint32_t* count) {
     *count=0;
@@ -687,9 +863,11 @@ extern "C" const rsx_ui_quad* cv_srt_quads(uint32_t width,uint32_t height,uint32
     const ULONGLONG now=GetTickCount64();if(!last||now-last>=33) {cv_srt_sample(&state);last=now;}
     if(own_window) {
         // Laid out for the game window's size, so the panel keeps the size it
-        // has over the game; nothing is drawn over the game itself.
-        uint32_t n=0;const rsx_ui_quad* q=cv_srt_design(&state,width,height,&n);
-        srt_window::present(q,n);return nullptr;
+        // has over the game. Only the boss bar in the middle, when chosen,
+        // stays over the game.
+        uint32_t n=0;const rsx_ui_quad* q=design(&state,width,height,&n,true,false);
+        srt_window::present(q,n,sprites.data(),uint32_t(sprites.size()));
+        return design(&state,width,height,count,false,true);
     }
     return cv_srt_design(&state,width,height,count);
 }
@@ -697,4 +875,5 @@ extern "C" const rsx_ui_quad* cv_srt_quads(uint32_t width,uint32_t height,uint32
 extern "C" void cv_srt_configure_env() {}
 extern "C" const rsx_ui_quad* cv_srt_quads(uint32_t,uint32_t,uint32_t* n) {*n=0;return nullptr;}
 extern "C" const rsx_ui_quad* cv_srt_design(const cv_srt_state*,uint32_t,uint32_t,uint32_t* n) {*n=0;return nullptr;}
+extern "C" const rsx_ui_sprite* cv_srt_sprites(uint32_t* n,const uint32_t** rgba,uint32_t* w,uint32_t* h,uint64_t* gen) {*n=0;*rgba=nullptr;*w=*h=0;*gen=0;return nullptr;}
 #endif
