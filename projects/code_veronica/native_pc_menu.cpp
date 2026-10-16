@@ -38,6 +38,13 @@ constexpr uint32_t kDialog=CV_MENU_DIALOG;
 constexpr uint32_t kUp=0x10, kDown=0x40, kLeft=0x80, kRight=0x20;
 constexpr uint32_t kConfirm=0xC000, kCancel=0x2001;
 bool pc_selected=false, pc_open=false, drawing_main=false;
+/* The menu returned "leaving" (0xFF): the game fades it out over the next
+ * frames, still calling the menu each frame, with its own dark overlay on top
+ * of its rows. The PC SETTINGS label is our overlay, drawn after everything,
+ * so it stays hidden from then until the menu takes input again (back from a
+ * sub-screen) or is opened anew -- it stayed lit about half a second longer
+ * than the rows. */
+bool leaving=false;
 int pc_row=0;
 constexpr int kSettingCount=6, kResetColorsRow=kSettingCount;
 constexpr int kBackRow=kResetColorsRow+1, kPcRowCount=kBackRow+1;
@@ -213,15 +220,11 @@ void consume(uint32_t input,uint32_t repeat) {vm_write32(input,0);vm_write32(rep
 }
 
 void CV_FN_MENU_RESET(ppu_context* ctx) {
-    pc_selected=pc_open=drawing_main=false; pc_row=0;
+    pc_selected=pc_open=drawing_main=leaving=false; pc_row=0;
     rsx_d3d12_set_ui_quads(nullptr,0);
     CV_OG_MENU_RESET(ctx);
 }
-static bool menu_trace() { static const bool on=std::getenv("CV_MENU_TRACE")!=nullptr; return on; }
 void CV_FN_MENU_COLOR(ppu_context* ctx) {
-    if(menu_trace() && drawing_main) { static int n=0; if(n++<6000)
-        std::fprintf(stderr,"[menu-trace] t=%llu color=%08X row=%08X sel=%d%c",(unsigned long long)GetTickCount64(),
-                     uint32_t(ctx->gpr[4]),uint32_t(ctx->gpr[5]),int(pc_selected),10); }
     if(drawing_main && pc_selected && uint32_t(ctx->gpr[5])==CV_MENU_ROW_TEXT)ctx->gpr[4]=0x7FAFAFAF;
     CV_OG_MENU_COLOR(ctx);
 }
@@ -230,6 +233,7 @@ void CV_FN_MENU_INPUT(ppu_context* ctx) {
     const uint32_t port=uint32_t(ctx->gpr[3]);
     if(port>6) {CV_OG_MENU_INPUT(ctx);return;}
     const bool interactive=ctx->gpr[4]!=0 && vm_read32(kDialog)==0;
+    if(interactive)leaving=false;
     const uint32_t input_address=kInput+port*60,repeat_address=kRepeat+port*60;
     const uint32_t input=interactive?vm_read32(input_address):0;
     const uint32_t repeat=interactive?vm_read32(repeat_address):0;
@@ -270,8 +274,8 @@ void CV_FN_MENU_INPUT(ppu_context* ctx) {
         consume(input_address,repeat_address);draw_settings(ctx);ctx->gpr[3]=0;return;
     }
     drawing_main=true;CV_OG_MENU_INPUT(ctx);finish(ctx);drawing_main=false;
-    if(menu_trace()) std::fprintf(stderr,"[menu-trace] t=%llu frame ret=%08X%c",(unsigned long long)GetTickCount64(),uint32_t(ctx->gpr[3]),10);
-    if((ctx->gpr[3]&255)==255)rsx_d3d12_set_ui_quads(nullptr,0);
+    if((ctx->gpr[3]&255)==255)leaving=true;
+    if(leaving)rsx_d3d12_set_ui_quads(nullptr,0);
     else draw_entry(ctx);
 }
 extern "C" int cv_native_pc_menu_selftest(void) {
