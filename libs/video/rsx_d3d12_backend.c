@@ -81,7 +81,14 @@ static int s_vsync = 0, s_tearing = 0;   /* present mode, see the swap chain set
  * Code Veronica's exposure-curve programs carry 87 inline constants; with
  * room for only 64 they fell back to literals baked from the FIRST frame
  * that used them, and the colour-grading curve never followed the scene. */
-#define FP_MAX_K          128
+/* 512: Code Veronica's outdoor lighting programs carry 129 and 166. Past
+ * the limit a program's constants become literals and its pipeline is keyed
+ * on their values -- which the game rewrites every frame, so those programs
+ * recompiled without end and the draws using them were skipped meanwhile:
+ * the character drawn flat or missing, the whole scene black for seconds.
+ * 512 leaves headroom; only the constants a program uses are written per
+ * draw, so the larger slot costs upload-heap memory (system RAM), not time. */
+#define FP_MAX_K          512
 /* Programs are sized through END and copied at that exact length. The
  * decompiler owns the shared safety ceiling; no 16 KiB per-program cutoff. */
 /* Fragment texture units recorded and bound per draw (t0..t7). RSX has 16;
@@ -90,7 +97,7 @@ static int s_vsync = 0, s_tearing = 0;   /* present mode, see the swap chain set
 #define FP_TEX_UNITS      8
 #define FP_ALPHA_BASE     (FP_TEX_UNITS * 4)
 #define FP_K_BASE         (FP_ALPHA_BASE + 4)
-#define VP_FPCB_STRIDE    2304
+#define VP_FPCB_STRIDE    8448   /* (9 + FP_MAX_K) float4 = 8336 B, 256-aligned */
 #define VERTEX_STRIDE       36  /* bytes per host vertex: pos3 + col4 + uv2 */
 
 typedef struct {
@@ -254,8 +261,13 @@ typedef struct {
     ID3DBlob* vs;
     int uses_c03;
     char* hlsl;             /* decompiled source, kept for rsxcap */
+    u64 last_used;          /* frame of the last lookup: the least recent is replaced */
 } VPVSEntry;
-#define VP_VS_CACHE 256 /* Code Veronica's gameplay uses 16+ VPs, and at 16 every eviction
+/* 4096: Code Veronica's outdoor areas went past 256 distinct programs (log:
+ * "VS cache full"). A full cache replaces its least recently used slot in
+ * place; FP pipelines are keyed on the VS content (vs_hash), not the slot, so
+ * a replacement no longer re-keys every cached pipeline. */
+#define VP_VS_CACHE 4096 /* Code Veronica's gameplay uses 16+ VPs, and at 16 every eviction
                          * re-keyed every cached FP pipeline: ~90% of the frame went to
                          * recompiling shaders. wave uses 5+ distinct VPs; at 4 the cache
                          * thrashed every frame and eviction shifted slots
@@ -293,7 +305,7 @@ typedef struct {
  * single frame, so the FIFO evicted entries that were needed again immediately
  * and ~17 shaders were recompiled EVERY frame -- about half the frame's CPU
  * time. Entries are small (a PSO pointer plus key fields). */
-#define VP_FP_CACHE 4096
+#define VP_FP_CACHE 16384
 
 /* ---------------------------------------------------------------------------
  * Internal state
@@ -2523,6 +2535,7 @@ static void compile_vp(void)
     if (!st || st->vp_ucode_bytes < 16 || !s_d3d.vp_root_sig) return;
 
     static char hlsl[64 * 1024];
+    { extern void rsx_vp_set_branch_base(u32); rsx_vp_set_branch_base(0); }
     int ni = rsx_vp_decompile(st->vp_ucode, st->vp_ucode_bytes, hlsl, sizeof hlsl);
     /* Does this VP read vp_c[0..3]? Gates the garbage-projection fallback:
      * programs keeping their MVP elsewhere (gcm/cube: c[256..259]) must not
@@ -2939,6 +2952,8 @@ static void render_wait_idle(void);   /* render thread, see render_frame() */
 static int vp_get_vs(const rsx_state* st)
 {
     extern int rsx_vp_decompile_ex(const uint8_t*, u32, u32, char*, u32);
+    extern u32 rsx_vp_program_size_instrs(const u8*, u32);
+    extern void rsx_vp_set_branch_base(u32);
     if (!st || st->vp_ucode_bytes < 16) return -1;
     const u32 vtex_mask = vtex_mask_of(st);
     /* Start at the instruction SET_TRANSFORM_PROGRAM_START selects, not at 0.
@@ -2954,24 +2969,36 @@ static int vp_get_vs(const rsx_state* st)
     if (vstart >= st->vp_ucode_bytes) vstart = 0;
     const u8* vuc = st->vp_ucode + vstart;
     u32 vlen = st->vp_ucode_bytes - vstart;
+    /* Up to the program's END only: the decompiler stops there, and hashing
+     * the rest of the store keyed the program on whatever other programs sat
+     * after it -- Code Veronica's outdoor areas built a "new" VS (and every
+     * FP pipeline with it) each time a later slot changed, and the scene
+     * skipped frames while they compiled. */
+    { u32 ni = rsx_vp_program_size_instrs(vuc, vlen); if (ni) vlen = ni * 16; }
     /* Same store generation, start and texture units as the last lookup: same
      * program. Hashing up to 16 KB of ucode on every draw was a measurable
      * slice of Code Veronica's 2300-draw frames. */
     static const rsx_state* l_st; static u32 l_gen, l_start, l_mask; static int l_idx = -1;
     if (l_idx >= 0 && l_idx < s_d3d.vp_vs_n && l_st == st && l_gen == st->vp_ucode_gen &&
-        l_start == vstart && l_mask == vtex_mask)
+        l_start == vstart && l_mask == vtex_mask) {
+        s_d3d.vp_vs[l_idx].last_used = s_d3d.frame_count;
         return l_idx;
+    }
     /* The bound vertex-texture units change the compiled program (they
      * declare textures), so they are part of its identity. */
-    u32 hash = vp_hash_ucode(vuc, vlen) ^ (vtex_mask * 0x9E3779B1u);
+    /* The start slot too: branch targets are absolute slots, so the same
+     * program loaded at another slot decompiles to different HLSL. */
+    u32 hash = vp_hash_ucode(vuc, vlen) ^ (vtex_mask * 0x9E3779B1u) ^ ((vstart / 16u + 1u) * 0x85EBCA6Bu);
     if (!hash) hash = 1u;
     for (int i = 0; i < s_d3d.vp_vs_n; i++)
         if (s_d3d.vp_vs[i].hash == hash) {
             l_st = st; l_gen = st->vp_ucode_gen; l_start = vstart; l_mask = vtex_mask; l_idx = i;
+            s_d3d.vp_vs[i].last_used = s_d3d.frame_count;
             return i;
         }
 
     static char hlsl[262144];
+    rsx_vp_set_branch_base(vstart / 16u);   /* targets are absolute slots */
     int ni = rsx_vp_decompile_ex(vuc, vlen, vtex_mask, hlsl, sizeof hlsl);
     if (ni <= 0) return -1;
     if (getenv("CV_VIDEO_CAPTURE")) { char pn[80];snprintf(pn,sizeof pn,"vs_%08X.hlsl",hash);FILE* f=fopen(pn,"w");if(f){fprintf(f,"/* slot=%d */\n%s",s_d3d.vp_vs_n,hlsl);fclose(f);} }
@@ -3036,14 +3063,21 @@ static int vp_get_vs(const rsx_state* st)
     }
     int slot;
     if (s_d3d.vp_vs_n < VP_VS_CACHE) slot = s_d3d.vp_vs_n++;
-    else {  /* evict slot 0 */
-        render_wait_idle();   /* the memmove below shifts slots the render thread reads */
-        { static int _w=0; if (_w++<3) printf("[VP] WARNING: VS cache full (%d) -- evicting re-keys every FP pipeline%c", VP_VS_CACHE, 10); }
-        if (s_d3d.vp_vs[0].vs) s_d3d.vp_vs[0].vs->lpVtbl->Release(s_d3d.vp_vs[0].vs);
-        free(s_d3d.vp_vs[0].hlsl);
-        memmove(&s_d3d.vp_vs[0], &s_d3d.vp_vs[1], sizeof(VPVSEntry)*(VP_VS_CACHE-1));
-        slot = VP_VS_CACHE - 1;
+    else {  /* replace the least recently used slot, in place */
+        slot = 0;
+        for (int i = 1; i < VP_VS_CACHE; i++)
+            if (s_d3d.vp_vs[i].last_used < s_d3d.vp_vs[slot].last_used) slot = i;
+        render_wait_idle();   /* the render thread may still read the old program */
+        { static int _w=0; if (_w++<3) printf("[VP] VS cache full (%d): replacing the least recently used program%c", VP_VS_CACHE, 10); }
+        if (s_d3d.vp_vs[slot].vs) s_d3d.vp_vs[slot].vs->lpVtbl->Release(s_d3d.vp_vs[slot].vs);
+        free(s_d3d.vp_vs[slot].hlsl);
+        memset(&s_d3d.vp_vs[slot], 0, sizeof s_d3d.vp_vs[slot]);
+        l_idx = -1;   /* the fast path may name the slot being replaced */
     }
+    s_d3d.vp_vs[slot].last_used = s_d3d.frame_count;
+    { static u32 built = 0;   /* how many distinct programs a session needs */
+      if ((++built & 255u) == 0) printf("[VP] %u vertex programs built (%d cached, frame %llu)%c",
+                                        built, s_d3d.vp_vs_n, (unsigned long long)s_d3d.frame_count, 10); }
     s_d3d.vp_vs[slot].hash = hash;
     s_d3d.vp_vs[slot].vs   = vb;
     s_d3d.vp_vs[slot].hlsl = _strdup(hlsl);
@@ -3223,19 +3257,23 @@ static int s_fp_skip_draw = 0;
 /* Open-addressed index over s_d3d.vp_fp: slot -> entry index + 1 (0 = empty).
  * The key is every field the cache matches on (fp_addr is not one: programs
  * are identified by content). */
-#define FP_INDEX_SIZE 16384u   /* power of two, > 2 x VP_FP_CACHE */
+#define FP_INDEX_SIZE 65536u   /* power of two, > 2 x VP_FP_CACHE */
 static int s_fp_index[FP_INDEX_SIZE];
 static u32 fp_key_hash(const VPFPEntry* e)
 {
     u32 h = 2166136261u;
-    const u32 f[11] = { (u32)e->vs_idx, e->vs_hash, e->gen, e->blend, (u32)e->nrt, e->rtfmt,
+    /* The VS by content (vs_hash; 0 = the primary VS, which gen covers), not
+     * by cache slot: a slot can be replaced, and keying on it re-keyed every
+     * cached pipeline at once -- the whole scene skipped a few frames while
+     * they rebuilt. */
+    const u32 f[10] = { e->vs_hash, e->gen, e->blend, (u32)e->nrt, e->rtfmt,
                         (u32)e->exp32, e->ucode_hash, e->cmask, e->cull, e->cube_mask };
-    for (int i = 0; i < 11; i++) { h ^= f[i]; h *= 16777619u; h ^= h >> 15; }
+    for (int i = 0; i < 10; i++) { h ^= f[i]; h *= 16777619u; h ^= h >> 15; }
     return h;
 }
 static int fp_key_eq(const VPFPEntry* a, const VPFPEntry* b)
 {
-    return a->ucode_hash == b->ucode_hash && a->vs_idx == b->vs_idx &&
+    return a->ucode_hash == b->ucode_hash &&
            a->vs_hash == b->vs_hash && a->gen == b->gen && a->blend == b->blend &&
            a->nrt == b->nrt && a->rtfmt == b->rtfmt && a->exp32 == b->exp32 &&
            a->cmask == b->cmask && a->cull == b->cull && a->cube_mask == b->cube_mask;
@@ -3410,6 +3448,8 @@ static void fp_job_free(FpJob* j)
 }
 
 static volatile LONG s_fp_async_skips = 0, s_fp_async_built = 0;
+static volatile LONG s_fp_build_us = 0;  /* worker build time, for PERF */
+static LONG s_fp_drawn_skips = 0;   /* draws really left out (render thread), for PERF */
 static volatile LONG s_fp_inflight = 0;                /* submitted, not yet built */
 static SRWLOCK s_fpq_lock = SRWLOCK_INIT;
 static CONDITION_VARIABLE s_fpq_cv = CONDITION_VARIABLE_INIT;
@@ -3429,7 +3469,9 @@ static DWORD WINAPI fp_worker(LPVOID p)
         FpJob* j = s_fpq_head;
         s_fpq_head = j->next; if (!s_fpq_head) s_fpq_tail = NULL;
         ReleaseSRWLockExclusive(&s_fpq_lock);
-        j->status = fp_build_pso(j);
+        { const double t0 = perf_now();
+          j->status = fp_build_pso(j);
+          InterlockedAdd(&s_fp_build_us, (LONG)((perf_now() - t0) * 1e6)); }
         InterlockedIncrement(&s_fp_async_built);
         AcquireSRWLockExclusive(&s_fpq_lock);
         j->next = s_fpq_done; s_fpq_done = j;
@@ -3480,6 +3522,7 @@ static void fp_async_submit(FpJob* j)
 static void fp_cache_insert(const VPFPEntry* key, ID3D12PipelineState* pso, int pending, int skip)
 {
     if (s_d3d.vp_fp_n >= VP_FP_CACHE) {
+        { static int _w = 0; if (_w++ < 3) printf("[FP] pipeline cache full (%d): evicting the oldest%c", VP_FP_CACHE, 10); }
         if (s_d3d.vp_fp[0].pso) s_d3d.vp_fp[0].pso->lpVtbl->Release(s_d3d.vp_fp[0].pso);
         memmove(&s_d3d.vp_fp[0], &s_d3d.vp_fp[1], sizeof(VPFPEntry) * (VP_FP_CACHE - 1));
         s_d3d.vp_fp_n = VP_FP_CACHE - 1;
@@ -3498,13 +3541,16 @@ static void fp_cache_insert(const VPFPEntry* key, ID3D12PipelineState* pso, int 
  * frame instead of popping in a frame or two late. The bound keeps a burst
  * of first-time compiles from turning back into a stall.
  * FP_ASYNC_WAIT_MS=<ms> (default 8; 0 = never wait). */
-static void fp_async_wait(void)
+static int fp_async_wait_ms(void)
 {
-    if (s_fp_async <= 0 || !s_fp_inflight) return;
     static int budget = -1;
     if (budget < 0) { const char* e = getenv("FP_ASYNC_WAIT_MS"); budget = e ? atoi(e) : 8; }
-    if (budget <= 0) return;
-    const double t0 = perf_now(), lim = budget / 1000.0;
+    return budget;
+}
+static void fp_async_wait_for(double lim)
+{
+    if (s_fp_async <= 0 || !s_fp_inflight || lim <= 0.0) return;
+    const double t0 = perf_now();
     AcquireSRWLockExclusive(&s_fpq_lock);
     while (s_fp_inflight > 0 && perf_now() - t0 < lim)
         SleepConditionVariableSRW(&s_fpq_done_cv, &s_fpq_lock, 1, 0);   /* woken per finished build */
@@ -3654,7 +3700,13 @@ static int fp_build_pso(FpJob* j)
     }
     /* A program that already declares b1 keeps pass-through coordinates. */
     if (strstr(hlsl + k_pre, "register(b1)")) memmove(hlsl, hlsl + k_pre, strlen(hlsl + k_pre) + 1);
-    else memcpy(hlsl, k_addr_prelude, k_pre);
+    else {
+        memcpy(hlsl, k_addr_prelude, k_pre);
+        /* Declare the full fp_k[] only where a program needs it, so the
+         * text -- and the on-disk shader cache -- of every other program
+         * stays as it was. Same length: patched in place. */
+        if (nk > 128) { char* d = strstr(hlsl, "fp_k[128]"); if (d) memcpy(d, "fp_k[512]", 9); }
+    }
     /* sRGB colour output (cull bit 0x200, SET_SHADER_PACKER): encode every
      * export the way RSX does on write. Programs that write H-register
      * outputs come out in the PSOutput form; Code Veronica's film-grain pass
@@ -4115,6 +4167,8 @@ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, in
      * the first draw's lights. Buffered programs retain the fast code hash. */
     const int literal_key = constants > FP_MAX_K ||
         (getenv("FP_CONSTBUF") && getenv("FP_CONSTBUF")[0] == '0');
+    if (constants > FP_MAX_K) { static int n = 0; if (n++ < 30)
+        printf("[FPK] fp=0x%08X has %u constants (> %d): keyed on its values%c", fp_addr, constants, FP_MAX_K, 10); }
     if (snap && snap_hdr[0] == FP_SNAP_MAGIC &&
         !literal_key) {
         uhash = snap_hdr[1];            /* hashed once, when the draw was recorded */
@@ -4475,7 +4529,13 @@ static int vp_upload_tex_slot_impl(u32 off, u32 w, u32 h, u32 fmt, int cube, u32
     /* A stale cache entry (slot >= 0) re-uses its own slot; otherwise take a
      * free one. Without this the stale path fell through to freeslot and either
      * duplicated the texture into a second slot or bailed when none was free. */
-    if (slot < 0 && freeslot < 0) return -1;      /* out of slots this frame */
+    if (slot < 0 && freeslot < 0) {               /* out of slots this frame */
+        static u64 last = ~0ull; static int n = 0;
+        if (last != s_tex_frame && n < 40) { last = s_tex_frame; n++;
+            printf("[TEX] out of texture slots (%d) in frame %llu: the draw goes untextured%c",
+                   VP_TEX_SLOTS, (unsigned long long)s_tex_frame, 10); fflush(stdout); }
+        return -1;
+    }
     /* TEX_SRCDBG=<N>: is the guest memory this slot uploads FROM actually
      * populated? An empty source and a broken sampler both render flat. */
     { static int cap = -1, n = 0;
@@ -7434,7 +7494,10 @@ static void render_frame_impl(void)
 
     /* Pipelines the prepass just queued: wait briefly, then pick them up so
      * the draw loop below (which looks each one up again) can use them. */
-    if (s_fp_inflight) { fp_async_wait(); fp_async_drain(); }
+    if (s_fp_inflight) { fp_async_wait_for(fp_async_wait_ms() / 1000.0); fp_async_drain(); }
+    /* Draws whose pipeline is first asked for in the draw loop below (the
+     * prepass keys some of them differently) share this frame's budget. */
+    double draw_wait_left = fp_async_wait_ms() / 1000.0;
     if (perf_on()) s_perf_pre += perf_now() - _pre0;
     /* Set render target + depth */
     s_d3d.cmd_list->lpVtbl->OMSetRenderTargets(s_d3d.cmd_list, 1, &rtv_handle, FALSE, &dsv_handle);
@@ -7849,7 +7912,24 @@ static void render_frame_impl(void)
                                                 dr->fp_exp32, dr->cmask,
                                                 dr->cull | ((dr->topology == RSX_TOPOLOGY_LINES) ? 0x100u : 0u),
                                                 dr_cube_mask(dr), fp_snap_ptr(dr), dr_fp_urgent(dr)) : NULL;
-                if (!dpso && dr->fp_addr && s_fp_skip_draw) continue;
+                /* Submitted just now, or still building: a build from the
+                 * disk caches takes about a millisecond, so wait for it (out
+                 * of the frame's budget) rather than drop the draw -- the
+                 * character and props vanished for a frame or more each time
+                 * a room's pipelines came back from disk. */
+                if (!dpso && dr->fp_addr && s_fp_skip_draw && s_fp_inflight && draw_wait_left > 0.0) {
+                    const double tw = perf_now();
+                    fp_async_wait_for(draw_wait_left);
+                    draw_wait_left -= perf_now() - tw;
+                    fp_async_drain();
+                    dpso = vp_get_fp_pso(dr->vs_idx, dr->fp_addr, dr->blend_key, dr_num_rts(dr),
+                                         dr->rt_off ? rsx_surface_dxgi(dr->rt_fmt)
+                                                    : DXGI_FORMAT_R8G8B8A8_UNORM,
+                                         dr->fp_exp32, dr->cmask,
+                                         dr->cull | ((dr->topology == RSX_TOPOLOGY_LINES) ? 0x100u : 0u),
+                                         dr_cube_mask(dr), fp_snap_ptr(dr), dr_fp_urgent(dr));
+                }
+                if (!dpso && dr->fp_addr && s_fp_skip_draw) { s_fp_drawn_skips++; continue; }
                 { ID3D12PipelineState* use = dpso ? dpso : vpso;
                   if (use != last_pso) {
                       s_d3d.cmd_list->lpVtbl->SetPipelineState(s_d3d.cmd_list, use);
@@ -8122,10 +8202,13 @@ static void render_frame_impl(void)
               { LONG hh = InterlockedExchange(&s_shc_hits, 0), mm = InterlockedExchange(&s_shc_miss, 0);
                 LONG pl = InterlockedExchange(&s_plib_loaded, 0);
                 LONG ab = InterlockedExchange(&s_fp_async_built, 0), as = InterlockedExchange(&s_fp_async_skips, 0);
-                if (hh || mm || pl || ab || as)
+                if (hh || mm || pl || ab || as || s_fp_drawn_skips)
                     fprintf(stderr, "[PERF-SHADER] bytecode: %ld from disk, %ld compiled | pipelines: %ld"
-                                    " from library | background: %ld built, %ld draws skipped meanwhile%c",
-                            (long)hh, (long)mm, (long)pl, (long)ab, (long)as, 10); } }
+                                    " from library | background: %ld built (%.1f ms each), %ld lookups pending, %ld draws left out%c",
+                            (long)hh, (long)mm, (long)pl, (long)ab,
+                            ab ? InterlockedExchange(&s_fp_build_us, 0) / 1000.0 / ab : 0.0, (long)as,
+                            (long)s_fp_drawn_skips, 10);
+                s_fp_drawn_skips = 0; } }
             /* PERF_THREADS=1 only: it snapshots every thread on the system
              * (Toolhelp) and queries each one's times -- ~50 ms, on the render
              * thread, every 20 frames. That stall held up the FIFO drain and
