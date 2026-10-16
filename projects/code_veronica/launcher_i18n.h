@@ -18,7 +18,7 @@ static const int k_lang_order[LANG_COUNT] = {
     LANG_ZH, LANG_JA, LANG_KO };
 
 enum StrId {
-    S_NAV_HOME, S_NAV_GAME, S_NAV_CONTROLS, S_NAV_PATCHES, S_NAV_PERF, S_NAV_ADVANCED,
+    S_NAV_HOME, S_NAV_GAME, S_NAV_CONTROLS, S_NAV_PATCHES, S_NAV_MODS, S_NAV_PERF, S_NAV_ADVANCED,
     S_RESUME, S_QUIT, S_MENU_HINT, S_PLAY, S_SET_FOLDER_TAB, S_SET_FOLDER_FIRST,
     S_QUICK, S_DISPLAY_MODE, S_FRAME_LIMIT, S_FPS_ORIG, S_RENDER_RES, S_AA,
     S_MODE_WINDOW, S_MODE_BORDERLESS, S_MODE_FULL, S_RES_NATIVE,
@@ -54,12 +54,13 @@ enum StrId {
     S_SAVE_FOLDER, S_SAVE_HINT, S_SAVE_NO_MOVE, S_SAVE_DEFAULT, S_SAVE_ERROR, S_SAVE_USING_DEFAULT, S_SAVE_SELECTED,
     S_SUPPORTED_VERSIONS, S_REGION_EU, S_REGION_JP, S_REGION_US,
     S_SH_TITLE, S_SH_HINT, S_SH_PSO_T, S_SH_PSO_D, S_SH_LOAD_T, S_SH_LOAD_D, S_SH_BUILD_T, S_SH_BUILD_D, S_SH_PAR_T, S_SH_PAR_D, S_SH_NOTE_T, S_SH_NOTE_D, S_SH_NOTE_LOADING, S_SH_NOTE_LOADED,
+    S_MODS_TITLE, S_MODS_HINT, S_TEX_FOLDER, S_TEX_COUNT_FMT, S_TEX_REPLACE_T, S_TEX_REPLACE_D, S_TEX_DUMP_T, S_TEX_DUMP_D, S_TEX_HOWTO,
     S_COUNT
 };
 
 /* Português */
 static const wchar_t* const k_str_pt[] = {
-    L"Início", L"Jogo", L"Controles", L"Patches", L"Desempenho", L"Avançado",
+    L"Início", L"Jogo", L"Controles", L"Patches", L"Mods", L"Desempenho", L"Avançado",
     L"VOLTAR AO JOGO", L"Fechar jogo", L"No jogo: Insert ou R3+L2 abre este menu.", L"JOGAR",
     L"Configure a pasta do jogo na aba Jogo.", L"Configure a pasta do jogo antes de jogar.",
     L"AJUSTES RÁPIDOS", L"Modo de exibição", L"Limite de quadros", L"30 FPS (original)",
@@ -154,13 +155,22 @@ static const wchar_t* const k_str_pt[] = {
     L"Mostrar o progresso do carregamento",
     L"Uma nota no canto do jogo mostra quanto dos shaders salvos já carregou e some ao terminar. Desative para não ver a nota; o carregamento continua igual. Muda na hora.",
     L"Carregando shaders",
-    L"Shaders carregados"
+    L"Shaders carregados",
+    L"TEXTURAS",
+    L"Troque as texturas do jogo por imagens PNG: as suas ou as de um mod.",
+    L"Pasta das texturas",
+    L"%d texturas de substituição e %d extraídas, em %ls",
+    L"Substituir texturas",
+    L"Usa os PNGs da pasta no lugar das texturas originais, carregando cada um só quando aparece: mods grandes não pesam. Cada versão lê a sua subpasta (NPEB00553, NPJB00135, NPUB30467) ou, sem ela, a própria pasta.",
+    L"Extrair texturas",
+    L"Salva em PNG cada textura nova que aparece enquanto você joga, em <pasta>\\<versão>\\dump. Passe pelos mapas para extrair as texturas deles.",
+    L"Para criar um mod: ligue Extrair, passe pelos mapas, edite os PNGs (pode aumentar a resolução) mantendo o código do começo do nome e coloque-os na pasta da versão. As duas chaves valem na hora, também com o jogo aberto."
 };
 static_assert(sizeof k_str_pt / sizeof k_str_pt[0] == S_COUNT, "k_str_pt: one text per StrId");
 
 /* English */
 static const wchar_t* const k_str_en[] = {
-    L"Home", L"Game", L"Controls", L"Patches", L"Performance", L"Advanced",
+    L"Home", L"Game", L"Controls", L"Patches", L"Mods", L"Performance", L"Advanced",
     L"BACK TO GAME", L"Close game", L"In game: Insert or R3+L2 opens this menu.", L"PLAY",
     L"Set the game folder on the Game page.", L"Set the game folder before playing.",
     L"QUICK SETTINGS", L"Display mode", L"Frame limit", L"30 FPS (original)",
@@ -255,13 +265,22 @@ static const wchar_t* const k_str_en[] = {
     L"Show loading progress",
     L"A note in the game's corner shows how much of the saved shaders has loaded and disappears when done. Turn off to hide it; loading works the same. Changes at once.",
     L"Loading shaders",
-    L"Shaders loaded"
+    L"Shaders loaded",
+    L"TEXTURES",
+    L"Swap the game's textures for PNG images: your own or a mod's.",
+    L"Textures folder",
+    L"%d replacement textures and %d dumped, in %ls",
+    L"Replace textures",
+    L"Uses the folder's PNGs in place of the original textures, loading each only when it appears: big mods weigh nothing. Each version reads its own subfolder (NPEB00553, NPJB00135, NPUB30467) or, without one, the folder itself.",
+    L"Dump textures",
+    L"Saves each new texture that shows up as you play as a PNG, in <folder>\\<version>\\dump. Go through the maps to dump their textures.",
+    L"To make a mod: turn on Dump, go through the maps, edit the PNGs (a higher resolution is fine) keeping the code at the start of the name, and put them in the version's folder. Both switches act at once, even with the game open."
 };
 static_assert(sizeof k_str_en / sizeof k_str_en[0] == S_COUNT, "k_str_en: one text per StrId");
 
 /* Español */
 static const wchar_t* const k_str_es[] = {
-    L"Inicio", L"Juego", L"Controles", L"Parches", L"Rendimiento", L"Avanzado",
+    L"Inicio", L"Juego", L"Controles", L"Parches", L"Mods", L"Rendimiento", L"Avanzado",
     L"VOLVER AL JUEGO", L"Cerrar juego", L"En el juego: Insert o R3+L2 abre este menú.", L"JUGAR",
     L"Configura la carpeta del juego en la pestaña Juego.", L"Configura la carpeta del juego antes de jugar.",
     L"AJUSTES RÁPIDOS", L"Modo de pantalla", L"Límite de fotogramas", L"30 FPS (original)",
@@ -356,13 +375,22 @@ static const wchar_t* const k_str_es[] = {
     L"Mostrar el progreso de carga",
     L"Una nota en la esquina del juego muestra cuánto de los shaders guardados ya se cargó y desaparece al terminar. Desactívalo para ocultarla; la carga sigue igual. Cambia al instante.",
     L"Cargando shaders",
-    L"Shaders cargados"
+    L"Shaders cargados",
+    L"TEXTURAS",
+    L"Cambia las texturas del juego por imágenes PNG: las tuyas o las de un mod.",
+    L"Carpeta de texturas",
+    L"%d texturas de reemplazo y %d extraídas, en %ls",
+    L"Reemplazar texturas",
+    L"Usa los PNG de la carpeta en lugar de las texturas originales y carga cada uno solo cuando aparece: los mods grandes no pesan. Cada versión lee su subcarpeta (NPEB00553, NPJB00135, NPUB30467) o, si no existe, la propia carpeta.",
+    L"Extraer texturas",
+    L"Guarda en PNG cada textura nueva que aparece mientras juegas, en <carpeta>\\<versión>\\dump. Recorre los mapas para extraer sus texturas.",
+    L"Para crear un mod: activa Extraer, recorre los mapas, edita los PNG (puedes subir la resolución) manteniendo el código del inicio del nombre y colócalos en la carpeta de la versión. Los dos interruptores actúan al instante, incluso con el juego abierto."
 };
 static_assert(sizeof k_str_es / sizeof k_str_es[0] == S_COUNT, "k_str_es: one text per StrId");
 
 /* 日本語 */
 static const wchar_t* const k_str_ja[] = {
-    L"ホーム", L"ゲーム", L"操作設定", L"パッチ", L"パフォーマンス", L"詳細設定",
+    L"ホーム", L"ゲーム", L"操作設定", L"パッチ", L"Mod", L"パフォーマンス", L"詳細設定",
     L"ゲームに戻る", L"ゲームを終了", L"ゲーム中: Insert または R3+L2 でこのメニューを開きます。", L"プレイ",
     L"「ゲーム」タブでゲームフォルダーを設定してください。", L"プレイする前にゲームフォルダーを設定してください。",
     L"クイック設定", L"表示モード", L"フレームレート上限", L"30 FPS（固定）",
@@ -457,7 +485,16 @@ static const wchar_t* const k_str_ja[] = {
     L"読み込みの進行状況を表示",
     L"保存済みシェーダーの読み込み状況をゲーム画面の隅に表示し、完了すると消えます。オフにすると表示されませんが、読み込みは同じように行われます。すぐに反映されます。",
     L"シェーダーを読み込み中",
-    L"シェーダーの読み込み完了"
+    L"シェーダーの読み込み完了",
+    L"テクスチャ",
+    L"ゲームのテクスチャを PNG 画像（自作または Mod のもの）に置き換えます。",
+    L"テクスチャフォルダー",
+    L"置き換え用 %d 枚、抽出済み %d 枚（%ls）",
+    L"テクスチャを置き換える",
+    L"フォルダー内の PNG を元のテクスチャの代わりに使います。表示されたときだけ読み込むので、大きな Mod でも重くなりません。各バージョンは専用のサブフォルダー（NPEB00553、NPJB00135、NPUB30467）を、なければフォルダー自体を読みます。",
+    L"テクスチャを抽出する",
+    L"プレイ中に新しく現れたテクスチャを PNG として <フォルダー>\\<バージョン>\\dump に保存します。各マップを回ってテクスチャを抽出してください。",
+    L"Mod の作り方：抽出をオンにしてマップを回り、名前の先頭のコードを残したまま PNG を編集し（高解像度にしても構いません）、バージョンのフォルダーに入れます。どちらのスイッチもゲーム中でもすぐに反映されます。"
 };
 static_assert(sizeof k_str_ja / sizeof k_str_ja[0] == S_COUNT, "k_str_ja: one text per StrId");
 
@@ -467,7 +504,7 @@ static const wchar_t* const k_str_fr[] = {
     L"Jeu",
     L"Commandes",
     L"Patchs",
-    L"Performances", L"Avancé",
+    L"Mods", L"Performances", L"Avancé",
     L"RETOUR AU JEU",
     L"Fermer le jeu",
     L"En jeu : Insert ou R3+L2 ouvre ce menu.",
@@ -612,7 +649,16 @@ static const wchar_t* const k_str_fr[] = {
     L"Afficher la progression du chargement",
     L"Une note dans le coin du jeu indique où en est le chargement des shaders enregistrés et disparaît à la fin. Désactivez pour la masquer ; le chargement reste identique. Effet immédiat.",
     L"Chargement des shaders",
-    L"Shaders chargés"
+    L"Shaders chargés",
+    L"TEXTURES",
+    L"Remplacez les textures du jeu par des images PNG : les vôtres ou celles d'un mod.",
+    L"Dossier des textures",
+    L"%d textures de remplacement et %d extraites, dans %ls",
+    L"Remplacer les textures",
+    L"Utilise les PNG du dossier à la place des textures d'origine, en chargeant chacun seulement quand il apparaît : les gros mods ne pèsent rien. Chaque version lit son sous-dossier (NPEB00553, NPJB00135, NPUB30467) ou, à défaut, le dossier lui-même.",
+    L"Extraire les textures",
+    L"Enregistre en PNG chaque nouvelle texture qui apparaît pendant que vous jouez, dans <dossier>\\<version>\\dump. Parcourez les cartes pour en extraire les textures.",
+    L"Pour créer un mod : activez Extraire, parcourez les cartes, modifiez les PNG (la résolution peut être augmentée) en gardant le code au début du nom, puis placez-les dans le dossier de la version. Les deux interrupteurs agissent tout de suite, même jeu ouvert."
 };
 static_assert(sizeof k_str_fr / sizeof k_str_fr[0] == S_COUNT, "k_str_fr: one text per StrId");
 
@@ -622,7 +668,7 @@ static const wchar_t* const k_str_de[] = {
     L"Spiel",
     L"Steuerung",
     L"Patches",
-    L"Leistung", L"Erweitert",
+    L"Mods", L"Leistung", L"Erweitert",
     L"ZURÜCK ZUM SPIEL",
     L"Spiel beenden",
     L"Im Spiel: Einfg oder R3+L2 öffnet dieses Menü.",
@@ -767,7 +813,16 @@ static const wchar_t* const k_str_de[] = {
     L"Ladefortschritt anzeigen",
     L"Ein Hinweis in der Ecke des Spiels zeigt, wie viel der gespeicherten Shader geladen ist, und verschwindet danach. Ausschalten, um ihn auszublenden; das Laden bleibt gleich. Wirkt sofort.",
     L"Shader werden geladen",
-    L"Shader geladen"
+    L"Shader geladen",
+    L"TEXTUREN",
+    L"Ersetze die Texturen des Spiels durch PNG-Bilder: eigene oder die eines Mods.",
+    L"Texturordner",
+    L"%d Ersatztexturen und %d extrahierte, in %ls",
+    L"Texturen ersetzen",
+    L"Verwendet die PNGs im Ordner statt der Originaltexturen und lädt jede erst, wenn sie erscheint: große Mods belasten nicht. Jede Version liest ihren Unterordner (NPEB00553, NPJB00135, NPUB30467) oder, falls keiner existiert, den Ordner selbst.",
+    L"Texturen extrahieren",
+    L"Speichert jede neue Textur, die beim Spielen erscheint, als PNG in <Ordner>\\<Version>\\dump. Geh durch die Karten, um ihre Texturen zu extrahieren.",
+    L"So entsteht ein Mod: Extrahieren einschalten, durch die Karten gehen, die PNGs bearbeiten (höhere Auflösung ist erlaubt), dabei den Code am Namensanfang behalten und sie in den Ordner der Version legen. Beide Schalter wirken sofort, auch bei laufendem Spiel."
 };
 static_assert(sizeof k_str_de / sizeof k_str_de[0] == S_COUNT, "k_str_de: one text per StrId");
 
@@ -777,7 +832,7 @@ static const wchar_t* const k_str_it[] = {
     L"Gioco",
     L"Comandi",
     L"Patch",
-    L"Prestazioni", L"Avanzate",
+    L"Mod", L"Prestazioni", L"Avanzate",
     L"TORNA AL GIOCO",
     L"Chiudi il gioco",
     L"In gioco: Ins o R3+L2 apre questo menu.",
@@ -922,7 +977,16 @@ static const wchar_t* const k_str_it[] = {
     L"Mostra l’avanzamento del caricamento",
     L"Una nota nell'angolo del gioco mostra quanto degli shader salvati è stato caricato e scompare alla fine. Disattiva per nasconderla; il caricamento resta uguale. Effetto immediato.",
     L"Caricamento shader",
-    L"Shader caricati"
+    L"Shader caricati",
+    L"TEXTURE",
+    L"Sostituisci le texture del gioco con immagini PNG: le tue o quelle di una mod.",
+    L"Cartella delle texture",
+    L"%d texture sostitutive e %d estratte, in %ls",
+    L"Sostituisci le texture",
+    L"Usa i PNG della cartella al posto delle texture originali, caricando ciascuno solo quando appare: le mod grandi non pesano. Ogni versione legge la propria sottocartella (NPEB00553, NPJB00135, NPUB30467) o, se manca, la cartella stessa.",
+    L"Estrai le texture",
+    L"Salva in PNG ogni nuova texture che appare mentre giochi, in <cartella>\\<versione>\\dump. Percorri le mappe per estrarne le texture.",
+    L"Per creare una mod: attiva Estrai, percorri le mappe, modifica i PNG (puoi aumentare la risoluzione) mantenendo il codice all'inizio del nome e mettili nella cartella della versione. Entrambi gli interruttori agiscono subito, anche a gioco aperto."
 };
 static_assert(sizeof k_str_it / sizeof k_str_it[0] == S_COUNT, "k_str_it: one text per StrId");
 
@@ -932,7 +996,7 @@ static const wchar_t* const k_str_pl[] = {
     L"Gra",
     L"Sterowanie",
     L"Poprawki",
-    L"Wydajność", L"Zaawansowane",
+    L"Mody", L"Wydajność", L"Zaawansowane",
     L"WRÓĆ DO GRY",
     L"Zamknij grę",
     L"W grze: Insert lub R3+L2 otwiera to menu.",
@@ -1077,7 +1141,16 @@ static const wchar_t* const k_str_pl[] = {
     L"Pokazuj postęp wczytywania",
     L"Notka w rogu gry pokazuje, ile zapisanych shaderów już się wczytało, i znika po zakończeniu. Wyłącz, aby jej nie widzieć; wczytywanie działa tak samo. Zmienia się od razu.",
     L"Wczytywanie shaderów",
-    L"Shadery wczytane"
+    L"Shadery wczytane",
+    L"TEKSTURY",
+    L"Zamień tekstury gry na obrazy PNG: własne lub z moda.",
+    L"Folder tekstur",
+    L"%d tekstur zastępczych i %d wyodrębnionych, w %ls",
+    L"Zastępuj tekstury",
+    L"Używa plików PNG z folderu zamiast oryginalnych tekstur i wczytuje każdy dopiero, gdy się pojawi: duże mody nie obciążają. Każda wersja czyta swój podfolder (NPEB00553, NPJB00135, NPUB30467) lub, gdy go nie ma, sam folder.",
+    L"Wyodrębniaj tekstury",
+    L"Zapisuje jako PNG każdą nową teksturę, która pojawi się podczas gry, w <folder>\\<wersja>\\dump. Przejdź przez mapy, aby wyodrębnić ich tekstury.",
+    L"Jak zrobić moda: włącz Wyodrębniaj, przejdź przez mapy, edytuj pliki PNG (można zwiększyć rozdzielczość), zachowując kod na początku nazwy, i umieść je w folderze wersji. Oba przełączniki działają od razu, także przy uruchomionej grze."
 };
 static_assert(sizeof k_str_pl / sizeof k_str_pl[0] == S_COUNT, "k_str_pl: one text per StrId");
 
@@ -1087,7 +1160,7 @@ static const wchar_t* const k_str_tr[] = {
     L"Oyun",
     L"Kontroller",
     L"Yamalar",
-    L"Performans", L"Gelişmiş",
+    L"Modlar", L"Performans", L"Gelişmiş",
     L"OYUNA DÖN",
     L"Oyunu kapat",
     L"Oyunda: Insert veya R3+L2 bu menüyü açar.",
@@ -1232,7 +1305,16 @@ static const wchar_t* const k_str_tr[] = {
     L"Yükleme ilerlemesini göster",
     L"Oyunun köşesindeki bir not, kaydedilmiş gölgelendiricilerin ne kadarının yüklendiğini gösterir ve bitince kaybolur. Gizlemek için kapatın; yükleme aynı şekilde sürer. Hemen uygulanır.",
     L"Gölgelendiriciler yükleniyor",
-    L"Gölgelendiriciler yüklendi"
+    L"Gölgelendiriciler yüklendi",
+    L"DOKULAR",
+    L"Oyunun dokularını PNG görüntüleriyle değiştirin: kendinizinkiler ya da bir modunkiler.",
+    L"Doku klasörü",
+    L"%d yedek doku ve %d çıkarılmış doku, %ls içinde",
+    L"Dokuları değiştir",
+    L"Klasördeki PNG'leri orijinal dokuların yerine kullanır ve her birini yalnızca göründüğünde yükler: büyük modlar yük olmaz. Her sürüm kendi alt klasörünü (NPEB00553, NPJB00135, NPUB30467), yoksa klasörün kendisini okur.",
+    L"Dokuları çıkar",
+    L"Oynarken beliren her yeni dokuyu PNG olarak <klasör>\\<sürüm>\\dump içine kaydeder. Dokularını çıkarmak için haritaları dolaşın.",
+    L"Mod yapmak için: Çıkar'ı açın, haritaları dolaşın, adın başındaki kodu koruyarak PNG'leri düzenleyin (çözünürlüğü artırabilirsiniz) ve sürümün klasörüne koyun. İki anahtar da oyun açıkken bile hemen etki eder."
 };
 static_assert(sizeof k_str_tr / sizeof k_str_tr[0] == S_COUNT, "k_str_tr: one text per StrId");
 
@@ -1242,7 +1324,7 @@ static const wchar_t* const k_str_ar[] = {
     L"اللعبة",
     L"التحكم",
     L"التصحيحات",
-    L"الأداء", L"متقدم",
+    L"التعديلات", L"الأداء", L"متقدم",
     L"العودة إلى اللعبة",
     L"إغلاق اللعبة",
     L"داخل اللعبة: Insert أو R3+L2 يفتح هذه القائمة.",
@@ -1387,7 +1469,16 @@ static const wchar_t* const k_str_ar[] = {
     L"عرض تقدم التحميل",
     L"تعرض ملاحظة في زاوية اللعبة مقدار ما حُمِّل من المظللات المحفوظة وتختفي عند الانتهاء. أوقفه لإخفائها؛ يستمر التحميل كما هو. يُطبَّق فورًا.",
     L"جارٍ تحميل المظللات",
-    L"تم تحميل المظللات"
+    L"تم تحميل المظللات",
+    L"الخامات",
+    L"استبدل خامات اللعبة بصور PNG: صورك أو صور تعديل ما.",
+    L"مجلد الخامات",
+    L"%d خامة بديلة و%d مستخرجة، في %ls",
+    L"استبدال الخامات",
+    L"يستخدم ملفات PNG في المجلد بدل الخامات الأصلية، ويحمّل كل ملف عند ظهوره فقط، فلا تثقل التعديلات الكبيرة. تقرأ كل نسخة مجلدها الفرعي (NPEB00553 وNPJB00135 وNPUB30467) أو المجلد نفسه إن لم يوجد.",
+    L"استخراج الخامات",
+    L"يحفظ كل خامة جديدة تظهر أثناء اللعب بصيغة PNG في <المجلد>\\<النسخة>\\dump. تجوّل في الخرائط لاستخراج خاماتها.",
+    L"لإنشاء تعديل: فعّل الاستخراج، وتجوّل في الخرائط، وعدّل ملفات PNG (يمكن رفع الدقة) مع إبقاء الرمز في بداية الاسم، ثم ضعها في مجلد النسخة. يعمل المفتاحان فورًا حتى واللعبة مفتوحة."
 };
 static_assert(sizeof k_str_ar / sizeof k_str_ar[0] == S_COUNT, "k_str_ar: one text per StrId");
 
@@ -1397,7 +1488,7 @@ static const wchar_t* const k_str_zh[] = {
     L"游戏",
     L"控制",
     L"补丁",
-    L"性能", L"高级",
+    L"模组", L"性能", L"高级",
     L"返回游戏",
     L"关闭游戏",
     L"游戏中：按 Insert 或 R3+L2 打开此菜单。",
@@ -1542,7 +1633,16 @@ static const wchar_t* const k_str_zh[] = {
     L"显示加载进度",
     L"游戏角落里的提示会显示已保存着色器的加载进度，完成后自动消失。关闭后不显示提示，加载照常进行。立即生效。",
     L"正在加载着色器",
-    L"着色器已加载"
+    L"着色器已加载",
+    L"纹理",
+    L"用 PNG 图片（你自己的或模组的）替换游戏纹理。",
+    L"纹理文件夹",
+    L"%d 张替换纹理，%d 张已提取（%ls）",
+    L"替换纹理",
+    L"用文件夹中的 PNG 代替原始纹理，每张只在出现时才加载，大型模组也不会拖慢游戏。每个版本读取各自的子文件夹（NPEB00553、NPJB00135、NPUB30467），没有时读取文件夹本身。",
+    L"提取纹理",
+    L"游戏时把每个新出现的纹理保存为 PNG，放在 <文件夹>\\<版本>\\dump 中。走遍各个地图即可提取它们的纹理。",
+    L"制作模组：打开提取，走遍地图，编辑 PNG（可以提高分辨率）并保留文件名开头的代码，然后放入该版本的文件夹。两个开关都会立即生效，游戏运行时也一样。"
 };
 static_assert(sizeof k_str_zh / sizeof k_str_zh[0] == S_COUNT, "k_str_zh: one text per StrId");
 
@@ -1552,7 +1652,7 @@ static const wchar_t* const k_str_ko[] = {
     L"게임",
     L"조작",
     L"패치",
-    L"성능", L"고급",
+    L"모드", L"성능", L"고급",
     L"게임으로 돌아가기",
     L"게임 종료",
     L"게임 중: Insert 또는 R3+L2로 이 메뉴를 엽니다.",
@@ -1697,7 +1797,16 @@ static const wchar_t* const k_str_ko[] = {
     L"불러오기 진행 상황 표시",
     L"저장된 셰이더를 얼마나 불러왔는지 게임 화면 구석에 표시하고, 끝나면 사라집니다. 끄면 표시되지 않지만 불러오기는 똑같이 진행됩니다. 바로 적용됩니다.",
     L"셰이더 불러오는 중",
-    L"셰이더 불러오기 완료"
+    L"셰이더 불러오기 완료",
+    L"텍스처",
+    L"게임 텍스처를 PNG 이미지(직접 만든 것이나 모드의 것)로 바꿉니다.",
+    L"텍스처 폴더",
+    L"교체 텍스처 %d개, 추출된 텍스처 %d개 (%ls)",
+    L"텍스처 교체",
+    L"폴더의 PNG를 원래 텍스처 대신 사용하며, 각각 화면에 나올 때만 불러오므로 큰 모드도 부담이 없습니다. 각 버전은 자기 하위 폴더(NPEB00553, NPJB00135, NPUB30467)를, 없으면 폴더 자체를 읽습니다.",
+    L"텍스처 추출",
+    L"플레이 중 새로 나타나는 텍스처를 PNG로 <폴더>\\<버전>\\dump에 저장합니다. 맵을 돌아다니며 텍스처를 추출하세요.",
+    L"모드 만드는 법: 추출을 켜고 맵을 돌아다닌 뒤, 이름 앞의 코드를 유지한 채 PNG를 편집하고(해상도를 높여도 됩니다) 버전 폴더에 넣으세요. 두 스위치 모두 게임 중에도 바로 적용됩니다."
 };
 static_assert(sizeof k_str_ko / sizeof k_str_ko[0] == S_COUNT, "k_str_ko: one text per StrId");
 
@@ -1707,7 +1816,7 @@ static const wchar_t* const k_str_ru[] = {
     L"Игра",
     L"Управление",
     L"Патчи",
-    L"Производительность", L"Дополнительно",
+    L"Моды", L"Производительность", L"Дополнительно",
     L"НАЗАД В ИГРУ",
     L"Закрыть игру",
     L"В игре: Insert или R3+L2 открывает это меню.",
@@ -1852,7 +1961,16 @@ static const wchar_t* const k_str_ru[] = {
     L"Показывать ход загрузки",
     L"Заметка в углу игры показывает, сколько сохранённых шейдеров уже загружено, и исчезает по окончании. Отключите, чтобы её скрыть; загрузка идёт так же. Применяется сразу.",
     L"Загрузка шейдеров",
-    L"Шейдеры загружены"
+    L"Шейдеры загружены",
+    L"ТЕКСТУРЫ",
+    L"Замените текстуры игры изображениями PNG: своими или из мода.",
+    L"Папка текстур",
+    L"Текстур для замены: %d, извлечено: %d, в %ls",
+    L"Заменять текстуры",
+    L"Использует PNG из папки вместо исходных текстур и загружает каждый, только когда он появляется: большие моды не нагружают игру. Каждая версия читает свою подпапку (NPEB00553, NPJB00135, NPUB30467), а без неё саму папку.",
+    L"Извлекать текстуры",
+    L"Сохраняет в PNG каждую новую текстуру, появившуюся во время игры, в <папка>\\<версия>\\dump. Пройдите по картам, чтобы извлечь их текстуры.",
+    L"Как сделать мод: включите извлечение, пройдите по картам, отредактируйте PNG (можно повысить разрешение), сохранив код в начале имени, и положите их в папку версии. Оба переключателя действуют сразу, даже при запущенной игре."
 };
 static_assert(sizeof k_str_ru / sizeof k_str_ru[0] == S_COUNT, "k_str_ru: one text per StrId");
 

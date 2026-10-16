@@ -172,6 +172,8 @@ struct Settings {
     bool overlay = false;  /* the performance overlay (rsx_perf_overlay.h) */
     int overlay_items = 3; /* bits of k_overlay_items: FPS and frame time */
     bool shader_opt[5] = { true, true, true, true, true };   /* k_shader_opts, Desempenho page */
+    std::wstring tex_dir;              /* texture mods (Mods page); empty: "textures" beside the exe */
+    bool tex_replace = false, tex_dump = false;
     std::wstring game, rap, fw, saves;
     std::wstring patch_dir;                 /* patch files (patch_files.h) */
     std::vector<std::string> patch_files_on; /* ids of the file patches turned on */
@@ -331,6 +333,9 @@ Settings load_settings()
     s.overlay = _wtoi(ini_get(L"overlay", L"mostrar", L"0").c_str()) != 0;
     for (int i = 0; i < NSHADER_OPTS; i++)
         s.shader_opt[i] = _wtoi(ini_get(L"shaders", k_shader_opts[i].key, L"1").c_str()) != 0;
+    s.tex_dir = ini_get(L"texturas", L"pasta", L"");
+    s.tex_replace = _wtoi(ini_get(L"texturas", L"substituir", L"0").c_str()) != 0;
+    s.tex_dump = _wtoi(ini_get(L"texturas", L"extrair", L"0").c_str()) != 0;
     s.overlay_items = _wtoi(ini_get(L"overlay", L"itens", L"3").c_str()) & ((1 << NOVERLAY) - 1);
     s.patch_dir = ini_get(L"pastas", L"patches", L"");
     {
@@ -381,6 +386,9 @@ void save_settings(const Settings& s)
     ini_set(L"overlay", L"itens", std::to_wstring(s.overlay_items));
     for (int i = 0; i < NSHADER_OPTS; i++)
         ini_set(L"shaders", k_shader_opts[i].key, s.shader_opt[i] ? L"1" : L"0");
+    ini_set(L"texturas", L"pasta", s.tex_dir);
+    ini_set(L"texturas", L"substituir", s.tex_replace ? L"1" : L"0");
+    ini_set(L"texturas", L"extrair", s.tex_dump ? L"1" : L"0");
     ini_set(L"pastas", L"patches", s.patch_dir);
     {
         std::wstring on;
@@ -506,7 +514,7 @@ Bitmap* load_png(const char* name)
 }
 
 /* ---------------------------------------------------------------- UI state */
-enum Page { P_INICIO, P_JOGO, P_CONTROLES, P_PATCHES, P_DESEMPENHO, P_AVANCADO, P_COUNT };
+enum Page { P_INICIO, P_JOGO, P_CONTROLES, P_PATCHES, P_MODS, P_DESEMPENHO, P_AVANCADO, P_COUNT };
 enum Capture { CAP_NONE, CAP_KEY, CAP_BTN };
 
 struct Hit { RectF r; int id; };
@@ -533,6 +541,8 @@ struct UI {
     uint32_t combo_prev = 0;
     std::string eboot;
     std::wstring cache_msg;        /* result of the last "clear shader cache" */
+    int tex_rep = -1, tex_dumped = 0;   /* PNGs in the texture folder (-1: not counted yet) */
+    std::wstring tex_root_name;    /* the folder replacements are read from */
     int dd_scroll = 0;             /* first visible row of the open dropdown list */
 };
 UI g;
@@ -552,6 +562,7 @@ enum {
     ID_PATCH_DIR_BROWSE = 1500, ID_PATCH_DIR_OPEN, ID_FPATCH = 1600,  /* + file patch index */
     ID_LOG_VIEW = 2100, ID_LOG_COPY, ID_LOG_SAVE, ID_LOG_FOLDER,
     ID_SHADER_OPT = 2200,                                          /* + k_shader_opts index */
+    ID_TEX_BROWSE = 2300, ID_TEX_OPEN, ID_TEX_REPLACE, ID_TEX_DUMP,
 };
 
 void hit(float x, float y, float w, float h, int id) { g.hits.push_back({ RectF(x, y, w, h), id }); }
@@ -1441,6 +1452,61 @@ void draw_desempenho(Graphics& gr, const Font& head, const Font& body, const Fon
     }
 }
 
+/* The texture mods folder (rsx_texture_pack.h): chosen, or "textures" beside
+ * the exe. Replacements are read from its subfolder named after the version
+ * when there is one, dumps go to <folder>\<version>\dump. */
+fs::path tex_folder()
+{
+    if (!g.s.tex_dir.empty()) return fs::path(g.s.tex_dir);
+    wchar_t exe[MAX_PATH]; GetModuleFileNameW(NULL, exe, MAX_PATH);
+    return fs::path(exe).parent_path() / L"textures";
+}
+int count_png(const fs::path& dir, bool recurse)
+{
+    int n = 0; std::error_code ec;
+    if (!recurse) {
+        for (auto& e : fs::directory_iterator(dir, ec))
+            if (e.is_regular_file(ec) && _wcsicmp(e.path().extension().c_str(), L".png") == 0) n++;
+        return n;
+    }
+    for (auto it = fs::recursive_directory_iterator(dir, ec); !ec && it != fs::recursive_directory_iterator(); it.increment(ec)) {
+        if (it->is_directory(ec)) { if (_wcsicmp(it->path().filename().c_str(), L"dump") == 0) it.disable_recursion_pending(); continue; }
+        if (_wcsicmp(it->path().extension().c_str(), L".png") == 0) n++;
+    }
+    return n;
+}
+void scan_tex_dir()
+{
+    std::error_code ec;
+    fs::path root = tex_folder() / GAME_CODE;
+    if (!fs::is_directory(root, ec)) root = tex_folder();
+    g.tex_root_name = root.filename().wstring();
+    g.tex_rep = count_png(root, true);
+    g.tex_dumped = count_png(tex_folder() / GAME_CODE / L"dump", false);
+}
+
+void draw_mods(Graphics& gr, const Font& head, const Font& body, const Font& fsm)
+{
+    float x = SIDE + 32.0f, y = 34;
+    const float w = W - SIDE - 64.0f;
+    section(gr, T(S_MODS_TITLE), x, y, w, head);
+    text(gr, T(S_MODS_HINT), x, y + 32, fsm, C_DIM, StringAlignmentNear, w, 20);
+    y += 74;
+    if (g.tex_rep < 0) scan_tex_dir();
+    wchar_t note[512];
+    swprintf(note, 512, T(S_TEX_COUNT_FMT), g.tex_rep, g.tex_dumped, g.tex_root_name.c_str());
+    path_row(gr, x, y, T(S_TEX_FOLDER), tex_folder().wstring(), note, true, ID_TEX_BROWSE, ID_TEX_OPEN, body, fsm);
+    y += 70;
+    option_card(gr, x, y, w, 92, g.s.tex_replace, ID_TEX_REPLACE, T(S_TEX_REPLACE_T), T(S_TEX_REPLACE_D), body, fsm);
+    y += 104;
+    option_card(gr, x, y, w, 92, g.s.tex_dump, ID_TEX_DUMP, T(S_TEX_DUMP_T), T(S_TEX_DUMP_D), body, fsm);
+    y += 108;
+    const std::wstring howto = g_lang == LANG_AR ? L"\u202B" + std::wstring(T(S_TEX_HOWTO)) + L"\u202C" : T(S_TEX_HOWTO);
+    StringFormat sf; sf.SetAlignment(StringAlignmentNear); sf.SetLineAlignment(StringAlignmentNear);
+    SolidBrush hb(C_DIM);
+    gr.DrawString(howto.c_str(), -1, &fsm, RectF(x, y, w, 60), &sf, &hb);
+}
+
 void paint(HDC hdc)
 {
     Bitmap back(W, H, PixelFormat32bppARGB);
@@ -1463,6 +1529,7 @@ void paint(HDC hdc)
     else if (g.page == P_CONTROLES) draw_controles(gr, fHead, fBody, fSmall, fCol);
     else if (g.page == P_PATCHES) draw_patches(gr, fHead, fBody, fSmall);
     else if (g.page == P_DESEMPENHO) draw_desempenho(gr, fHead, fBody, fSmall);
+    else if (g.page == P_MODS) draw_mods(gr, fHead, fBody, fSmall);
     else draw_avancado(gr, fHead, fBody, fSmall);
     draw_sidebar(gr, fTitle, fTitle2, fNav, fSmall);
     draw_play(gr, fBig, fSmall);
@@ -1598,6 +1665,7 @@ void open_in_explorer(const std::wstring& p)
 void set_map_env();
 void set_overlay_env();
 void set_env(const char* k, const std::string& v);
+void set_texture_env();
 
 void apply_live(bool restore_menu = true)
 {
@@ -1674,6 +1742,7 @@ void click(int id)
     if (id >= ID_NAV && id < ID_NAV + P_COUNT) {
         g.page = (Page)(id - ID_NAV); g.cache_msg.clear(); g.log_msg.clear();
         if (g.page == P_PATCHES) scan_patch_dir();   /* the folder may have new files */
+        if (g.page == P_MODS) g.tex_rep = -1;        /* count the textures again */
     }
     else if (id >= ID_PATCH && id < ID_PATCH + NPATCHES) { g.s.patch[id - ID_PATCH] ^= true; changed(); }
     else if (id == ID_DD_MODE || id == ID_DD_RES || id == ID_DD_AA || id == ID_DD_LANG) {
@@ -1726,6 +1795,18 @@ void click(int id)
         if (!p.empty()) { g.s.patch_dir = p; scan_patch_dir(); changed(); }
     }
     else if (id == ID_PATCH_DIR_OPEN && !g.s.patch_dir.empty()) open_in_explorer(g.s.patch_dir);
+    else if (id == ID_TEX_BROWSE) {
+        auto p = pick(true, tex_folder().wstring(), nullptr, nullptr);
+        if (!p.empty()) { g.s.tex_dir = p; g.tex_rep = -1; set_texture_env(); changed(); }
+    }
+    else if (id == ID_TEX_OPEN) {   /* made on first use, with this version's subfolder */
+        std::error_code ec;
+        fs::create_directories(tex_folder() / GAME_CODE, ec);
+        open_in_explorer((tex_folder() / GAME_CODE).wstring());
+        g.tex_rep = -1;
+    }
+    else if (id == ID_TEX_REPLACE) { g.s.tex_replace = !g.s.tex_replace; set_texture_env(); changed(); }
+    else if (id == ID_TEX_DUMP) { g.s.tex_dump = !g.s.tex_dump; set_texture_env(); changed(); }
     else if (id >= ID_FPATCH && id < ID_FPATCH + (int)g.fpatches.size()) {
         const FilePatch& p = g.fpatches[(size_t)(id - ID_FPATCH)];
         auto& on = g.s.patch_files_on;
@@ -1901,6 +1982,16 @@ void set_icon_env()
 }
 void set_env_default(const char* k, const char* v) { if (!getenv(k)) _putenv_s(k, v); }
 
+/* Texture mods (rsx_texture_pack.h). The game reads the switches again as it
+ * runs, so turning them on or off here acts at once. */
+void set_texture_env()
+{
+    set_env("TEXTURE_DIR", save_utf8(tex_folder()));
+    set_env("TEXTURE_GAME", CV_TITLE_ID);
+    set_env("TEXTURE_REPLACE", g.s.tex_replace ? "1" : "0");
+    set_env("TEXTURE_DUMP", g.s.tex_dump ? "1" : "0");
+}
+
 /* PERF_OVERLAY from the settings: empty while the overlay is off. The game
  * reads it again twice a second, so a change shows at once. */
 void set_overlay_env()
@@ -2038,6 +2129,7 @@ void start_game()
     set_env("FP_ASYNC", s.shader_opt[2] ? "1" : "0");
     set_env("SHADER_PRELOAD_PARALLEL", s.shader_opt[3] ? "1" : "0");
     set_env("SHADER_PRELOAD_NOTE", s.shader_opt[4] ? "1" : "0");
+    set_texture_env();
     set_env("SHADER_NOTE_TEXT", save_utf8(fs::path(std::wstring(T(S_SH_NOTE_LOADING)) + L"|" + T(S_SH_NOTE_LOADED))));
     {   /* file patches: applied by the runtime once the game is loaded */
         if (g.fpatches.empty()) scan_patch_dir();

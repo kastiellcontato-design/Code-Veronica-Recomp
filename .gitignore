@@ -140,3 +140,5 @@ projects/*/audio-capture.f32
 # Launcher cover art is the title's own artwork: kept local, embedded when present.
 projects/*/launcher_art/banner.*
 projects/*/launcher_art/icon.*
+# Texture mods: dumped and replacement PNGs are the game's images
+textures/
