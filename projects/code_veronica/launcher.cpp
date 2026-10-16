@@ -2038,6 +2038,7 @@ void start_game()
     set_env("FP_ASYNC", s.shader_opt[2] ? "1" : "0");
     set_env("SHADER_PRELOAD_PARALLEL", s.shader_opt[3] ? "1" : "0");
     set_env("SHADER_PRELOAD_NOTE", s.shader_opt[4] ? "1" : "0");
+    set_env("SHADER_NOTE_TEXT", save_utf8(fs::path(std::wstring(T(S_SH_NOTE_LOADING)) + L"|" + T(S_SH_NOTE_LOADED))));
     {   /* file patches: applied by the runtime once the game is loaded */
         if (g.fpatches.empty()) scan_patch_dir();
         std::string w;

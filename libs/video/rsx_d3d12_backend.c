@@ -4863,16 +4863,15 @@ static void pl_tick(void)
     }
 }
 
-/* For the corner note (rsx_perf_overlay.c): 1 while the preload runs and for
- * 3 s after. It usually takes a fraction of a second -- less than the note's
- * own refresh -- and the note never got drawn; now it ends on 100%. */
-int rsx_shader_preload_progress(int* done, int* total)
+/* For the loading note (rsx_perf_overlay.c): 0 not started (or nothing to
+ * load), 1 loading, 2 finished at *finished_ms (GetTickCount64). */
+int rsx_shader_preload_state(int* done, int* total, unsigned long long* finished_ms)
 {
     if (done) *done = (int)(s_pl_done_vs + s_pl_done_fp);
     if (total) *total = s_pl_nvs + s_pl_nfp;
+    if (finished_ms) *finished_ms = s_pl_finished_at;
     if (!s_pl_started) return 0;
-    if (s_pl_threads_left > 0 || !s_pl_finished_at) return 1;
-    return GetTickCount64() - s_pl_finished_at < 3000;
+    return s_pl_threads_left > 0 || !s_pl_finished_at ? 1 : 2;
 }
 
 /* Upload the guest texture for a VP draw into a per-frame texture slot
