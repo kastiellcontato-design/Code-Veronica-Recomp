@@ -44,7 +44,8 @@ BOOL CALLBACK load_compiler(PINIT_ONCE, PVOID, PVOID*) {
     if (!module) return TRUE;
     create_instance = reinterpret_cast<DxcCreateInstanceProc>(GetProcAddress(module, "DxcCreateInstance"));
     if (create_instance)
-        std::snprintf(cache_tag, sizeof cache_tag, "dxc-exp1-%016llX", identity);
+        std::snprintf(cache_tag, sizeof cache_tag, "dxc-exp1-%016llX%s", identity,
+                      std::getenv("RSX_DXC_DEBUG") ? "-dbg" : "");
     return TRUE;
 }
 
@@ -123,11 +124,19 @@ extern "C" int rsx_dxc_compile(const char* src, size_t len, const char* profile,
         std::wstring target(profile, profile + std::strlen(profile));
         LPCWSTR args[] = {L"-E", L"main", L"-T", target.c_str(),
             L"-HV", L"2016", L"-Gis", L"-O3", L"-Qstrip_debug", L"-Qstrip_reflect"};
+        /* RSX_DXC_DEBUG=1: embed the HLSL and debug info (same -O3 code) so
+         * RenderDoc can step a guest shader by its source and variables. */
+        LPCWSTR dbg_args[] = {L"-E", L"main", L"-T", target.c_str(),
+            L"-HV", L"2016", L"-Gis", L"-O3", L"-Zi", L"-Qembed_debug"};
+        const bool dbg = std::getenv("RSX_DXC_DEBUG") != nullptr;
         std::string source = prepare_source(src, len);
         DxcBuffer input = {source.data(), source.size(), DXC_CP_UTF8};
         IDxcResult* result = nullptr;
-        HRESULT hr = compiler.object->Compile(&input, args, (UINT32)(sizeof args / sizeof *args),
-            nullptr, __uuidof(IDxcResult), (void**)&result);
+        HRESULT hr = dbg
+            ? compiler.object->Compile(&input, dbg_args, (UINT32)(sizeof dbg_args / sizeof *dbg_args),
+                                       nullptr, __uuidof(IDxcResult), (void**)&result)
+            : compiler.object->Compile(&input, args, (UINT32)(sizeof args / sizeof *args),
+                                       nullptr, __uuidof(IDxcResult), (void**)&result);
         if (FAILED(hr) || !result) { if (result) result->Release(); return -4; }
         IDxcBlobUtf8* messages = nullptr;
         if (SUCCEEDED(result->GetOutput(DXC_OUT_ERRORS, __uuidof(IDxcBlobUtf8), (void**)&messages, nullptr)) && messages)

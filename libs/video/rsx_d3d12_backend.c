@@ -253,6 +253,7 @@ typedef struct {
     u32 thash_bytes;    /* the guest bytes it is taken over */
     int dump_seen;      /* texture dumping has looked at these contents */
     u64 upload_frame;   /* render frame its contents were last uploaded */
+    int nlev;           /* mip levels in the resource (1 unless RSX_TEX_MIPS) */
 } VPTexSlot;
 static u64 s_tex_frame = 1;   /* render frames, for VPTexSlot.stamp */
 /* Distinct textures uploadable per frame. Four was enough for a UI/atlas-style
@@ -3690,6 +3691,14 @@ static u32 dr_cube_mask(const D3D12DrawRecord* dr)
     if (!en) return 0;
     u32 m = 0;
     for (int u = 0; u < FP_TEX_UNITS; u++) if (dr->tex[u].set && dr->tex[u].cube) m |= 1u << u;
+    /* Bits 16+u: a cube of Y16_X16 lookups, read unfiltered. Code Veronica's
+     * lighter finds the shadow face and its texel through two such cubes;
+     * linear filtering blended indices across face seams and drew black
+     * lines out from the flame. CUBE_LUT_LINEAR=1 keeps them filtered. */
+    { static int lin = -1; if (lin < 0) lin = getenv("CUBE_LUT_LINEAR") ? 1 : 0;
+      if (!lin)
+          for (int u = 0; u < FP_TEX_UNITS; u++)
+              if ((m >> u & 1u) && (dr->tex[u].fmt & 0x9Fu) == 0x95u) m |= 1u << (16 + u); }
     return m;
 }
 
@@ -4080,7 +4089,10 @@ static int fp_build_pso(FpJob* j)
         "cbuffer RsxTexAddr : register(b1) { float4 rsx_texaddr[8]; float4 rsx_alpha_k; float4 fp_k[128]; };\n"
         "float rsx_addr1(float c, float m, float n) {\n"
         "    float e = n > 0.0 ? 0.5 / n : 0.0;\n"
-        "    if (m == 1.0) return frac(c);\n"
+        /* Wrap: the static samplers already wrap. frac() here broke the
+         * derivatives at every seam, which with mip levels (RSX_TEX_MIPS)
+         * picked the smallest level along a line through the texture. */
+        "    if (m == 1.0) return c;\n"
         "    if (m == 2.0) { float t = frac(c * 0.5) * 2.0; return t > 1.0 ? 2.0 - t : t; }\n"
         "    if (m == 6.0 || m == 8.0) return clamp(abs(c), e, 1.0 - e);\n"
         "    if (m == 3.0 || m == 4.0 || m == 5.0 || m == 7.0) return clamp(c, e, 1.0 - e);\n"
@@ -4115,11 +4127,16 @@ static int fp_build_pso(FpJob* j)
      * light parameters into one program per object, and every object was lit
      * with the first one's (zero) lights -- the whole scene rendered black. */
     u32 nk = 0;
-    int n = rsx_fp_decompile_alloc(ucode, j->ucode_bytes, exp32 ? 0x40u : 0u, 0u,
+    /* The cube units go to the decompiler: it declares them TextureCube and
+     * samples them with the 3-component direction. The text retargeting
+     * below looked for declarations the decompiler no longer emits, so every
+     * cube was sampled as a 2D texture -- with a cube view bound, Code
+     * Veronica's water reflection read one flat bluish colour. */
+    int n = rsx_fp_decompile_alloc(ucode, j->ucode_bytes, exp32 ? 0x40u : 0u, cube_mask,
                                   1, &j->hlsl, &j->hlsl_cap, &nk);
     const int buffered = n > 0 && nk <= FP_MAX_K;
     if (!buffered)
-        n = rsx_fp_decompile_alloc(ucode, j->ucode_bytes, exp32 ? 0x40u : 0u, 0u,
+        n = rsx_fp_decompile_alloc(ucode, j->ucode_bytes, exp32 ? 0x40u : 0u, cube_mask,
                                    0, &j->hlsl, &j->hlsl_cap, NULL);
     if (n <= 0) { static int _e=0; if(_e++<16)
         fprintf(stderr, "[FP] decompile fail (fp=0x%08X, program=%u bytes, HLSL capacity=%u, result=%d)%c",
@@ -4298,6 +4315,25 @@ static int fp_build_pso(FpJob* j)
                   fprintf(stderr, "[FPKILL] fp=0x%X discards%c", fp_addr, 10);
               }
           }
+      } }
+    /* Lookup cubes (dr_cube_mask bits 16+u) sample through the point/clamp
+     * static sampler, s(FP_TEX_UNITS + 4), inside rsx_samp[16]'s range. */
+    for (int _u = 0; _u < FP_TEX_UNITS; _u++)
+        if (cube_mask & (1u << (16 + _u))) {
+            char f[48], r[48];
+            snprintf(f, sizeof f, "rsx_samp[%d], RSX_CUBEDIR", _u);
+            snprintf(r, sizeof r, "rsx_samp[%d], RSX_CUBEDIR", FP_TEX_UNITS + 4);
+            hlsl_replace_all(hlsl, hlsl_cap, f, r);
+        }
+    /* RSX_CUBE_FLIP=x|y|z|xz|...: mirror the cube lookup direction on those
+     * axes (an orientation test for Code Veronica's water reflection). */
+    { const char* cf = getenv("RSX_CUBE_FLIP");
+      if (cf && *cf) {
+          char repl[96];
+          snprintf(repl, sizeof repl, "#define RSX_CUBEDIR(v) ((v) * float3(%s, %s, %s))",
+                   strchr(cf, 'x') ? "-1.0" : "1.0", strchr(cf, 'y') ? "-1.0" : "1.0",
+                   strchr(cf, 'z') ? "-1.0" : "1.0");
+          hlsl_replace_all(hlsl, hlsl_cap, "#define RSX_CUBEDIR(v) (v)", repl);
       } }
     { const char* sh = getenv("FP_SHOW");
       const char* only = getenv("FP_TEX_FP");
@@ -5724,9 +5760,39 @@ static int vp_upload_tex_slot_impl(u32 off, u32 w, u32 h, u32 fmt, int cube, u32
      * the same dimensions would otherwise be reused with 1 array slice while the
      * cube path copies 6 subresources and writes a 6x upload buffer -- which
      * crashes. */
-    if (t->res && (t->w != w || t->h != h || t->fmt != fmt || t->cube != cube)) {
+    /* RSX_TEX_MIPS=1: upload the guest's mip chain too (2D swizzled or
+     * compressed textures; their levels follow level 0 back to back). Without
+     * it every texture is sampled at full size at any distance: Code
+     * Veronica's water ripples (a 512x512 normal map seen far off) turn to
+     * per-pixel noise and its reflection loses its shape. */
+    enum { TEX_MAX_LEV = 14 };
+    int nlev = 1;
+    { static int on = -1;
+      if (on < 0) { const char* e = getenv("RSX_TEX_MIPS"); on = (e && *e == '1') ? 1 : 0; }
+      if (on && !cube && mips > 1 && (dxt || tl.swizzled)) {
+          int full = 1; for (u32 m = (w > h ? w : h); m > 1; m >>= 1) full++;
+          nlev = (int)mips < full ? (int)mips : full;
+          if (nlev > TEX_MAX_LEV) nlev = TEX_MAX_LEV;
+      } }
+    if (t->res && (t->w != w || t->h != h || t->fmt != fmt || t->cube != cube || t->nlev != nlev)) {
         defer_release(t->res); t->res = NULL;
         defer_release(t->up);  t->up = NULL;
+    }
+    D3D12_PLACED_SUBRESOURCE_FOOTPRINT mip_fp[TEX_MAX_LEV];
+    UINT64 mip_total = 0;
+    if (nlev > 1) {
+        D3D12_RESOURCE_DESC md = {0};
+        md.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        md.Width = w; md.Height = h; md.DepthOrArraySize = 1; md.MipLevels = (UINT16)nlev;
+        md.Format = dxfmt; md.SampleDesc.Count = 1; md.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+        s_d3d.device->lpVtbl->GetCopyableFootprints(s_d3d.device, &md, 0, (UINT)nlev, 0,
+                                                    mip_fp, NULL, NULL, &mip_total);
+        /* Level 0 must keep the layout the decode below writes. */
+        if (mip_fp[0].Offset != 0 || mip_fp[0].Footprint.RowPitch != pitch) nlev = 1;
+        if (t->res && t->nlev != nlev) {
+            defer_release(t->res); t->res = NULL;
+            defer_release(t->up);  t->up = NULL;
+        }
     }
     if (!t->res) {
         D3D12_HEAP_PROPERTIES hp = {0}; hp.Type = D3D12_HEAP_TYPE_DEFAULT;
@@ -5734,7 +5800,7 @@ static int vp_upload_tex_slot_impl(u32 off, u32 w, u32 h, u32 fmt, int cube, u32
         td.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
         td.Width = w; td.Height = h;
         td.DepthOrArraySize = cube ? 6 : 1;   /* cube = 6 array slices */
-        td.MipLevels = 1;
+        td.MipLevels = (UINT16)nlev;
         td.Format = dxfmt; td.SampleDesc.Count = 1;
         td.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
         if (FAILED(s_d3d.device->lpVtbl->CreateCommittedResource(
@@ -5746,6 +5812,7 @@ static int vp_upload_tex_slot_impl(u32 off, u32 w, u32 h, u32 fmt, int cube, u32
         D3D12_RESOURCE_DESC bd = {0};
         bd.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
         bd.Width = (u64)pitch * (dxt ? blkrows : h) * (cube ? 6 : 1);
+        if (nlev > 1 && mip_total > bd.Width) bd.Width = mip_total;
         bd.Height = 1; bd.DepthOrArraySize = 1;
         bd.MipLevels = 1; bd.SampleDesc.Count = 1; bd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
         if (FAILED(s_d3d.device->lpVtbl->CreateCommittedResource(
@@ -6084,6 +6151,22 @@ static int vp_upload_tex_slot_impl(u32 off, u32 w, u32 h, u32 fmt, int cube, u32
       } }
     }   /* end per-face conversion */
     off = _off0; mapped = _map0;
+    /* Mip levels 1.. (RSX_TEX_MIPS): each follows the previous one in guest
+     * memory, at its own size, in the same layout (swizzled or blocks). */
+    if (nlev > 1) {
+        u32 src = off;
+        for (int l = 0; l < nlev; l++) {
+            u32 lw = w >> l, lh = h >> l;
+            if (!lw) lw = 1;
+            if (!lh) lh = 1;
+            rsx_tex_layout tll;
+            rsx_texture_layout(fmt, lw, lh, &tll);
+            if (l > 0)
+                rsx_texture_decode(_map0 + mip_fp[l].Offset, mip_fp[l].Footprint.RowPitch,
+                                   vm_base + src, lw, lh, &tll, rsx_texture_argb_is_rgba());
+            src += tll.compressed ? tll.row_bytes * tll.rows : lw * lh * tll.bytes_per_texel;
+        }
+    }
     /* TEX_DUMP (see above): also the decoded upload buffer, all faces, as the
      * GPU will copy it (texdump_<off>_up.bin). */
     { static int nu = 0; const char* e = getenv("TEX_DUMP");
@@ -6124,6 +6207,11 @@ static int vp_upload_tex_slot_impl(u32 off, u32 w, u32 h, u32 fmt, int cube, u32
         src.PlacedFootprint.Offset  = (u64)_f * pitch * _face_rows;
         s_d3d.cmd_list->lpVtbl->CopyTextureRegion(s_d3d.cmd_list, &dst, 0, 0, 0, &src, NULL);
     }
+    for (int l = 1; l < nlev; l++) {
+        dst.SubresourceIndex   = (UINT)l;
+        src.PlacedFootprint    = mip_fp[l];
+        s_d3d.cmd_list->lpVtbl->CopyTextureRegion(s_d3d.cmd_list, &dst, 0, 0, 0, &src, NULL);
+    }
     {
         D3D12_RESOURCE_BARRIER b = {0};
         b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
@@ -6142,7 +6230,7 @@ static int vp_upload_tex_slot_impl(u32 off, u32 w, u32 h, u32 fmt, int cube, u32
      * = encoded 0x1000 (component 0 in all lanes + always-set bit). ARGB8
      * keeps the identity mapping. */
     sv.Shader4ComponentMapping = (basef == 0x81) ? 0x1000 : D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-    sv.Texture2D.MipLevels = 1;
+    sv.Texture2D.MipLevels = (UINT)nlev;
     D3D12_CPU_DESCRIPTOR_HANDLE sh;
     s_d3d.srv_heap->lpVtbl->GetCPUDescriptorHandleForHeapStart(s_d3d.srv_heap, &sh);
     sh.ptr += (u64)(1 + slot) * s_d3d.srv_inc;
@@ -6162,6 +6250,7 @@ static int vp_upload_tex_slot_impl(u32 off, u32 w, u32 h, u32 fmt, int cube, u32
     off = _off0;   /* the face loop left it on the last cube face */
     t->off = off; t->key = key_off; t->w = w; t->h = h; t->fmt = fmt;
     t->cube = cube; t->used = 1; t->stamp = s_tex_frame; t->upload_frame = s_tex_frame;
+    t->nlev = nlev;
     s_tex_hint[hk] = (short)(t - s_d3d.vp_tex + 1);
     { u32 nb = dxt ? (blkrow * blkrows) : (w * h * bpp);
       t->csum = TEX_CSUM(vm_base + off, nb); }
@@ -6228,6 +6317,26 @@ static void vp_record_cb(u32 slot, int vs_idx, const D3D12DrawRecord* dr)
                         ts[_u*4+2] = (float)((dr->tex[_u].addr & 0xFu) |
                                              (((dr->tex[_u].addr >> 20) & 0xFu) << 4));
                 }
+        /* TEX_NOGAMMA_FP=<code hex>:<unit>,...: drop the sRGB decode of those
+         * units for the program with that code hash (an experiment: RPCS3
+         * reads Code Veronica's water normal map raw). */
+        { static const char* ng = (const char*)1; static u32 ncode = 0, nmask = 0;
+          if (ng == (const char*)1) {
+              ng = getenv("TEX_NOGAMMA_FP");
+              if (ng) { char* e = NULL; ncode = (u32)strtoul(ng, &e, 16);
+                        while (e && *e) { long i = strtol(e + 1, &e, 10);
+                                          if (i >= 0 && i < 16) nmask |= 1u << i; } }
+          }
+          if (ng && dr && dr->fp_addr && dr->fp_bytes) {
+              extern uint8_t* vm_base;
+              extern u32 cellGcmResolveLocated(int, u32);
+              extern u32 rsx_fp_code_hash(const u8*, u32);
+              u32 fo = cellGcmResolveLocated((dr->fp_addr & 0x3u) == 1, dr->fp_addr & ~0x3u);
+              if (vm_base && fo != 0xFFFFFFFFu && rsx_fp_code_hash(vm_base + fo, dr->fp_bytes) == ncode)
+                  for (int _u = 0; _u < FP_TEX_UNITS && _u < 8; _u++)
+                      if (nmask & (1u << _u))
+                          ts[_u*4+2] = (float)((u32)ts[_u*4+2] & 0x8Fu);
+          } }
         if (dr && !getenv("NO_ALPHATEST")) {
             { static int _at = 0;
               if (((dr->alpha_ctl >> 16) & 1u) && _at++ < 4)

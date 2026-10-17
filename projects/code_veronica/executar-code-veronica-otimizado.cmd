@@ -100,6 +100,19 @@ rem Probe 8: normal picture; F12 also saves the scene right before and right
 rem after the water draw (its 138612-vertex mesh) into rsxcap-water-probe8.
 if "%CV_WATER_PROBE%"=="8" set "RSXCAP_STEP_VTX=138612"
 if "%CV_WATER_PROBE%"=="8" set "RSX_CAP_DIR=rsxcap-water-probe8"
+rem Probe 9: the water's normal map (units 0, 1) read raw, without the sRGB
+rem decode, as RPCS3 reads it. Probe 10: the reflection cube (unit 3) too.
+if "%CV_WATER_PROBE%"=="9" set "TEX_NOGAMMA_FP=AEBCCCCE:0,1"
+if "%CV_WATER_PROBE%"=="10" set "TEX_NOGAMMA_FP=AEBCCCCE:0,1,3"
+rem Mip levels test: upload the textures' mip chains (RSX_TEX_MIPS).
+if "%CV_TEX_MIPS%"=="1" set "RSX_TEX_MIPS=1"
+if "%CV_TEX_MIPS%"=="1" set "RSX_CAP_DIR=rsxcap-mips"
+if "%CV_TEX_MIPS%"=="1" set "RSXCAP_STEP_VTX=138612"
+rem Cube orientation tests: CV_CUBE_FLIP=x / y / z mirrors the reflection
+rem lookup on that axis. F12 saves to rsxcap-cubo-<axis>.
+if not "%CV_CUBE_FLIP%"=="" set "RSX_CUBE_FLIP=%CV_CUBE_FLIP%"
+if not "%CV_CUBE_FLIP%"=="" set "RSX_CAP_DIR=rsxcap-cubo-%CV_CUBE_FLIP%"
+if not "%CV_CUBE_FLIP%"=="" set "RSXCAP_STEP_VTX=138612"
 rem Probe 7, thirds of the water: the reflection cube along a screen-made
 rem direction / reflected off a flat surface / the shader's real colour x8.
 if "%CV_WATER_PROBE%"=="7" set "FP_SHOW_CODE=AEBCCCCE"
@@ -134,7 +147,12 @@ rem Preserve the last three runs: a restart must not erase the freeze evidence.
 if exist "%GAME_LOG%.previous-2.txt" copy /y "%GAME_LOG%.previous-2.txt" "%GAME_LOG%.previous-3.txt" >nul
 if exist "%GAME_LOG%.previous-1.txt" copy /y "%GAME_LOG%.previous-1.txt" "%GAME_LOG%.previous-2.txt" >nul
 if exist "%GAME_LOG%" copy /y "%GAME_LOG%" "%GAME_LOG%.previous-1.txt" >nul
-"%GAME_EXE%" "%GAME_ELF%" > "%GAME_LOG%" 2>&1
+if "%CV_RENDERDOC%"=="1" (
+ if not exist "D:\Tools\capturas\nosso" mkdir "D:\Tools\capturas\nosso"
+ "D:\Tools\RenderDoc_1.46_64\renderdoccmd.exe" capture -w --opt-hook-children -d "%~dp0." -c "D:\Tools\capturas\nosso\agua" "%GAME_EXE%" "%GAME_ELF%" > "%GAME_LOG%" 2>&1
+) else (
+ "%GAME_EXE%" "%GAME_ELF%" > "%GAME_LOG%" 2>&1
+)
 set "GAME_RESULT=%ERRORLEVEL%"
 echo [runner] exit code=%GAME_RESULT%>> "%GAME_LOG%"
 echo.

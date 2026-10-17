@@ -767,7 +767,7 @@ static int rsx_fp_decompile_internal(
             if ((tex_cube_mask >> tex_unit) & 1u)
                 /* Cubemap: sample with the full 3-component direction vector. */
                 snprintf(rhs, sizeof(rhs),
-                         "rsx_tex%u.Sample(rsx_samp[%u], (%s).xyz)", tex_unit, tex_unit, a);
+                         "rsx_tex%u.Sample(rsx_samp[%u], RSX_CUBEDIR((%s).xyz))", tex_unit, tex_unit, a);
             else if (tex_cube_mask)
                 snprintf(rhs, sizeof(rhs),
                          "rsx_tex%u.Sample(rsx_samp[%u], RSX_ADDR(%u, (%s).xy))", tex_unit, tex_unit, tex_unit, a);
@@ -780,7 +780,7 @@ static int rsx_fp_decompile_internal(
                 /* Projective divide is meaningless for a cube lookup; sample
                  * the direction directly. */
                 snprintf(rhs, sizeof(rhs),
-                         "rsx_tex%u.Sample(rsx_samp[%u], (%s).xyz)", tex_unit, tex_unit, a);
+                         "rsx_tex%u.Sample(rsx_samp[%u], RSX_CUBEDIR((%s).xyz))", tex_unit, tex_unit, a);
             else if (tex_cube_mask)
                 snprintf(rhs, sizeof(rhs),
                          "rsx_tex%u.Sample(rsx_samp[%u], RSX_ADDR(%u, (%s).xy / (%s).w))",
@@ -797,9 +797,12 @@ static int rsx_fp_decompile_internal(
             const int cube = (tex_cube_mask >> tex_unit) & 1u;
             char tn[32];
             snprintf(tn, sizeof(tn), tex_cube_mask ? "rsx_tex%u" : "rsx_tex[%u]", tex_unit);
-            snprintf(rhs, sizeof(rhs), "%s.%s(rsx_samp[%u], (%s).%s, (%s).x)", tn,
-                     opcode == OP_TXB ? "SampleBias" : "SampleLevel", tex_unit, a,
-                     cube ? "xyz" : "xy", b);
+            if (cube)
+                snprintf(rhs, sizeof(rhs), "%s.%s(rsx_samp[%u], RSX_CUBEDIR((%s).xyz), (%s).x)", tn,
+                         opcode == OP_TXB ? "SampleBias" : "SampleLevel", tex_unit, a, b);
+            else
+                snprintf(rhs, sizeof(rhs), "%s.%s(rsx_samp[%u], (%s).xy, (%s).x)", tn,
+                         opcode == OP_TXB ? "SampleBias" : "SampleLevel", tex_unit, a, b);
             break;
         }
         case OP_KIL:
@@ -1013,6 +1016,8 @@ static int rsx_fp_decompile_internal(
          * coordinates pass through unchanged. */
         "#ifndef RSX_ADDR\n#define RSX_ADDR(u, c) (c)\n#endif\n"
         "#ifndef RSX_TEXOUT\n#define RSX_TEXOUT(u, x) (x)\n#endif\n"
+        /* Cube lookup direction; a backend may remap it (orientation tests). */
+        "#ifndef RSX_CUBEDIR\n#define RSX_CUBEDIR(v) (v)\n#endif\n"
     );
     if (uses_pack) out_puts(&p, rsx_fp_pack_helpers);
     if (buffered) {

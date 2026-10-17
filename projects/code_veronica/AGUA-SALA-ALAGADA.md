@@ -174,3 +174,27 @@ Ferramentas que ficaram: `TEX_DUMP=<off>` (bytes e buffer de envio de uma textur
 `[TEXBIND]` da ligacao), `FP_ZERO_K=<hash>:<i,...>`, `RSXCAP_STEP_VTX=<n>`
 (F12 salva antes/depois do desenho com n vertices) e as sondas
 `executar-sonda-agua-*.cmd` (CV_WATER_PROBE 2..8).
+
+## Reflexo e isqueiro (17/10/2026, Claude)
+
+3. **Cubemaps lidos como 2D.** O decompilador recebia a mascara de cubos como 0
+   (`rsx_fp_decompile_alloc(..., 0u, ...)` em `fp_build_pso`) e o retoque de texto
+   que deveria trocar `Texture2D` por `TextureCube` procurava declaracoes que o
+   decompilador nao gera mais. Todo cubo do jogo era amostrado como 2D com uma
+   view de cubo ligada: o reflexo da agua devolvia uma cor azulada constante (agua
+   lisa e azul, sem o padrao esverdeado do PS3/RPCS3). Agora a mascara vai para o
+   decompilador, que declara `TextureCube` e amostra com a direcao 3D
+   (`RSX_CUBEDIR`, que `RSX_CUBE_FLIP=x|y|z` espelha para teste).
+4. **Isqueiro com linhas pretas** depois disso: os cubos Y16_X16 de tabela da
+   sombra precisam de leitura sem filtro; `dr_cube_mask` marca esses cubos
+   (bits 16+u) e o shader usa o sampler ponto s(FP_TEX_UNITS+4)
+   (`CUBE_LUT_LINEAR=1` volta ao linear).
+
+Experimentos que ficaram atras de chave e NAO resolveram: `RSX_TEX_MIPS=1`
+(sobe a cadeia de mipmaps; o normal map da agua tem 1 nivel so),
+`TEX_NOGAMMA_FP=<hash>:<unidades>` (normal map sem sRGB ficou pior),
+`FP_ZERO_K`. O modo wrap (1) de `RSX_ADDR` passou a devolver a coordenada sem
+`frac()` (o sampler estatico ja repete). `RSX_DXC_DEBUG=1` embute debug no DXIL
+para depurar no RenderDoc; `executar-renderdoc-agua.cmd` captura o nosso jogo.
+O que mostrou o problema foi comparar no RenderDoc o tipo da textura declarada
+no shader com o da view ligada (Texture2D x TextureCube).
