@@ -37,6 +37,17 @@ extern "C" void* rsx_d3d12_window(void);
 #define TEST_WARP func_0018ED00
 #define TEST_SERIALIZE func_001D76D0
 #define ORIGINAL_SERIALIZE cv_original_001D76D0
+#define TEST_SAVE_SCREEN func_001D788C
+#define ORIGINAL_SAVE_SCREEN cv_original_001D788C
+#define TEST_SAVE_FINISH func_00033B78
+#define ORIGINAL_SAVE_FINISH cv_original_00033B78
+#define NATIVE_LOAD_SCREEN func_001BFCE0
+#define NATIVE_LOAD_VISUAL_RETURN func_001D6174
+#define NATIVE_STOP_BANK func_00259C4C
+#define SOUND_MANAGER 0x00AB5F64u
+#define SCREEN_FADE_CONTROLLER 0x00AB06D8u
+#define LOAD_STORAGE 0x00CA7048u
+#define LOAD_UI 0x00CA7084u
 #define SAVE_OBJECT 0x00AAEE44u    /* EU 0x00ABF0D4: written by func_001D788C (EU func_001D952C) */
 #define SAVE_MANAGER 0x00AE9548u   /* EU 0x00AF97C8: read by the AutoSave entry func_00272718 */
 #define SAVE_DATA 0x00AB2AD4u      /* EU 0x00AC2D64 */
@@ -48,6 +59,17 @@ extern "C" void* rsx_d3d12_window(void);
 #define TEST_WARP func_0018ED68
 #define TEST_SERIALIZE func_001D7550
 #define ORIGINAL_SERIALIZE cv_original_001D7550
+#define TEST_SAVE_SCREEN func_001D770C
+#define ORIGINAL_SAVE_SCREEN cv_original_001D770C
+#define TEST_SAVE_FINISH func_00033BD0
+#define ORIGINAL_SAVE_FINISH cv_original_00033BD0
+#define NATIVE_LOAD_SCREEN func_001BFA48
+#define NATIVE_LOAD_VISUAL_RETURN func_001D5FF4
+#define NATIVE_STOP_BANK func_0025935C
+#define SOUND_MANAGER 0x00AB5EA8u
+#define SCREEN_FADE_CONTROLLER 0x00AB061Cu
+#define LOAD_STORAGE 0x00CA6FC8u
+#define LOAD_UI 0x00CA7004u
 #define SAVE_OBJECT 0x00AAED88u    /* EU 0x00ABF0D4: written by func_001D770C (EU func_001D952C) */
 #define SAVE_MANAGER 0x00AE94C8u   /* EU 0x00AF97C8: read by the AutoSave entry func_00271E28 */
 #define SAVE_DATA 0x00AB2A18u      /* EU 0x00AC2D64 */
@@ -59,6 +81,17 @@ extern "C" void* rsx_d3d12_window(void);
 #define TEST_WARP func_00190700
 #define TEST_SERIALIZE func_001D9370
 #define ORIGINAL_SERIALIZE cv_original_001D9370
+#define TEST_SAVE_SCREEN func_001D952C
+#define ORIGINAL_SAVE_SCREEN cv_original_001D952C
+#define TEST_SAVE_FINISH func_00033FD0
+#define ORIGINAL_SAVE_FINISH cv_original_00033FD0
+#define NATIVE_LOAD_SCREEN func_001C1668
+#define NATIVE_LOAD_VISUAL_RETURN func_001D7E14
+#define NATIVE_STOP_BANK func_0025B32C        /* (manager, bank): stops that bank's voices */
+#define SOUND_MANAGER 0x00AC61F4u
+#define SCREEN_FADE_CONTROLLER 0x00AC0968u
+#define LOAD_STORAGE 0x00CB72C8u
+#define LOAD_UI 0x00CB7304u
 #define SAVE_OBJECT 0x00ABF0D4u    /* the save screen's object (func_001D952C) */
 #define SAVE_MANAGER 0x00AF97C8u   /* the savedata thread's manager */
 #define SAVE_DATA 0x00AC2D64u      /* DATA0.DAT's buffer: 15 slots of 0x838 bytes from +30 */
@@ -68,6 +101,8 @@ extern "C" void* rsx_d3d12_window(void);
 void ORIGINAL_FRAME(ppu_context*);
 void ORIGINAL_SERIALIZE(ppu_context*);
 void ORIGINAL_ROW(ppu_context*);
+void ORIGINAL_SAVE_SCREEN(ppu_context*);
+void ORIGINAL_SAVE_FINISH(ppu_context*);
 namespace {
 namespace fs=std::filesystem;
 constexpr uint32_t state_base=CV_SRT_CHARACTER-0x94;
@@ -77,13 +112,29 @@ std::atomic<uint32_t> request{0};
 std::atomic<int> result{0}; // 0 idle, 1 queued, 2 native request issued, 3 busy, 4 wrong state, 5 timeout
 std::atomic<uint32_t> room_now{0};
 // "Save here": the game's own save screen, opened as the typewriter opens it.
-std::atomic<bool> save_request{false};
+std::atomic<bool> save_request{false},load_request{false};
+bool load_cancelled=false,load_visual_returned=false;
+unsigned load_watch_frames=0;
+struct LoadReturnState {
+    static constexpr uint32_t fade_offset=0x2A5CC;
+    std::array<uint32_t,24> fade{};
+    uint32_t fade_active=0;
+    void capture() {
+        for(size_t i=0;i<fade.size();++i)fade[i]=vm_read32(state_base+fade_offset+uint32_t(i*4));
+        fade_active=vm_read32(state_base+0x74)&2u;
+    }
+    void restore() const {
+        for(size_t i=0;i<fade.size();++i)vm_write32(state_base+fade_offset+uint32_t(i*4),fade[i]);
+        vm_write32(state_base+0x74,(vm_read32(state_base+0x74)&~2u)|fade_active);
+    }
+} load_return;
+bool tool_load=false,load_opened=false; // game thread; scoped to F7, including cancellation
 bool tool_save=false;   // game thread: the open save screen came from this window
 // Saves made from this window, known by a hash of their slot: the slot list
 // shows "F7: rm_XXXX" as their location. Nothing is written into the save.
 std::set<uint64_t> f7_saves;bool f7_loaded=false;
 std::wstring f7_file;   // empty: cv_f7_saves.txt beside the executable
-HWND window=nullptr,filter=nullptr,list=nullptr,entry=nullptr,travel=nullptr,save_button=nullptr;
+HWND window=nullptr,filter=nullptr,list=nullptr,entry=nullptr,travel=nullptr,save_button=nullptr,load_save_button=nullptr;
 std::vector<cv_test::Room> rooms;
 std::vector<size_t> visible_rooms;
 std::wstring game_root;
@@ -198,9 +249,9 @@ void catalog(const std::wstring& game) {
 constexpr int W=680,H=640,MARGIN=24;
 constexpr COLORREF C_BG=RGB(21,17,17),C_FIELD=RGB(26,22,22),C_FIELD_BD=RGB(70,60,58),C_LINE=RGB(70,28,28),
     C_TEXT=RGB(225,218,210),C_DIM=RGB(150,140,132),C_RED=RGB(196,28,34),C_RED_HI=RGB(230,50,50),C_OK=RGB(120,190,110),C_HOVER=RGB(38,30,30);
-enum {ID_FILTER=10,ID_ENTRY,ID_LIST,ID_LOAD,ID_BACK,ID_SAVE};
+enum {ID_FILTER=10,ID_ENTRY,ID_LIST,ID_LOAD,ID_BACK,ID_SAVE,ID_LOAD_SAVE};
 const RECT filter_box{MARGIN,122,MARGIN+400,154},entry_box{MARGIN+424,122,W-MARGIN,154};
-const RECT list_box{MARGIN,234,W-MARGIN,488},status_box{MARGIN,546,W-MARGIN,570};
+const RECT list_box{MARGIN,234,W-MARGIN,438},status_box{MARGIN,496,W-MARGIN,520};
 HFONT title_font=nullptr,body_font=nullptr,small_font=nullptr,code_font=nullptr;
 HBRUSH field_brush=nullptr;
 std::wstring status_text;COLORREF status_color=C_DIM;
@@ -218,7 +269,7 @@ void set_status(const std::wstring& s,COLORREF c) {
     status_text=s;status_color=c;if(window)InvalidateRect(window,&status_box,FALSE);
 }
 void send_selected() {
-    if(!enabled||!ready||request.load())return;
+    if(!enabled||!ready||request.load()||save_request.load()||load_request.load())return;
     auto i=SendMessageW(list,LB_GETCURSEL,0,0);if(i==LB_ERR||size_t(i)>=visible_rooms.size())return;
     wchar_t v[12];GetWindowTextW(entry,v,12);wchar_t* end=nullptr;long spawn=wcstol(v,&end,10);
     if(!*v||*end||spawn<0||spawn>255) {set_status(tx(cv_test_i18n::BAD_ENTRY),C_RED_HI);return;}
@@ -228,9 +279,23 @@ void send_selected() {
     ShowWindow(window,SW_HIDE);g_pad_block=0;auto game=static_cast<HWND>(rsx_d3d12_window());if(game)SetForegroundWindow(game);
 }
 void send_save() {
-    if(!SAVE_OBJECT||!enabled||!ready||request.load()||save_request.load())return;
+    if(!SAVE_OBJECT||!enabled||!ready||request.load()||save_request.load()||load_request.load())return;
     result=1;save_request=true;
     ShowWindow(window,SW_HIDE);g_pad_block=0;auto game=static_cast<HWND>(rsx_d3d12_window());if(game)SetForegroundWindow(game);
+}
+void send_load_save() {
+    if(!enabled||!ready||request.load()||save_request.load()||load_request.load())return;
+    result=1;load_request=true;
+    ShowWindow(window,SW_HIDE);g_pad_block=0;auto game=static_cast<HWND>(rsx_d3d12_window());if(game)SetForegroundWindow(game);
+}
+// Enter and the pad's confirm button must activate the focused action, rather
+// than warping to the selected map while the new load-save button has focus.
+void confirm_action() {
+    const int id=GetDlgCtrlID(GetFocus());
+    if(id==ID_LOAD_SAVE)send_load_save();
+    else if(id==ID_SAVE)send_save();
+    else if(id==ID_BACK)SendMessageW(window,WM_CLOSE,0,0);
+    else send_selected();
 }
 HWND child(HWND parent,const wchar_t* cls,const wchar_t* text,DWORD style,RECT r,int id,HFONT f) {
     HWND c=CreateWindowExW(0,cls,text,WS_CHILD|WS_VISIBLE|style,r.left,r.top,r.right-r.left,r.bottom-r.top,parent,reinterpret_cast<HMENU>(INT_PTR(id)),GetModuleHandleW(nullptr),nullptr);
@@ -253,7 +318,7 @@ void paint(HWND h) {
           RECT{MARGIN,164,W-MARGIN,222},small_font,C_DIM);
     frame(dc,RECT{list_box.left-1,list_box.top-1,list_box.right+1,list_box.bottom+1},C_FIELD_BD);
     write(dc,tx(cv_test_i18n::NOTE),
-          RECT{MARGIN,498,W-MARGIN,542},small_font,C_DIM);
+          RECT{MARGIN,448,W-MARGIN,492},small_font,C_DIM);
     write(dc,status_text,status_box,body_font,status_color,DT_LEFT|DT_SINGLELINE|DT_END_ELLIPSIS);
     BitBlt(screen,0,0,W,H,dc,0,0,SRCCOPY);
     SelectObject(dc,old);DeleteObject(bmp);DeleteDC(dc);EndPaint(h,&ps);
@@ -264,7 +329,7 @@ void draw_button(const DRAWITEMSTRUCT* d) {
     COLORREF bg=primary?(disabled?RGB(70,40,40):hot?C_RED_HI:C_RED):(hot?C_HOVER:C_BG);
     fill(d->hDC,r,bg);if(!primary)frame(d->hDC,r,C_FIELD_BD);
     if(d->itemState&ODS_FOCUS) {RECT f{r.left+3,r.top+3,r.right-3,r.bottom-3};frame(d->hDC,f,primary?RGB(255,200,200):C_RED);}
-    write(d->hDC,tx(d->CtlID==ID_LOAD?cv_test_i18n::LOAD:d->CtlID==ID_SAVE?cv_test_i18n::SAVE:cv_test_i18n::BACK),r,body_font,
+    write(d->hDC,tx(d->CtlID==ID_LOAD?cv_test_i18n::LOAD:d->CtlID==ID_SAVE?cv_test_i18n::SAVE:d->CtlID==ID_LOAD_SAVE?cv_test_i18n::LOAD_SAVE:cv_test_i18n::BACK),r,body_font,
           disabled?RGB(150,120,120):RGB(245,240,235),DT_CENTER|DT_VCENTER|DT_SINGLELINE);
 }
 void draw_room(const DRAWITEMSTRUCT* d) {
@@ -296,12 +361,13 @@ LRESULT CALLBACK proc(HWND h,UINT msg,WPARAM wp,LPARAM lp) {
         entry=child(h,L"EDIT",L"0",WS_TABSTOP|ES_NUMBER|ES_AUTOHSCROLL,inside(entry_box),ID_ENTRY,body_font);
         SendMessageW(entry,EM_LIMITTEXT,3,0);
         list=child(h,L"LISTBOX",L"",WS_TABSTOP|WS_VSCROLL|LBS_NOTIFY|LBS_NOINTEGRALHEIGHT|LBS_OWNERDRAWFIXED|LBS_HASSTRINGS,list_box,ID_LIST,body_font);
-        HWND load=child(h,L"BUTTON",L"",WS_TABSTOP|BS_OWNERDRAW,RECT{MARGIN,584,MARGIN+200,624},ID_LOAD,body_font);
-        save_button=child(h,L"BUTTON",L"",WS_TABSTOP|BS_OWNERDRAW,RECT{MARGIN+216,584,MARGIN+416,624},ID_SAVE,body_font);
-        HWND back=child(h,L"BUTTON",L"",WS_TABSTOP|BS_OWNERDRAW,RECT{W-MARGIN-200,584,W-MARGIN,624},ID_BACK,body_font);
+        HWND load=child(h,L"BUTTON",L"",WS_TABSTOP|BS_OWNERDRAW,RECT{MARGIN,534,MARGIN+308,574},ID_LOAD,body_font);
+        save_button=child(h,L"BUTTON",L"",WS_TABSTOP|BS_OWNERDRAW,RECT{MARGIN+324,534,W-MARGIN,574},ID_SAVE,body_font);
+        load_save_button=child(h,L"BUTTON",L"",WS_TABSTOP|BS_OWNERDRAW,RECT{MARGIN,584,MARGIN+308,624},ID_LOAD_SAVE,body_font);
+        HWND back=child(h,L"BUTTON",L"",WS_TABSTOP|BS_OWNERDRAW,RECT{MARGIN+324,584,W-MARGIN,624},ID_BACK,body_font);
         travel=load;
         SetWindowTheme(list,L"DarkMode_Explorer",nullptr);   // a dark scroll bar
-        for(HWND b:{load,save_button,back})SetWindowSubclass(b,button_proc,1,0);
+        for(HWND b:{load,save_button,load_save_button,back})SetWindowSubclass(b,button_proc,1,0);
         SetTimer(h,1,50,nullptr);return 0;}
     case WM_MEASUREITEM:reinterpret_cast<MEASUREITEMSTRUCT*>(lp)->itemHeight=32;return TRUE;
     case WM_DRAWITEM: {
@@ -314,29 +380,34 @@ LRESULT CALLBACK proc(HWND h,UINT msg,WPARAM wp,LPARAM lp) {
         if(LOWORD(wp)==ID_FILTER&&HIWORD(wp)==EN_CHANGE)refresh_list();
         if((LOWORD(wp)==ID_FILTER||LOWORD(wp)==ID_ENTRY)&&(HIWORD(wp)==EN_SETFOCUS||HIWORD(wp)==EN_KILLFOCUS)) {
             RECT r=LOWORD(wp)==ID_FILTER?filter_box:entry_box;InflateRect(&r,1,1);InvalidateRect(h,&r,FALSE);}
-        if(LOWORD(wp)==ID_LOAD||(LOWORD(wp)==ID_LIST&&HIWORD(wp)==LBN_DBLCLK)||LOWORD(wp)==IDOK)send_selected();
+        if(LOWORD(wp)==ID_LOAD||(LOWORD(wp)==ID_LIST&&HIWORD(wp)==LBN_DBLCLK))send_selected();
+        if(LOWORD(wp)==IDOK)confirm_action();
         if(LOWORD(wp)==ID_SAVE)send_save();
+        if(LOWORD(wp)==ID_LOAD_SAVE)send_load_save();
         if(LOWORD(wp)==ID_BACK||LOWORD(wp)==IDCANCEL)SendMessageW(h,WM_CLOSE,0,0);return 0;
     case WM_TIMER: {
         if(!IsWindowVisible(h))return 0;
         int r=result.load();auto code=room_now.load();wchar_t line[256];
-        if(r==6)set_status(tx(cv_test_i18n::SAVING),C_OK);
+        if(r==7)set_status(tx(cv_test_i18n::LOADING),C_OK);
+        else if(r==6)set_status(tx(cv_test_i18n::SAVING),C_OK);
         else if(r==2) {swprintf(line,256,tx(cv_test_i18n::DONE),(code>>8)&255,code&255);set_status(line,C_OK);}
         else if(r==3||r==4)set_status(tx(cv_test_i18n::REFUSED),C_RED_HI);
         else if(ready.load()) {swprintf(line,256,tx(cv_test_i18n::READY),visible_rooms.size());set_status(line,C_OK);}
         else set_status(tx(cv_test_i18n::WAIT),C_DIM);
-        EnableWindow(travel,enabled&&ready&&!request.load()&&!visible_rooms.empty());
-        EnableWindow(save_button,SAVE_OBJECT&&enabled&&ready&&!request.load()&&!save_request.load());   // only where the save screen can be released
+        const bool available=enabled&&ready&&!request.load()&&!save_request.load()&&!load_request.load();
+        EnableWindow(travel,available&&!visible_rooms.empty());
+        EnableWindow(load_save_button,available);
+        EnableWindow(save_button,SAVE_OBJECT&&available);   // only where the save screen can be released
         if(GetForegroundWindow()!=h)return 0;
         for(int i=0;i<PAD_PHYS_MAX;i++) {PadPhys p{};if(!pad_phys_poll(i,&p)){previous_pad[i]=0;continue;}
             uint32_t edge=p.buttons&~previous_pad[i];previous_pad[i]=p.buttons;
             if(edge&(1u<<PB_EAST)){SendMessageW(h,WM_CLOSE,0,0);break;}
-            if(edge&(1u<<PB_SOUTH)){send_selected();break;}
+            if(edge&(1u<<PB_SOUTH)){confirm_action();break;}
             int delta=(p.buttons&(1u<<PB_DOWN))?1:(p.buttons&(1u<<PB_UP))?-1:0;
             if(delta&&((edge&((1u<<PB_DOWN)|(1u<<PB_UP)))||GetTickCount64()>=repeat_at[i])) {int n=int(SendMessageW(list,LB_GETCOUNT,0,0)),sel=int(SendMessageW(list,LB_GETCURSEL,0,0));if(n)SendMessageW(list,LB_SETCURSEL,std::clamp(sel+delta,0,n-1),0);repeat_at[i]=GetTickCount64()+160;}}
         return 0;}
     case WM_ACTIVATE:g_pad_block=LOWORD(wp)!=WA_INACTIVE;return 0;   // the game ignores the pad only while this window has the focus, as under the launcher
-    case WM_KEYDOWN:if(wp==VK_F7||wp==VK_ESCAPE)SendMessageW(h,WM_CLOSE,0,0);else if(wp==VK_RETURN)send_selected();return 0;
+    case WM_KEYDOWN:if(wp==VK_F7||wp==VK_ESCAPE)SendMessageW(h,WM_CLOSE,0,0);else if(wp==VK_RETURN)confirm_action();return 0;
     case WM_CLOSE:ShowWindow(h,SW_HIDE);g_pad_block=0;{auto game=static_cast<HWND>(rsx_d3d12_window());if(game)SetForegroundWindow(game);}return 0;
     case WM_CTLCOLOREDIT:case WM_CTLCOLORLISTBOX:
         SetTextColor(reinterpret_cast<HDC>(wp),C_TEXT);SetBkColor(reinterpret_cast<HDC>(wp),C_FIELD);return reinterpret_cast<LRESULT>(field_brush);
@@ -348,10 +419,10 @@ LRESULT CALLBACK proc(HWND h,UINT msg,WPARAM wp,LPARAM lp) {
 bool cv_test_tools_message(MSG* m) {
     if(!cv_test_tools_visible() || (m->hwnd!=window&&!IsChild(window,m->hwnd)))return false;
     if(m->message==WM_KEYDOWN&&(m->wParam==VK_ESCAPE||m->wParam==VK_F7)){cv_test_tools_close();return true;}
-    if(m->message==WM_KEYDOWN&&m->wParam==VK_RETURN){send_selected();return true;}
+    if(m->message==WM_KEYDOWN&&m->wParam==VK_RETURN){confirm_action();return true;}
     return IsDialogMessageW(window,m)!=FALSE;
 }
-void cv_test_tools_enable(bool on) {enabled=on;if(!on){request=0;if(window)cv_test_tools_close();}}
+void cv_test_tools_enable(bool on) {enabled=on;if(!on){request=0;save_request=false;load_request=false;if(window)cv_test_tools_close();}}
 bool cv_test_tools_visible() {return window&&IsWindowVisible(window);}
 void cv_test_tools_close() {if(window)SendMessageW(window,WM_CLOSE,0,0);}
 void cv_test_tools_show(HWND owner,const std::wstring& game,int lang) {
@@ -379,20 +450,31 @@ void cv_test_tools_show(HWND owner,const std::wstring& game,int lang) {
 }
 void TEST_FRAME(ppu_context* ctx) {
     if(enabled) {
-        bool valid=active_game();ready=valid;
+        bool valid=active_game()&&!tool_load;ready=valid;
         if(mapped(state_base+0x95,3))room_now=(vm_read8(state_base+0x95)<<8)|vm_read8(state_base+0x96);
         uint32_t pending=request.exchange(0);
-        if(pending){if(valid){call_warp(ctx,pending);result=2;ready=false;}else{result=4;std::printf("[CVTest] warp refused: no controllable live game\n");}}
+        if(pending){if(valid){call_warp(ctx,pending);result=2;ready=false;valid=false;}else{result=4;std::printf("[CVTest] warp refused: no controllable live game\n");}}
         // The request the typewriter makes once its ribbon is accepted:
         // func_001AEED4 (EU; JP func_001AD524, US func_001AD47C) sees +74 bit 0x00200000 and opens the save screen.
         if(save_request.exchange(false)) {
-            if(valid) {vm_write32(state_base+0x74,vm_read32(state_base+0x74)|0x00200000u);tool_save=true;result=6;ready=false;
+            if(valid) {vm_write32(state_base+0x74,vm_read32(state_base+0x74)|0x00200000u);tool_save=true;result=6;ready=false;valid=false;
                 std::printf("[CVTest] save screen requested\n");std::fflush(stdout);}
             else {result=4;std::printf("[CVTest] save refused: no controllable live game\n");}
         }
+        if(load_request.exchange(false)) {
+            if(valid) {
+                // First enter the typewriter flow: it loads the system messages
+                // and UI assets. Switching to load earlier would skip those assets.
+                load_return.capture();load_cancelled=false;load_visual_returned=false;
+                tool_load=true;load_opened=false;tool_save=false;
+                vm_write32(state_base+0x74,vm_read32(state_base+0x74)|0x00200000u);
+                result=7;ready=false;
+                std::printf("[CVTest] load screen requested (15 native slots)\n");std::fflush(stdout);
+            } else {result=4;std::printf("[CVTest] load refused: no controllable live game\n");}
+        }
         // Record natural save entry/exit only while these optional tools are enabled.
         if(mapped(state_base,0x84)) {static uint32_t last_tasks=0;uint32_t tasks=vm_read32(state_base+0x64),active=tasks&~vm_read32(state_base+0x68);
-            if((last_tasks&0x8000)&&!(active&0x8000))tool_save=false;   // the save screen closed
+            if((last_tasks&0x8000)&&!(active&0x8000)) {tool_save=false;if(load_opened&&!load_cancelled){tool_load=false;load_opened=false;result=0;}}   // the save screen closed
             // A save from this window in a room with no typewriter: the room has no
             // location name, so the "Saving content" text leaves the slot list's
             // display limit (+1C) as garbage and the minimum display time
@@ -412,8 +494,86 @@ void TEST_FRAME(ppu_context* ctx) {
                 }
             }
             if(((active^last_tasks)&0x18000)!=0)std::printf("[CVTest] native menu/save transition: tasks=%08X blocked=%08X flags=%08X/%08X/%08X saveMode=%u helper=%08X\n",tasks,vm_read32(state_base+0x68),vm_read32(state_base+0x50),vm_read32(state_base+0x70),vm_read32(state_base+0x74),vm_read16(state_base+0x5C),vm_read32(state_base+0x60));last_tasks=active;}
+        if(load_watch_frames&&--load_watch_frames%60==0) {
+            std::printf("[CVTest] load progress: room=%04X char=%u tasks=%08X blocked=%08X flags=%08X/%08X/%08X roomStep=%08X fade=%08X/%08X/%08X/%08X fadeTime=%08X/%08X delay=%u\n",
+                vm_read16(CV_SRT_ROOM),vm_read8(CV_SRT_CHARACTER),vm_read32(state_base+0x64),vm_read32(state_base+0x68),
+                vm_read32(state_base+0x50),vm_read32(state_base+0x70),vm_read32(state_base+0x74),vm_read32(state_base+0x1B104),
+                vm_read32(state_base+0x2A5D8),vm_read32(state_base+0x2A5E4),vm_read32(state_base+0x2A5F0),vm_read32(state_base+0x2A5FC),vm_read32(state_base+0x2A5CC),vm_read32(state_base+0x2A5D0),vm_read32(state_base+0x2A608));std::fflush(stdout);
+        }
     }else ready=false;
     ORIGINAL_FRAME(ctx);
+}
+// Redirect only an F7 load request, after the native save-mode initializer
+// has prepared the shared UI assets. Normal saving still calls its original
+// constructor. The mode dispatcher subsequently drives the native load screen.
+void TEST_SAVE_SCREEN(ppu_context* ctx) {
+    if(!tool_load||load_opened) {ORIGINAL_SAVE_SCREEN(ctx);return;}
+    vm_write32(state_base+0x50,vm_read32(state_base+0x50)|0x200u);
+    ctx->gpr[3]=LOAD_STORAGE;ctx->gpr[4]=0;
+    NATIVE_LOAD_SCREEN(ctx);
+    while(g_trampoline_fn) {auto next=g_trampoline_fn;g_trampoline_fn=nullptr;next(ctx);}
+    vm_write32(LOAD_UI,uint32_t(ctx->gpr[3]));
+    load_opened=true;
+    std::printf("[CVTest] native load screen opened\n");std::fflush(stdout);
+}
+void TEST_SAVE_FINISH(ppu_context* ctx) {
+    if(tool_load&&load_opened) {
+        if(!load_visual_returned) {
+            // Load UI completion (EU 001C1F78) also enables the engine UI
+            // fader and sets its sprite to zero opacity. It is independent
+            // of the room fader at +2A5CC. Normal save UI never does this.
+            // Run the game's matching return routine before either exit path.
+            const uint32_t visual=vm_read32(SCREEN_FADE_CONTROLLER);
+            const unsigned before=visual&&mapped(visual,0x50)?vm_read8(visual+0x4C):0;
+            NATIVE_LOAD_VISUAL_RETURN(ctx);
+            while(g_trampoline_fn) {auto next=g_trampoline_fn;g_trampoline_fn=nullptr;next(ctx);}
+            load_visual_returned=true;
+            std::printf("[CVTest] native load UI visual return: controller=%08X mode=%u -> %u opacity=%u\n",
+                visual,before,visual&&mapped(visual,0x50)?vm_read8(visual+0x4C):0,
+                visual&&mapped(visual,0x50)?vm_read32(visual+0x40):0);std::fflush(stdout);
+        }
+        if(!(vm_read32(state_base+0x58)&0x10u)) {
+            // Keep ownership until the multi-frame typewriter return finishes.
+            // Loading UI ran while the screen was black; its fades must not
+            // replace the pre-menu room fade on cancellation.
+            vm_write32(state_base+0x50,vm_read32(state_base+0x50)&~0x200u);
+            if(!load_cancelled) {load_cancelled=true;
+                std::printf("[CVTest] load cancelled; waiting for native room return\n");std::fflush(stdout);}
+        } else if(!load_cancelled) {
+            // The title-screen load finalizer never clears typewriter flags:
+            // it was not entered from gameplay. They block updates of the new
+            // room when F7 reuses that finalizer. Clear only these two flags,
+            // retaining the confirmed-load bit and the selected slot/state.
+            vm_write32(state_base+0x70,vm_read32(state_base+0x70)&~0x08000000u);
+            vm_write32(state_base+0x74,vm_read32(state_base+0x74)&~0x00200000u);
+            // The title-screen load starts its restart tasks (00300050) with
+            // only 0x80 blocked; the restart then builds the gameplay mask.
+            // From gameplay, +68 still holds the typewriter's mask and the
+            // restart keeps 0x80/0x100 blocked: the room never updates and its
+            // fade stays black. Start from the title-screen mask instead.
+            vm_write32(state_base+0x68,0x80u);
+            // The title screen has no room sounds; gameplay does. The new room's
+            // entry (EU func_001B0CB0 step 4/0A, func_001E2314) waits until no
+            // voice of sound bank 9 plays, and the old room's looping ambience
+            // never ends: the screen stays black. Stop that bank's voices.
+            if(const uint32_t sound=mapped(SOUND_MANAGER,4)?vm_read32(SOUND_MANAGER):0) {
+                ctx->gpr[3]=sound;ctx->gpr[4]=9;
+                NATIVE_STOP_BANK(ctx);
+                while(g_trampoline_fn) {auto next=g_trampoline_fn;g_trampoline_fn=nullptr;next(ctx);}
+            }
+            load_watch_frames=600;
+            std::printf("[CVTest] confirmed load: typewriter transition released\n");std::fflush(stdout);
+        }
+    }
+    ORIGINAL_SAVE_FINISH(ctx);
+    // The original has finished releasing the UI and resuming gameplay. Restore
+    // its actual previous fade, rather than forcing a colour every frame.
+    if(tool_load&&load_cancelled&&vm_read16(state_base+0x5C)==0&&
+       (vm_read32(state_base+0x68)&0x8000u)&&!(vm_read32(state_base+0x74)&0x00200000u)) {
+        load_return.restore();tool_load=false;load_opened=false;load_cancelled=false;result=0;
+        std::printf("[CVTest] load cancelled: previous room fade restored, flags=%08X/%08X\n",
+            vm_read32(state_base+0x70),vm_read32(state_base+0x74));std::fflush(stdout);
+    }
 }
 void TEST_SERIALIZE(ppu_context* ctx) {
     if(enabled)std::printf("[CVTest] original save serializer: object=%08X room=%04X flags=%08X/%08X/%08X\n",uint32_t(ctx->gpr[3]),vm_read16(CV_SRT_ROOM),vm_read32(state_base+0x50),vm_read32(state_base+0x70),vm_read32(state_base+0x74));

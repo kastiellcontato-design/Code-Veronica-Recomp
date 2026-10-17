@@ -21,6 +21,40 @@ int pad_phys_poll(int,PadPhys*){return 0;}
 }
 void ORIGINAL_FRAME(ppu_context*){++frames;}
 void ORIGINAL_SERIALIZE(ppu_context*){++serializations;}
+static int save_screens=0,load_screens=0,finishes=0;
+static uint32_t finish_flags=0;
+void ORIGINAL_SAVE_SCREEN(ppu_context*){++save_screens;}
+static bool run_native_finish=false;
+static unsigned fade_calls=0;
+static void native_finish_service(ppu_context* c,uint32_t address) {
+ if(address==0x001999A8u)c->gpr[3]=0; // asynchronous read/fade wait completed
+ if(address==0x001910F0u) { // isolate drawing; record the native fade command
+  ++fade_calls;vm_write32(state_base+0x2A604,0xFF000000);
+  vm_write32(state_base+0x2A5FC,0x437F0000); // menu black, alpha 255
+  vm_write32(state_base+0x74,vm_read32(state_base+0x74)|2u);
+ }
+}
+#define DRAIN_TRAMPOLINE(c) do { while(g_trampoline_fn) { auto next=g_trampoline_fn;g_trampoline_fn=nullptr;next(c); } } while(0)
+#include "native_save_finish_fixture.h"
+#include "native_load_visual_fixture.h"
+#undef DRAIN_TRAMPOLINE
+static unsigned visual_returns=0;
+void NATIVE_LOAD_VISUAL_RETURN(ppu_context* c) {
+ ++visual_returns;
+ if(run_native_finish)native_ui_return_fixture(c);
+}
+static unsigned sound_resets=0;
+void NATIVE_STOP_BANK(ppu_context* c){++sound_resets;assert(c->gpr[3]==0x2C0000&&c->gpr[4]==9);}
+void ORIGINAL_SAVE_FINISH(ppu_context* c){
+ ++finishes;finish_flags=vm_read32(state_base+0x50);
+ if(run_native_finish)native_finish_fixture(c);
+}
+void NATIVE_LOAD_SCREEN(ppu_context* c){
+ ++load_screens;assert(c->gpr[3]==LOAD_STORAGE&&c->gpr[4]==0);
+ assert((vm_read32(state_base+0x50)&0x200)!=0);
+ // The native constructor returns the UI storage pointer, as the save one does.
+ c->gpr[3]=LOAD_STORAGE;
+}
 static int rows=0;static std::vector<uint16_t> row_text;
 void ORIGINAL_ROW(ppu_context* c){   // reads the location as func_001D8090 does
  ++rows;const uint32_t row=uint32_t(c->gpr[3]),table=vm_read32(state_base+0x1B3F0);
@@ -87,5 +121,95 @@ int main(){
  _wremove(f7_file.c_str());
  vm_write32(object+0x54,0);vm_write32(state_base+0x68,0x18000);
  cv_test_tools_enable(false);TEST_SERIALIZE(&c);assert(serializations==2);TEST_FRAME(&c);assert(warps==1&&frames==10);
- std::puts("[map-tools-test] PASS: catalog validation, separate chords, live-state gates, one-shot dispatch, guest stack/TLS preservation, save-here request and kept ribbon/count, save screen released after the write, F7 slot label (" CV_TITLE_ID "), original save path unchanged");
+ // New load action: localization is complete, ordinary save/title paths still
+ // delegate, and no guest state changes until a live-game request is consumed.
+ for(auto& lang:cv_test_i18n::k_text)for(auto text:lang)assert(text&&*text);
+ TEST_SAVE_SCREEN(&c);TEST_SAVE_FINISH(&c);
+ assert(save_screens==1&&load_screens==0&&finishes==1);
+ cv_test_tools_enable(true);vm_write32(state_base+0x74,0);tool_save=false;
+ vm_write32(CV_SRT_HEALTH,0);load_request=true;TEST_FRAME(&c);
+ assert(!tool_load&&!load_request&&result==4&&vm_read32(state_base+0x74)==0);
+ vm_write32(CV_SRT_HEALTH,160);vm_write32(state_base+0x50,0x10040);
+ const uint32_t original_flags=vm_read32(state_base+0x50);
+ const int old_serializations=serializations;
+ load_request=true;TEST_FRAME(&c);
+ assert(tool_load&&!load_opened&&!tool_save&&!ready&&result==7&&!load_request);
+ assert(vm_read32(state_base+0x74)==0x00200000&&vm_read32(state_base+0x50)==original_flags);
+ TEST_FRAME(&c);assert(load_screens==0); // wait for native asset preparation
+ TEST_SAVE_SCREEN(&c);
+ assert(load_screens==1&&save_screens==1&&load_opened&&vm_read32(LOAD_UI)==LOAD_STORAGE);
+ assert(serializations==old_serializations); // loading must never serialize/write a save
+ assert(vm_read32(inventory+4)==0x001F0002u&&vm_read32(state_base+0x90)==7);
+ // Cancelling uses the room return path and preserves every unrelated flag.
+ vm_write32(state_base+0x58,0);TEST_SAVE_FINISH(&c);
+ assert(tool_load&&load_opened&&load_cancelled&&finish_flags==original_flags&&finishes==2);
+ // Confirmation preserves the native full-load branch and selection result.
+ tool_load=true;load_opened=true;load_cancelled=false;load_visual_returned=false;vm_write32(state_base+0x50,original_flags|0x200);
+ vm_write32(state_base+0x58,0x10);TEST_SAVE_FINISH(&c);
+ assert(tool_load&&load_opened&&finish_flags==(original_flags|0x200)&&vm_read32(state_base+0x58)==0x10);
+ vm_write32(state_base+0x68,0x10000);TEST_FRAME(&c); // native load active
+ vm_write32(state_base+0x64,0x300050);TEST_FRAME(&c); // native room restart
+ assert(!tool_load&&!load_opened);
+ // Disabling tools cancels queued requests; a later native save is untouched.
+ load_request=true;save_request=true;request=packet;cv_test_tools_enable(false);
+ assert(!load_request&&!save_request&&!request);
+ const int old_screens=save_screens;TEST_SAVE_SCREEN(&c);assert(save_screens==old_screens+1);
+ ready=true;send_load_save();assert(!load_request); // disabled UI action
+ cv_test_tools_enable(true);ready=false;send_load_save();assert(!load_request);
+ ready=true;request=packet;send_load_save();assert(!load_request);request=0;
+ save_request=true;send_load_save();assert(!load_request);save_request=false;
+ cv_test_tools_enable(false);
+ // Reproduce the actual native finalizer against the reported live-game
+ // states (not the old no-op finalizer stub). EU control flow is identical in
+ // JP/US; point its global at the region's synthetic state.
+ vm_write32(0xA89BD0,state_base);vm_write32(0xA89BD4,0x290000);
+ vm_write32(state_base+0x60,0x280000);
+ const uint32_t visual_controller=0x2A0000,visual_sprite=0x2B0000;
+ vm_write32(0xAC0968,visual_controller);vm_write32(SCREEN_FADE_CONTROLLER,visual_controller);
+ vm_write32(visual_controller+0x30,visual_sprite);
+ vm_write32(SOUND_MANAGER,0x2C0000);
+ run_native_finish=true;
+ auto prepare_finish=[&](bool confirm) {
+  tool_load=true;load_opened=true;load_cancelled=false;load_visual_returned=false;
+  vm_write32(state_base+0x50,0x200);
+  vm_write32(state_base+0x58,confirm?0x10:0);
+  vm_write16(state_base+0x5C,2);vm_write16(state_base+0x5E,0);
+  vm_write32(state_base+0x64,0x73DFC0);vm_write32(state_base+0x68,0x35E00);
+  vm_write32(state_base+0x70,0x08005040);vm_write32(state_base+0x74,0x00200100);
+  // Exact native load UI completion call, before its +4C=1 store.
+  c.gpr[3]=visual_controller;c.gpr[4]=0x40;c.gpr[5]=0;c.gpr[6]=uint64_t(-1);
+  native_ui_fade_fixture(&c);vm_write8(visual_controller+0x4C,1);
+  assert(vm_read32(visual_sprite+0x300)==0&&vm_read32(visual_controller+0x40)==0);
+ };
+ // Show why native title-load cleanup alone is insufficient when entered via
+ // the typewriter: both transition flags survive it.
+ prepare_finish(true);native_finish_fixture(&c);
+ assert(vm_read32(state_base+0x64)==0x300050);
+ assert((vm_read32(state_base+0x70)&0x08000000)&& (vm_read32(state_base+0x74)&0x00200000));
+ assert(vm_read8(visual_controller+0x4C)==1&&vm_read32(visual_sprite+0x300)==0);
+ const unsigned resets_before_confirm=sound_resets;
+ prepare_finish(true);TEST_SAVE_FINISH(&c);
+ assert(sound_resets==resets_before_confirm+1); // old room's looping bank-9 voices stopped before the restart
+ assert(vm_read32(state_base+0x64)==0x300050&&vm_read32(state_base+0x70)==0x5040&&vm_read32(state_base+0x74)==0x100);
+ assert(vm_read32(state_base+0x68)==0x80); // restart tasks see the title-screen load's blocked mask
+ assert(vm_read32(state_base+0x50)&0x200); // full saved-state restart remains selected
+ assert(vm_read8(visual_controller+0x4C)==0&&vm_read32(visual_controller+0x40)==255&&vm_read32(visual_sprite+0x300)==0xFF000000);
+ // A cancellation takes two native phases. The room fade is restored only
+ // after cleanup, including its saved colour and the fade-active flag.
+ std::array<uint32_t,24> expected_fade{};
+ for(size_t i=0;i<expected_fade.size();++i) {expected_fade[i]=0x3F000000u+uint32_t(i);vm_write32(state_base+LoadReturnState::fade_offset+uint32_t(i*4),expected_fade[i]);}
+ vm_write32(state_base+0x74,0x100);load_return.capture();
+ prepare_finish(false);const unsigned returns_before_cancel=visual_returns,resets_before_cancel=sound_resets;TEST_SAVE_FINISH(&c);
+ assert(tool_load&&load_cancelled&&fade_calls==1&&vm_read16(state_base+0x5E)==1);
+ assert(vm_read32(state_base+0x74)&2); // native return currently uses the menu's black
+ assert(vm_read8(visual_controller+0x4C)==0&&vm_read32(visual_sprite+0x300)==0xFF000000);
+ TEST_SAVE_FINISH(&c);
+ assert(!tool_load&&!load_opened&&!load_cancelled&&vm_read16(state_base+0x5C)==0);
+ assert(visual_returns==returns_before_cancel+1);
+ assert(sound_resets==resets_before_cancel); // cancelling keeps the room's sounds
+ assert(vm_read32(state_base+0x68)&0x8000);
+ assert(!(vm_read32(state_base+0x70)&0x08000000)&&vm_read32(state_base+0x74)==0x100);
+ for(size_t i=0;i<expected_fade.size();++i)assert(vm_read32(state_base+LoadReturnState::fade_offset+uint32_t(i*4))==expected_fade[i]);
+ run_native_finish=false;
+ std::puts("[map-tools-test] PASS: maps/save regression; native finalizer reproduces stale load flags, F7 clears them; independent native UI opacity reset on load and cancel; multi-phase room fade return (" CV_TITLE_ID ")");
 }

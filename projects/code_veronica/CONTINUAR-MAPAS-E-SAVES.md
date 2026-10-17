@@ -102,3 +102,177 @@ Claire = 0, contador 0 e sala sem nome de local).
 - Teste em jogo do rótulo F7 nas três versões.
 
 Testes: `CV_MAP_TESTS=1 build-release.cmd` (memória sintética, sem jogo).
+
+
+## F7: Carregar save (2026-10-17)
+
+Novo botão **Carregar save** abre a lista nativa dos 15 slots durante uma
+partida controlável. A leitura/validação do DATA0, escolha, confirmação e cópia
+do estado completo são feitas pelo próprio jogo. Nenhum arquivo de save é
+reescrito pela nova ação. Não adiciona slots nem muda o formato.
+
+Implementação isolada em `cv_test_tools.cpp`:
+
+- `load_request` é consumido no dispatcher do jogo, com as mesmas condições de
+  partida viva das ferramentas existentes. Pedidos concorrentes não executam
+  carregamento junto de warp/save.
+- Primeiro pede o fluxo da máquina de escrever (`state+74 |= 0x00200000`) para
+  preparar mensagens e recursos da interface. **Não** ligar `state+50 & 0x200`
+  antes disso: o inicializador pularia a leitura desses recursos.
+- No construtor da tela de salvar, somente para a solicitação F7, liga esse bit,
+  chama o construtor nativo de carregar com o armazenamento próprio e publica
+  seu ponteiro no global usado pelo dispatcher. Não chama o serializador.
+- O fluxo nativo de confirmação (`EU 001C2D60`) liga `state+58 & 0x10`.
+  O update (`EU 001C1F78`) copia o slot inteiro de 0x838 bytes para `state+8C`.
+  O encerramento então reinicializa a partida/sala pelo caminho nativo.
+- Ao cancelar, o wrapper do encerramento limpa **só** o bit 0x200, antes do
+  original: usa o retorno da máquina de escrever para continuar na sala atual,
+  em vez do caminho de cancelamento da tela inicial. As demais flags ficam.
+- Sem solicitação F7, ambos os wrappers delegam diretamente aos originais.
+
+| Função/dado | EU | JP | US |
+| --- | --- | --- | --- |
+| Construtor salvar (wrapper) | 001D952C | 001D788C | 001D770C |
+| Construtor carregar | 001C1668 | 001BFCE0 | 001BFA48 |
+| Encerramento modo save/load (wrapper) | 00033FD0 | 00033B78 | 00033BD0 |
+| Armazenamento UI carregar | 00CB72C8 | 00CA7048 | 00CA6FC8 |
+| Global ponteiro UI carregar | 00CB7304 | 00CA7084 | 00CA7004 |
+
+Botão e mensagem traduzidos nos 13 idiomas do launcher. Enter/confirmação
+acionam o botão com foco; lista de mapas mantém Enter/duplo clique.
+Testes em memória sintética cobrem os novos gates, construtor, cancelamento,
+confirmação e preservação dos caminhos anteriores nas três regiões.
+Compilação oficial concluída nas três regiões com `CV_MAP_TESTS=1`: todos os
+testes passaram (NPEB00553, NPJB00135 e NPUB30467), incluindo mapas e salvar
+aqui. Saves reais não foram usados nos testes automatizados.
+Validação interativa pendente: abrir F7 numa partida, cancelar o carregamento
+uma vez, depois carregar um slot e conferir sala, inventário e personagem.
+
+
+### Retorno preto após F7 carregar/cancelar (17/10/2026)
+
+Teste real de Kastiel na versão JP falhou nos dois casos. Evidência nos logs
+`run-log-release.txt` e `.previous-1.txt` às 15:48–15:49:
+
+- AutoLoad leu DATA0.DAT com sucesso; confirmar chegou a carregar `pl00.arc` e
+  `rm_1000.arc`. Porém o retorno ficou com `state+70=08000040` e
+  `state+74=00200000`, tarefas 00300050. O encerramento de load da tela inicial
+  não limpa os bits da máquina de escrever, porque normalmente não os usa.
+  O bit 08000000 bloqueia a atualização da partida em EU func_001AF2FC.
+- Cancelar terminou a devolução da sala, mas continuou preto. O fluxo da UI de
+  load usa o escurecimento do menu; devolver só o seletor de modo não devolve
+  o estado visual anterior. Além disso, a saída nativa de salvar tem várias
+  fases: não se deve perder a identificação F7 na primeira fase.
+
+Correção atual, somente para o load solicitado por F7:
+
+1. Captura antes da abertura os 24 words do fader em `state+2A5CC..2A628` e o
+   bit de fade ativo `state+74 & 2`.
+2. Confirmar limpa exclusivamente os bits de transição da máquina de escrever
+   `+70 & 08000000` e `+74 & 00200000`, antes do encerramento de load nativo.
+   Mantém o resultado de confirmação e a restauração nativa do slot completo.
+3. Cancelar mantém a identificação da operação até o final da saída nativa.
+   Só quando `+5C=0`, tarefa 8000 bloqueada e pedido de salvar limpo devolve o
+   fader capturado. Não força a transparência/cor em quadros seguintes e não
+   restaura inventário, posição ou eventos de um snapshot próprio.
+4. Após confirmar, registra por 20 segundos progresso de tarefas/flags/sala e
+   fader (uma linha a cada 60 quadros) para conferir o próximo teste real.
+
+Os testes anteriores tinham um encerramento substituído por uma função vazia,
+portanto não revelavam o estado que o código nativo deixava. Agora
+`tests/native_save_finish_fixture.h` executa o corpo original EU 00033FD0 com
+serviços externos isolados (mesmo fluxo normalizado em JP/US). O teste reproduz
+os bits que sobravam na saída original, verifica a liberação pelo wrapper e
+executa as duas fases do cancelamento, verificando o fader completo restaurado.
+Apenas o nome da função e as chamadas a serviços foram adaptados na fixture;
+as operações/branches do estado são as do lift fornecido.
+
+Compilação oficial e testes passaram nas três regiões. Ainda precisa repetir
+os dois testes dentro do jogo; não declarar resolução visual confirmada antes
+do retorno do usuário. Atalho normal: `executar-code-veronica-otimizado.cmd`.
+
+
+### Segundo teste real ainda preto: fader da interface (17/10, 15:58)
+
+Os dois testes continuaram pretos. O novo log confirma que os bits da máquina
+foram limpos e que o cancelamento restaurou o fader da sala. Portanto essas
+mudanças eram insuficientes; não repetir a afirmação de que os testes
+anteriores já demonstravam a resolução visual.
+
+Achado na rotina original EU 001C1F78, ao fechar a lista de carregar (vale para
+confirmar e cancelar): além de destruir a UI/copiar o slot, ela chama
+`00219BA0(*(00AC0968), 0x40, 0, -1)` e liga byte `controller+4C=1`.
+Este é um **segundo fader**, da biblioteca de UI, com sprite em `controller+30`
+e cor/alpha em `sprite+300`. Não fica no bloco +2A5CC do estado do jogo.
+A tela de salvar EU 001D9EC8 não faz essa configuração.
+
+O retorno nativo EU 001D7E14 chama `00219BA0(controller,0,255,1)` e limpa
+`controller+4C`. O F7 pulava esse retorno ao mudar para a saída da máquina de
+escrever. Agora `TEST_SAVE_FINISH` o chama uma vez por operação, antes da
+seleção do caminho de cancelar/confirmar. Mantém o retorno normal da sala e a
+leitura/restauração nativa completa do slot. Não há mudança no renderer.
+
+| Dado/função | EU | JP | US |
+| --- | --- | --- | --- |
+| Retorno visual nativo | 001D7E14 | 001D6174 | 001D5FF4 |
+| Ponteiro controlador UI fade | 00AC0968 | 00AB06D8 | 00AB061C |
+
+`tests/native_load_visual_fixture.h` executa as duas rotinas nativas EU de
+configurar/devolver esse fader, além da fixture de encerramento já existente.
+Os testes agora reproduzem o sprite com valor 0/modo 1 deixado pela UI e
+verificam o retorno para 255/modo 0 nos dois caminhos, uma vez por operação.
+Compilação oficial e testes PASS em EU/JP/US. Log de build:
+`build-release/f7-load-visual-return-all.log`.
+
+Próximo teste real **ainda pendente**. Solicitar primeiro cancelar. Caso volte
+a ficar preto, pedir para manter o jogo aberto e capturar o estado em memória,
+em vez de continuar ajustando só com testes isolados. Os logs novos mostram
+controller/modo/opacidade antes e depois do retorno nativo; o progresso do load
+também mostra contador, duração e atraso do fade da sala.
+
+
+### Terceiro teste real (17/10, 16:12): máscara de tarefas bloqueadas
+
+Cancelar já volta certo. Confirmar ainda ficava preto, mas o log mostrou que
+o load em si funciona: DATA0 lido, `pl00.arc`/`rm_1000.arc` carregados e
+tarefas de volta a 0073DFC0. O problema era `state+68` (tarefas bloqueadas):
+
+- Load da tela inicial: o encerramento entra nas tarefas 00300050 com
+  bloqueadas=**00000080**, e o reinício monta a máscara de partida (0003DE00).
+- Load pelo F7: entrava com 00035E80 (máscara herdada da partida e da máquina
+  de escrever) e terminava em **0003DF80**: 0x80 e 0x100 continuavam
+  bloqueadas, a sala não atualizava e o fade da sala ficava em 255 (preto).
+
+Correção: no load confirmado pelo F7, antes do encerramento nativo,
+`state+68 = 0x80`, igual ao load da tela inicial. Teste sintético cobre o
+valor. Compilação oficial + testes PASS em EU/JP/US
+(`build-release/f7-load-blocked-mask.log`). Teste real pendente.
+
+### Quarto teste real (17/10): sons da sala antiga seguravam a entrada
+
+Com a máscara 0x80 o load entrou igual ao da tela inicial, mas o reinício
+voltou a 0003DF80 e a tela continuou preta. Lendo a memória do jogo aberto: a
+entrada da sala (EU func_001B0CB0, passo `+1B110` = 4, subpasso 0x0A) chama
+EU func_001E2314, que espera até nenhuma voz do banco de som 9 tocar. Duas
+vozes do ambiente da sala anterior (água, em loop) continuavam tocando; o
+usuário confirmou que ouvia a água. Na tela inicial não há sons de sala, então
+o load nativo nunca precisou pará-los. Pular o subpasso à mão (diagnóstico) fez
+a sala aparecer, mas com som antigo, lentidão e lixo visual — não usar isso.
+
+Correção: no load confirmado pelo F7, antes do encerramento nativo, chamar o
+reset de som do jogo (o mesmo que a tarefa de início de partida roda via
+EU func_00194E5C): EU 001DF7B0, JP 001DDB10, US 001DD990 (mesmo corpo, gerente
+de som em EU 00AC61F4 / JP 00AB5F64 / US 00AB5EA8). Cancelar não chama.
+Build + testes PASS EU/JP/US (`build-release/f7-load-sound-reset.log`).
+Teste real pendente.
+
+Atualização: o reset geral (001DF7B0) **não** bastou — só para o banco 3; as
+duas vozes do banco 9 continuaram e a tela seguiu preta (teste real 16:45).
+Trocado por `func_0025B32C(gerente, 9)` (EU; JP 00259C4C, US 0025935C), que
+percorre as vozes do banco 9 e para cada uma (método +A4 do banco), chamado só
+no load confirmado. Build + testes PASS EU/JP/US
+(`build-release/f7-load-stop-bank9.log`). Teste real pendente.
+
+**Teste real 17/10 (JP): OK.** Escolher um save pelo F7 carrega o jogo daquele
+save, sem o som da sala anterior e sem lentidão. Cancelar já voltava certo.
+Ainda não testado em EU/US dentro do jogo (só testes sintéticos).
