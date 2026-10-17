@@ -3305,6 +3305,17 @@ static void fp_snapshot(D3D12DrawRecord* dr)
     u32 ea = cellGcmResolveLocated((dr->fp_addr & 0x3u) == 1, dr->fp_addr & ~0x3u);
     if (ea == 0xFFFFFFFFu) return;
     const u8* src = vm_base + ea;
+    /* The same bytes as a snapshot already taken at this address this
+     * frame: the same program, so the same length and per-program data.
+     * Parsing it again was most of this function, ~9000 times a frame. */
+    { static int off = -1; if (off < 0) off = getenv("FP_NOSNAP") ? 1 : 0;
+      if (!off)
+          for (u32 i = 0; i < s_fp_nsnap; i++) {
+              const FPSnap* q = &s_fp_snaps[i];
+              if (q->addr == dr->fp_addr && !memcmp(s_fp_arena + q->snap - 1, src, q->len)) {
+                  dr->fp_bytes = q->len; dr->fp_snap = q->snap; return;
+              }
+          } }
     u32 constants = 0;
     u32 len = fp_guest_program_size(src, &constants);
     if (!len) return;
@@ -3319,10 +3330,14 @@ static void fp_snapshot(D3D12DrawRecord* dr)
         s_fp_arena = (u8*)calloc(1, FP_ARENA_CAP + FP_ARENA_PAD);
         if (!s_fp_arena) return;
     }
-    /* [16-byte header: magic, code hash, size][ucode][16 zero bytes]. The
-     * header lets vp_get_fp_pso take the hash computed once here instead of
-     * re-hashing the program for every pipeline lookup (2x per draw). */
-    if (s_fp_arena_used + 16 + len + 16 > FP_ARENA_CAP) {
+    /* [16-byte header: magic, code hash, size][ucode][16 zero bytes]
+     * [16: inline constant count, texture-unit mask][constants]. The header
+     * lets vp_get_fp_pso take the hash computed once here instead of
+     * re-hashing the program for every pipeline lookup (2x per draw); the
+     * tail gives vp_record_cb and the prepass what they derived per draw. */
+    static float k_tmp[FP_MAX_K * 4];
+    const int nk = rsx_fp_extract_consts(src, len, k_tmp, FP_MAX_K);
+    if (s_fp_arena_used + 16 + len + 16 + 16 + (u32)nk * 16u > FP_ARENA_CAP) {
         static int w = 0;
         if (w++ < 4) fprintf(stderr, "[D3D12] WARNING: FP snapshot arena full%c", 10);
         return;
@@ -3332,7 +3347,10 @@ static void fp_snapshot(D3D12DrawRecord* dr)
     memset(s_fp_arena + at + len, 0, 16);   /* stop marker room */
     { u32 hdr[4] = { FP_SNAP_MAGIC, rsx_fp_code_hash(s_fp_arena + at, len), len, constants };
       memcpy(s_fp_arena + at - 16, hdr, 16); }
-    s_fp_arena_used = (at + len + 16 + 15u) & ~15u;
+    { u32 tail[4] = { (u32)nk, rsx_fp_tex_used_mask(src, len), 0, 0 };
+      memcpy(s_fp_arena + at + len + 16, tail, 16);
+      memcpy(s_fp_arena + at + len + 32, k_tmp, (size_t)nk * 16u); }
+    s_fp_arena_used = (at + len + 32 + (u32)nk * 16u + 15u) & ~15u;
     dr->fp_snap = at + 1;
     /* Newest first; the table is a small most-recent window. */
     u32 n = s_fp_nsnap < 64 ? s_fp_nsnap : 63;
@@ -5023,13 +5041,25 @@ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, in
     /* Hash index over the cache: the linear scan walked up to 4096 entries
      * twice per draw (~4600 lookups a Code Veronica frame). */
     {
+        /* Only the fields fp_key_hash/fp_key_eq read are set: zeroing the
+         * whole entry took most of this function's time, twice per draw. */
         VPFPEntry key;
-        memset(&key, 0, sizeof key);
         key.vs_idx = vs_idx; key.vs_hash = vs_hash; key.gen = s_d3d.vp_gen;
         key.blend = blend; key.nrt = nrt; key.rtfmt = (u32)rtfmt; key.exp32 = exp32;
         key.ucode_hash = uhash; key.cmask = cmask; key.cull = cull; key.cube_mask = cube_mask;
+        /* Consecutive draws mostly share one pipeline (~100 changes in a
+         * 7000-draw frame): the last ready answer, per calling thread, before
+         * probing the index. The entry is re-checked, as eviction may have
+         * reused the slot. */
+        static __declspec(thread) int last_hit = -1;
+        static __declspec(thread) VPFPEntry last_key;
+        if (last_hit >= 0 && last_hit < s_d3d.vp_fp_n && fp_key_eq(&last_key, &key) &&
+            fp_key_eq(&s_d3d.vp_fp[last_hit], &key) && !s_d3d.vp_fp[last_hit].pending &&
+            !s_d3d.vp_fp[last_hit].skip && s_d3d.vp_fp[last_hit].pso)
+            return s_d3d.vp_fp[last_hit].pso;
         int hit = fp_index_find(&key);
         if (hit >= 0) {
+            last_hit = hit; last_key = key;
             const VPFPEntry* he = &s_d3d.vp_fp[hit];
             if (he->pending) { s_fp_skip_draw = 1; InterlockedIncrement(&s_fp_async_skips); }
             else if (he->skip) s_fp_skip_draw = 1;
@@ -6679,7 +6709,12 @@ static void vp_record_cb(u32 slot, int vs_idx, const D3D12DrawRecord* dr)
             extern u32 cellGcmResolveLocated(int, u32);
             u32 foff = cellGcmResolveLocated((dr->fp_addr & 0x3u) == 1,
                                              dr->fp_addr & ~0x3u);
-            if (vm_base && foff != 0xFFFFFFFFu)
+            if (dr->fp_snap && s_fp_arena) {   /* extracted once, with the snapshot */
+                const u8* tail = s_fp_arena + dr->fp_snap - 1 + dr->fp_bytes + 16;
+                u32 nk; memcpy(&nk, tail, 4);
+                if (nk > FP_MAX_K) nk = FP_MAX_K;
+                memcpy(&ts[FP_K_BASE], tail + 16, (size_t)nk * 16u);
+            } else if (vm_base && foff != 0xFFFFFFFFu)
                 rsx_fp_extract_consts(vm_base + foff, dr->fp_bytes, &ts[FP_K_BASE], FP_MAX_K);   /* fp_k[] */
             /* FP_ZERO_K=<code hex>:<i>,<j>,...: zero those fp_k[] entries of the
              * program with that code hash (an experiment: RPCS3 draws Code
@@ -8911,7 +8946,9 @@ static void prepass_range(u32 from, u32 to)
         u32 _used = 0xFFFFu;
         { static int en = -1;
           if (en < 0) { const char* e = getenv("FP_TEXUSED"); en = e ? atoi(e) : 1; }
-          if (en && dr->fp_addr) {
+          if (en && dr->fp_addr && dr->fp_snap && s_rb.fp_arena)   /* taken with the snapshot */
+              memcpy(&_used, s_rb.fp_arena + dr->fp_snap - 1 + dr->fp_bytes + 16 + 4, 4);
+          else if (en && dr->fp_addr) {
               const u8* uc = fp_snap_ptr(dr);
               if (!uc) {
                   extern uint8_t* vm_base;
@@ -9653,6 +9690,13 @@ static void render_frame_impl(void)
             u32 cur_zeta = 0;   /* guest zeta surface the host depth buffer holds */
             const int split_n = (s_cv_query_active || s_cap_steps_on) ? 0 : submit_split_every();
             u32 split_last = 0;
+            /* The per-draw bindings, skipped when the same as the previous
+             * draw's (shared constant banks and texture windows); 0 = unknown.
+             * The buffers' addresses are fixed: asked once, not twice a draw. */
+            const D3D12_GPU_VIRTUAL_ADDRESS cb_va = s_d3d.vp_cb->lpVtbl->GetGPUVirtualAddress(s_d3d.vp_cb);
+            const D3D12_GPU_VIRTUAL_ADDRESS fpcb_va = s_d3d.vp_fpcb
+                ? s_d3d.vp_fpcb->lpVtbl->GetGPUVirtualAddress(s_d3d.vp_fpcb) : 0;
+            u64 bound_srv = 0; D3D12_GPU_VIRTUAL_ADDRESS bound_cb0 = 0, bound_cb2 = 0;
             for (u32 d = 0; d < s_rb.count && d < MAX_DRAWS; d++) {
                 const D3D12DrawRecord* dr = &s_rb.draws[d];
                 if (split_n && d - split_last >= (u32)split_n && submit_split(fi)) {
@@ -9674,7 +9718,9 @@ static void render_frame_impl(void)
                     cl->lpVtbl->IASetVertexBuffers(cl, 0, 1, &vbv);
                     cur_rt = -2; for (int m = 0; m < 3; m++) cur_m[m] = -2;
                     last_pso = NULL; have_vp = 0;
+                    bound_srv = 0; bound_cb0 = bound_cb2 = 0;
                 }
+                if (s_cap_steps_on) { bound_srv = 0; bound_cb0 = bound_cb2 = 0; }   /* captures draw between */
                 if (d >= pp_done) {   /* this part's prepass, and its queued pipelines */
                     prepass_range(pp_done, pp_done + pp_part);
                     pp_done += pp_part;
@@ -9692,6 +9738,7 @@ static void render_frame_impl(void)
                     zconv_run(gh_base);
                     cur_rt = -2; for (int m = 0; m < 3; m++) cur_m[m] = -2;
                     last_pso = NULL; have_vp = 0;
+                    bound_srv = 0; bound_cb0 = bound_cb2 = 0;
                 }
                 if (!dr->is_vp) continue;
                 if(dr->is_copy) {
@@ -9848,6 +9895,7 @@ static void render_frame_impl(void)
                     for (int _m = 0; _m < 3; _m++) cur_m[_m] = wantm[_m];
                     have_vp = 0;   /* the switch above set its own viewport/scissor */
                     last_pso = NULL;   /* VP_TESTTRI may have drawn with another */
+                    bound_srv = 0; bound_cb0 = bound_cb2 = 0;
                 }
                 /* rsxcap: the post chain rewrites one target over and over;
                  * photograph it before each of the last 40 ops. */
@@ -10003,20 +10051,28 @@ static void render_frame_impl(void)
                 }
                 D3D12_GPU_DESCRIPTOR_HANDLE gh = gh_base;
                 gh.ptr += (u64)(DRAW_SRV_BASE + s_srv_win[d] * FP_TEX_UNITS) * s_d3d.srv_inc;
-                s_d3d.cmd_list->lpVtbl->SetGraphicsRootDescriptorTable(s_d3d.cmd_list, 1, gh);
+                if (gh.ptr != bound_srv) {
+                    s_d3d.cmd_list->lpVtbl->SetGraphicsRootDescriptorTable(s_d3d.cmd_list, 1, gh);
+                    bound_srv = gh.ptr;
+                }
                 if (dr->vtex_mask) {   /* t16-t19 for the transform program's TXL */
                     D3D12_GPU_DESCRIPTOR_HANDLE vh = gh_base;
                     vh.ptr += (u64)(VTEX_SRV_BASE + d * 4) * s_d3d.srv_inc;
                     s_d3d.cmd_list->lpVtbl->SetGraphicsRootDescriptorTable(s_d3d.cmd_list, 3, vh);
                 }
                 /* Per-draw constants: this draw's vp_cb + FP texscale slots. */
-                s_d3d.cmd_list->lpVtbl->SetGraphicsRootConstantBufferView(s_d3d.cmd_list, 0,
-                    s_d3d.vp_cb->lpVtbl->GetGPUVirtualAddress(s_d3d.vp_cb)
-                    + ((u64)s_rb.parity * MAX_DRAWS + dr->vcb_slot) * VP_CB_STRIDE);
-                if (s_d3d.vp_fpcb)
-                    s_d3d.cmd_list->lpVtbl->SetGraphicsRootConstantBufferView(s_d3d.cmd_list, 2,
-                        s_d3d.vp_fpcb->lpVtbl->GetGPUVirtualAddress(s_d3d.vp_fpcb)
-                        + ((u64)s_rb.parity * MAX_DRAWS + dr->cb_slot) * VP_FPCB_STRIDE);
+                { const D3D12_GPU_VIRTUAL_ADDRESS a0 = cb_va + ((u64)s_rb.parity * MAX_DRAWS + dr->vcb_slot) * VP_CB_STRIDE;
+                  if (a0 != bound_cb0) {
+                      s_d3d.cmd_list->lpVtbl->SetGraphicsRootConstantBufferView(s_d3d.cmd_list, 0, a0);
+                      bound_cb0 = a0;
+                  } }
+                if (s_d3d.vp_fpcb) {
+                    const D3D12_GPU_VIRTUAL_ADDRESS a2 = fpcb_va + ((u64)s_rb.parity * MAX_DRAWS + dr->cb_slot) * VP_FPCB_STRIDE;
+                    if (a2 != bound_cb2) {
+                        s_d3d.cmd_list->lpVtbl->SetGraphicsRootConstantBufferView(s_d3d.cmd_list, 2, a2);
+                        bound_cb2 = a2;
+                    }
+                }
                 /* DRAWARGS=<N>: the arguments actually handed to the GPU, plus
                  * the target they are aimed at. A zero vertex count, or a start
                  * vertex past the buffer, rasterises nothing while every other
