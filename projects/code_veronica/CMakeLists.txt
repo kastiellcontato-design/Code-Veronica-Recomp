@@ -421,6 +421,15 @@ add_executable(code_veronica_fp_tests EXCLUDE_FROM_ALL
     "${PS3RECOMP_DIR}/libs/video/rsx_fp_decompiler.c")
 target_include_directories(code_veronica_fp_tests PRIVATE "${PS3RECOMP_DIR}/include")
 if(WIN32)
+    add_executable(code_veronica_spu_fault_tests EXCLUDE_FROM_ALL
+        "${PS3RECOMP_DIR}/runtime/spu/tests/test_spu_fault_snapshot.c"
+        "${PS3RECOMP_DIR}/runtime/spu/spu_fault_snapshot.c")
+    target_compile_options(code_veronica_spu_fault_tests PRIVATE /UNDEBUG)
+    add_executable(code_veronica_spu_schedule_tests EXCLUDE_FROM_ALL
+        "${PS3RECOMP_DIR}/runtime/spu/tests/test_spu_taskset_schedule.c"
+        "${PS3RECOMP_DIR}/runtime/spu/spu_taskset_schedule.c")
+    target_compile_options(code_veronica_spu_schedule_tests PRIVATE /Gy /UNDEBUG)
+    target_link_options(code_veronica_spu_schedule_tests PRIVATE /OPT:REF)
     add_executable(code_veronica_dxc_tests EXCLUDE_FROM_ALL
         "${PS3RECOMP_DIR}/libs/video/tests/test_dxc.cpp"
         "${PS3RECOMP_DIR}/libs/video/rsx_dxc.cpp")

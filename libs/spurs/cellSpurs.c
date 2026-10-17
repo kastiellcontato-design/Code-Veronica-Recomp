@@ -14,6 +14,7 @@
 #include "../../runtime/platform/host_thread_name.h"
 #include "../../runtime/ps3_log.h"
 #include "spu_workload.h"   /* SPU image -> lifted-entry dispatch (runtime/spu) */
+#include "../../runtime/spu/spu_fault_snapshot.h"
 #include "spurs_taskset.h"  /* REAL BE CellSpursTaskset layout builders (fork Option-B) */
 #include "../../runtime/ppu/ppu_memory.h"   /* vm_base (guest mem) */
 #include <stdio.h>
@@ -980,6 +981,7 @@ static void task2_wake(void) {}
 #endif
 void spurs_task2_exit(u32 ea, u32 id, s32 code)
 {
+    spu_fault_event("exit", ea, id, 0, (u32)code);
     TASK2_LOCK(); Task2Completion* t=task2_find(ea,0);
     if (t && id<128) { t->code[id]=code; t->state[id]=2; }
     TASK2_UNLOCK();
@@ -990,6 +992,7 @@ void spurs_task2_finished(u32 ea, u32 id)
     TASK2_LOCK(); Task2Completion* t=task2_find(ea,0);
     if (t && id<128) t->state[id]=(t->state[id]==2 ? 3 : 4);
     TASK2_UNLOCK();
+    spu_fault_event("finished", ea, id, 0, 0);
     task2_wake();
 }
 
@@ -1037,9 +1040,10 @@ s32 cellSpursCreateTask(CellSpursTaskset* taskset, CellSpursTaskId* taskId,
      * ponytail: s_tasks[] is shared by every taskset and now only records the
      * last task per slot id -- enough for JoinTask2's lookup; key it by
      * (taskset, id) if a title joins tasks in two tasksets at once. */
-    u32 free_slot = CELL_SPURS_MAX_TASK;
-    for (u32 t = 0; t < CELL_SPURS_MAX_TASK; t++)
-        if (!(vm_read8(taskset_ea + 0x30 + t / 8) & (0x80u >> (t % 8)))) { free_slot = t; break; }
+    /* A free guest bit alone is not enough: another creator may have reserved
+     * the slot but not yet published it. Select + reserve under the scheduler's
+     * lock, rather than overwriting that creator's TaskInfo on a failed claim. */
+    u32 free_slot = (u32)spu_workload_task_reserve(taskset_ea);
     if (free_slot < CELL_SPURS_MAX_TASK) {
         u32 i = free_slot;
         {
@@ -1063,7 +1067,9 @@ s32 cellSpursCreateTask(CellSpursTaskset* taskset, CellSpursTaskId* taskId,
              * signals with has to be the same number. */
             if (taskId) vm_write32((u32)(uintptr_t)taskId, i);
             (void)taskId_h;
-            taskset->taskCount++;
+            /* The guest taskset uses the real BE layout, not the legacy host
+             * struct above: taskCount is at +4, inside CSTS_RUNNING. Incrementing
+             * it corrupts four bytes of the guest's running-task bitset. */
 
             /* Register the task in the REAL BE taskset: writes task_info[slot]
              * (args/elf/context/ls_pattern) + sets enabled+ready bits so the PM's
@@ -1072,10 +1078,13 @@ s32 cellSpursCreateTask(CellSpursTaskset* taskset, CellSpursTaskId* taskId,
              * go up: from then on a sibling's exit can start it, and it can
              * finish before this thread gets any further (see
              * spu_workload_task_preclaim). */
-            int claimed = elf && spu_workload_task_preclaim(taskset_ea, i);
+            int claimed = elf != NULL; /* free_slot already owns the host claim */
             task2_begin(taskset_ea, i);
-            spurs_taskset_add_task(taskset_ea, i, (uint64_t)elf_ea,
+            spu_workload_task_publish(taskset_ea, i, (uint64_t)elf_ea,
                                    (uint64_t)context_ea, task_arg, task_lsp);
+            if (!elf) spu_workload_task_unclaim(taskset_ea, i);
+            spu_fault_event("created", taskset_ea, i, 0,
+                g_active_ctx ? (uint32_t)g_active_ctx->lr : 0);
             /* Bridge to the image-22 dispatch so build_context uses this taskset+task. */
             g_ydkj_real_taskset_ea = taskset_ea;
             g_ydkj_real_taskid     = i;
@@ -3564,7 +3573,10 @@ s32 cellSpursJoinTask2(CellSpursTaskset* taskset, u32 id, u32 out)
     for (;;) {
         LONG gen = s_task2_gen;
         rc = cellSpursTryJoinTask2(taskset,id,out);
-        if (rc != CELL_SPURS_TASK_ERROR_AGAIN) break;
+        if (rc != CELL_SPURS_TASK_ERROR_AGAIN) {
+            spu_fault_event("joined", (u32)(uintptr_t)taskset, id, 0, (u32)rc);
+            break;
+        }
         WaitOnAddress(&s_task2_gen, &gen, sizeof gen, 2);
     }
     ps3_tl_main_end(14);

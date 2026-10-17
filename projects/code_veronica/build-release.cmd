@@ -73,6 +73,15 @@ if "%CV_BUILD_US%"=="1" (
 )
 
 rem SRT memory/layout regression tests, isolated from real saves/settings.
+if "%CV_SPU_FAULT_TESTS%"=="1" (
+ cmake --build build-release --target code_veronica_spu_fault_tests -j 6 || exit /b 1
+ build-release\bin\code_veronica_spu_fault_tests.exe || exit /b 1
+)
+if "%CV_SPU_SCHEDULE_TESTS%"=="1" (
+ cmake --build build-release --target code_veronica_spu_schedule_tests -j 6 || exit /b 1
+ build-release\bin\code_veronica_spu_schedule_tests.exe || exit /b 1
+)
+
 if "%CV_SRT_TESTS%"=="1" (
  cmake --build build-release --target code_veronica_srt_tests -j 6 || exit /b 1
  build-release\bin\cv_srt_tests_eu.exe codex_diag_srt || exit /b 1

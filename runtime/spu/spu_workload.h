@@ -127,10 +127,16 @@ int spu_workload_dispatch_async(const uint8_t* image, uint32_t image_size,
 /* Captures ownership from the creating PPU call, without shared globals. */
 /* Claim a taskset task before making it ready, then dispatch it (or unclaim). */
 int spu_workload_task_preclaim(uint32_t taskset_ea, uint32_t taskid);
+/* PPU creation: reserve a free slot atomically, then publish its TaskInfo. */
+int spu_workload_task_reserve(uint32_t taskset_ea);
+void spu_workload_task_publish(uint32_t taskset_ea, uint32_t taskid,
+    uint64_t elf, uint64_t context, const uint32_t args[4], const uint32_t pattern[4]);
 int spu_workload_dispatch_task_claimed(const uint8_t* image, uint32_t image_size,
                                        uint32_t args_ea, uint32_t taskset_ea,
                                        uint32_t taskid);
 void spu_workload_task_unclaim(uint32_t taskset_ea, uint32_t taskid);
+/* Complete a task and schedule enabled, ready siblings not already claimed. */
+void spu_workload_task_exited(uint32_t taskset_ea, uint32_t taskid);
 int spu_workload_dispatch_task_async(const uint8_t* image, uint32_t image_size,
                                      uint32_t args_ea, uint32_t taskset_ea,
                                      uint32_t taskid);

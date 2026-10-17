@@ -7,6 +7,7 @@
  */
 #include "spu_workload.h"
 #include "spu_lifted_job.h"   /* spu_run_lifted_job */
+#include "spu_fault_snapshot.h"
 #include "../ps3_log.h"      /* ps3_log_verbose */
 #include <stdio.h>
 #include <stdlib.h>
@@ -518,101 +519,6 @@ static spu_ts_ls_slot* ts_ls_get(uint32_t taskset_ea, uint32_t taskid)
     return slot;
 }
 
-/* Minimal taskset scheduling for tasks the PPU never created.
- *
- * SPU code can create tasks itself, or mark existing ones ready, and rely on
- * the taskset policy module to schedule them. Tasks created from the PPU are
- * dispatched by our cellSpursCreateTask, but nothing looked at the taskset
- * afterwards, so SPU-scheduled work never ran. Guitar Hero III's Havok task
- * hands the rest of each physics step to other tasks and EXITs, and the step
- * then waits forever.
- *
- * Runs when a task of the taskset returns (our runner returns on the EXIT
- * syscall; waiting tasks park instead). The returning task's ready, pending
- * and enabled bits are cleared, as the real policy does on exit, and every
- * other enabled task that is pending or ready and not already running here is
- * started from its ELF.
- *
- * Taskset layout: bitsets of 16 bytes at +0x10 ready, +0x20 pending,
- * +0x30 enabled (task 0 = MSB of byte 0); task_info[t] at +0x80 + 0x30*t with
- * the ELF EA at +0x14 and the context save EA at +0x1C. */
-#define TS_TRACK 8
-static struct { uint32_t ea; uint8_t running[16]; } s_ts_run[TS_TRACK];
-static volatile LONG s_ts_lock;
-static uint8_t* ts_running(uint32_t taskset_ea)
-{
-    for (int i = 0; i < TS_TRACK; i++) if (s_ts_run[i].ea == taskset_ea) return s_ts_run[i].running;
-    for (int i = 0; i < TS_TRACK; i++) if (!s_ts_run[i].ea) { s_ts_run[i].ea = taskset_ea; return s_ts_run[i].running; }
-    return NULL;
-}
-static void ts_lock(void)   { while (InterlockedExchange(&s_ts_lock, 1)) Sleep(0); }
-static void ts_unlock(void) { InterlockedExchange(&s_ts_lock, 0); }
-
-static void spu_taskset_mark(uint32_t taskset_ea, uint32_t t, int on)
-{
-    if (!taskset_ea || t >= 128) return;
-    ts_lock();
-    uint8_t* r = ts_running(taskset_ea);
-    uint8_t m = (uint8_t)(0x80u >> (t & 7));
-    if (r) { if (on) r[t / 8] |= m; else r[t / 8] &= (uint8_t)~m; }
-    ts_unlock();
-}
-
-/* Reserve before CreateThread: a ready task can also be discovered by an
- * exiting sibling. Both paths must share this claim, not mark it only after
- * the new host thread starts, or they execute the same SPU DMA twice. */
-static int spu_taskset_claim(uint32_t taskset_ea, uint32_t t)
-{
-    if (!taskset_ea || t >= 128) return 1;
-    ts_lock();
-    uint8_t* r = ts_running(taskset_ea);
-    uint8_t m = (uint8_t)(0x80u >> (t & 7));
-    int claimed = r && !(r[t / 8] & m);
-    if (claimed) r[t / 8] |= m;
-    ts_unlock();
-    return claimed;
-}
-
-static void spu_taskset_task_exited(uint32_t taskset_ea, uint32_t done_task)
-{
-    extern uint8_t* vm_base;
-    struct { uint32_t id, elf, ctx, size; } pending[128];
-    uint32_t npending=0;
-    ts_lock();
-    uint8_t* ts = vm_base + taskset_ea;
-    uint8_t* run = ts_running(taskset_ea);
-    if (done_task < 128) {
-        uint8_t m = (uint8_t)(0x80u >> (done_task & 7));
-        ts[0x10 + done_task / 8] &= (uint8_t)~m;
-        ts[0x20 + done_task / 8] &= (uint8_t)~m;
-        ts[0x30 + done_task / 8] &= (uint8_t)~m;
-        if (run) run[done_task / 8] &= (uint8_t)~m;
-    }
-    for (uint32_t t = 0; t < 128 && run; t++) {
-        uint8_t m = (uint8_t)(0x80u >> (t & 7));
-        if (!(ts[0x30 + t / 8] & m) || (run[t / 8] & m)) continue;
-        if (!((ts[0x10 + t / 8] | ts[0x20 + t / 8]) & m)) continue;
-        const uint8_t* ti = ts + 0x80 + 0x30 * t;
-        uint32_t elf = ((uint32_t)ti[0x14] << 24) | ((uint32_t)ti[0x15] << 16) |
-                       ((uint32_t)ti[0x16] << 8) | ti[0x17];
-        uint32_t ctx = ((uint32_t)ti[0x1C] << 24) | ((uint32_t)ti[0x1D] << 16) |
-                       ((uint32_t)ti[0x1E] << 8) | ti[0x1F];
-        if (!elf) continue;
-        size_t sz = spu_elf_image_size(vm_base + elf, 2u * 1024 * 1024);
-        if (!sz) continue;
-        ts[0x20 + t / 8] &= (uint8_t)~m;                 /* pending -> started */
-        pending[npending].id=t; pending[npending].elf=elf;
-        pending[npending].ctx=ctx; pending[npending].size=(uint32_t)sz;
-        npending++;
-    }
-    ts_unlock();
-    /* Dispatch outside the lock; the common dispatcher atomically claims the
-     * task, including when the PPU CreateTask path wins this race. */
-    for (uint32_t i=0;i<npending;i++)
-        spu_workload_dispatch_task_async(vm_base+pending[i].elf, pending[i].size,
-            pending[i].ctx, taskset_ea, pending[i].id);
-}
-
 static void cv_inflate_trace(const char* phase, uint32_t ea, uint32_t task)
 {
     static LONG count;
@@ -641,6 +547,7 @@ void spu_job_describe(const void* c)
     fprintf(stderr, "[job] gpr0..15 w0:");
     for (int i = 0; i < 16; i++) fprintf(stderr, " %08X", ctx->gpr[i]._u32[0]);
     fprintf(stderr, "\n");
+    spu_fault_snapshot(ctx, t_job.ts, t_job.tid, t_job.args);
 }
 static void spu_async_run(spu_async_job* j)
 {
@@ -961,6 +868,7 @@ static void spu_async_run_impl(spu_async_job* j)
             }
             spu_serial_acquire();       /* one SPU task runs at a time (LBP_SPU_SERIAL) */
             cv_inflate_trace("RUN",j->cv_inflate_ea,j->taskid);
+            spu_fault_event("enter", j->taskset_ea, j->taskid, j->image_id, 0);
             int32_t rc = spu_run_lifted_job_abi(j->fn, ls, j->args_ea, j->image_id,
                                                 1, j->have_r3 ? j->r3 : 0, 0);
             /* YDKJ_CRI_RESUME: a real SPURS task is PERSISTENT -- on yield (num=0)
@@ -1017,12 +925,13 @@ static void spu_async_run_impl(spu_async_job* j)
                 fprintf(stderr, "[spu_workload] async image=%d RETURNED rc=%d "
                         "(job ran to completion, did not loop)\n", j->image_id, rc);
             spu_serial_release();
+            spu_fault_event("returned", j->taskset_ea, j->taskid, j->image_id, (uint32_t)rc);
             /* Publish completion before freeing the guest slot: otherwise a
              * new task can reuse it and have its state overwritten here. */
             { cv_inflate_trace("RETURN",j->cv_inflate_ea,j->taskid);
               extern void spurs_task2_finished(uint32_t,uint32_t);
               spurs_task2_finished(j->taskset_ea,j->taskid); }
-            if (j->taskset_ea) spu_taskset_task_exited(j->taskset_ea, j->taskid);
+            if (j->taskset_ea) spu_workload_task_exited(j->taskset_ea, j->taskid);
         }
         /* Persistent LS is retained in its taskset slot for the next task; a
          * per-dispatch LS is freed. */
@@ -1577,7 +1486,8 @@ int spu_workload_dispatch_task_async(const uint8_t* image, uint32_t image_size,
      * the next CreateTask overwriting the single-slot globals -- with two audio
      * tasks that made both run task 1's descriptor. */
     j->taskset_ea = taskset_ea; j->taskid = taskid;
-    if (!t_dispatch_preclaimed && !spu_taskset_claim(taskset_ea,taskid)) { free(j); return 1; }
+    if (!t_dispatch_preclaimed && !spu_workload_task_preclaim(taskset_ea,taskid)) { free(j); return 1; }
+    spu_fault_event("dispatch", taskset_ea, taskid, image_id, t_dispatch_preclaimed);
 
     j->cv_inflate_ea=0;
     if (image_id==13 && taskset_ea && getenv("CV_INFLATE_TRACE")) {
@@ -1639,7 +1549,7 @@ int spu_workload_dispatch_task_async(const uint8_t* image, uint32_t image_size,
     if (spu_pool_on() && spu_pool_submit(j, (unsigned)taskid)) return 1;
     HANDLE th = CreateThread(NULL, 256u << 20, spu_async_thread, j,
                              STACK_SIZE_PARAM_IS_A_RESERVATION, NULL);
-    if (!th) { spu_taskset_mark(taskset_ea,taskid,0); free(j); return 0; }
+    if (!th) { spu_workload_task_unclaim(taskset_ea,taskid); free(j); return 0; }
     ps3_host_thread_name(th, "spu:task %u", (unsigned)taskid);
     CloseHandle(th);   /* detached */
 #else
@@ -1659,7 +1569,7 @@ int spu_workload_dispatch_task_async(const uint8_t* image, uint32_t image_size,
      * beats never dispatching at all. */
     if (prc != 0)
         prc = pthread_create(&th, NULL, spu_async_thread, j);
-    if (prc != 0) { spu_taskset_mark(taskset_ea,taskid,0); free(j); return 0; }
+    if (prc != 0) { spu_workload_task_unclaim(taskset_ea,taskid); free(j); return 0; }
     pthread_detach(th);
 #endif
     return 1;
@@ -1674,11 +1584,6 @@ int spu_workload_dispatch_task_async(const uint8_t* image, uint32_t image_size,
  * the now-idle slot and ran the task a second time on consumed work: Code
  * Veronica's image-10 task 27 then DMA'd from a garbage EA and spun on a
  * null lock line. 1 = claimed. */
-int spu_workload_task_preclaim(uint32_t taskset_ea, uint32_t taskid)
-{
-    return spu_taskset_claim(taskset_ea, taskid);
-}
-
 /* Dispatch a task the caller claimed with spu_workload_task_preclaim. On
  * failure the claim is dropped. */
 int spu_workload_dispatch_task_claimed(const uint8_t* image, uint32_t image_size,
@@ -1688,14 +1593,8 @@ int spu_workload_dispatch_task_claimed(const uint8_t* image, uint32_t image_size
     t_dispatch_preclaimed = 1;
     int r = spu_workload_dispatch_task_async(image, image_size, args_ea, taskset_ea, taskid);
     t_dispatch_preclaimed = 0;
-    if (!r) spu_taskset_mark(taskset_ea, taskid, 0);
+    if (!r) spu_workload_task_unclaim(taskset_ea, taskid);
     return r;
-}
-
-/* Drop a claim taken with spu_workload_task_preclaim that will not be run. */
-void spu_workload_task_unclaim(uint32_t taskset_ea, uint32_t taskid)
-{
-    spu_taskset_mark(taskset_ea, taskid, 0);
 }
 
 /* Compatibility for callers without an explicit SPURS task. */

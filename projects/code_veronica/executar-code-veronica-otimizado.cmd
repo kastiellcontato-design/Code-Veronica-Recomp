@@ -82,8 +82,13 @@ echo O log desta execucao sera salvo em:
 echo %GAME_LOG%
 echo Para encerrar, feche a janela do jogo ou pressione Ctrl+C aqui.
 echo.
+rem Preserve the last three runs: a restart must not erase the freeze evidence.
+if exist "%GAME_LOG%.previous-2.txt" copy /y "%GAME_LOG%.previous-2.txt" "%GAME_LOG%.previous-3.txt" >nul
+if exist "%GAME_LOG%.previous-1.txt" copy /y "%GAME_LOG%.previous-1.txt" "%GAME_LOG%.previous-2.txt" >nul
+if exist "%GAME_LOG%" copy /y "%GAME_LOG%" "%GAME_LOG%.previous-1.txt" >nul
 "%GAME_EXE%" "%GAME_ELF%" > "%GAME_LOG%" 2>&1
 set "GAME_RESULT=%ERRORLEVEL%"
+echo [runner] exit code=%GAME_RESULT%>> "%GAME_LOG%"
 echo.
 echo O jogo foi encerrado. Codigo de saida: %GAME_RESULT%
 echo Se fechou sem abrir a janela, envie o arquivo run-log-release.txt.
