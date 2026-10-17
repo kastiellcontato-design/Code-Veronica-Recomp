@@ -10556,20 +10556,22 @@ static u32 upload_tris_vp(const rsx_state* state, u32 first, u32 count)
  * non-indexed 4-vertex strip (prim 6); without this it fell to the fixed-
  * function fallback with is_vp=0 (no vertex-program transform -> the quad
  * collapsed to a line) and textured=0 (the Y/U/V planes never sampled). */
-static u32 upload_strip_vp(const rsx_state* state, u32 first, u32 count, int fan)
+/* t_begin: the strip's triangles before it were already emitted (a run joined
+ * entry by entry appends only the new ones). */
+static u32 upload_strip_vp_from(const rsx_state* state, u32 first, u32 count, int fan, u32 t_begin)
 {
     VP_FETCH_BEGIN();
     extern uint8_t* vm_base;
     if (!state || !vm_base || !s_d3d.vp_vb_mapped) return 0;
     if (!state->vertex_attribs[0].enabled) return 0;
-    if (count < 3) return 0;
+    if (count < 3 || t_begin >= count - 2) return 0;
     u32 tris = count - 2;
     u32 maxv = (MAX_VERTICES * VP_VERT_STRIDE - s_d3d.vp_vb_offset) / VP_VERT_STRIDE;
-    if (tris * 3 > maxv) tris = maxv / 3;
+    if ((tris - t_begin) * 3 > maxv) tris = t_begin + maxv / 3;
     VPSlot* out = (VPSlot*)((u8*)s_d3d.vp_vb_mapped
         + (u64)s_d3d.vp_parity * MAX_VERTICES * VP_VERT_STRIDE + s_d3d.vp_vb_offset);
     u32 o = 0;
-    for (u32 t = 0; t < tris; t++) {
+    for (u32 t = t_begin; t < tris; t++) {
         u32 i0 = fan ? 0 : t;
         /* strip winding alternates per triangle to keep facing consistent */
         u32 i1 = t + 1, i2 = t + 2;
@@ -10580,6 +10582,10 @@ static u32 upload_strip_vp(const rsx_state* state, u32 first, u32 count, int fan
     }
     s_d3d.vp_vb_offset += o * VP_VERT_STRIDE;
     return o;
+}
+static u32 upload_strip_vp(const rsx_state* state, u32 first, u32 count, int fan)
+{
+    return upload_strip_vp_from(state, first, count, fan, 0);
 }
 
 /* Fetch index k from the guest index array (SET_INDEX_ARRAY_ADDRESS/_DMA:
@@ -10860,14 +10866,20 @@ static u32 upload_tris_vp_indexed(const rsx_state* state, u32 first, u32 count)
  * list (the whole VP path draws lists; CullMode is NONE so strip parity
  * winding doesn't matter). DeferredShading's spline tube meshes -- the
  * octopus tentacles -- are indexed strips. */
-static u32 upload_strip_vp_indexed(const rsx_state* state, u32 first, u32 count, int fan)
+/* The open strip segment at the end of the last indexed strip entry: where it
+ * starts, how many indices it has so far, and where the next entry of the
+ * same BEGIN/END would start. */
+static u32 s_carry_epoch, s_carry_next = ~0u, s_carry_start, s_carry_len;
+/* cont: this entry continues the previous one's strip (a joined run), so its
+ * open segment is carried even without primitive restart. */
+static u32 upload_strip_vp_indexed(const rsx_state* state, u32 first, u32 count, int fan, int cont)
 {
     VP_FETCH_BEGIN();
     extern uint8_t* vm_base;
     if (!state || !vm_base || !s_d3d.vp_vb_mapped) return 0;
     if (!state->vertex_attribs[0].enabled) return 0;
-    if (count < 3) return 0;
-    u32 tris = count - 2;
+    if (count < 3 && !cont) return 0;
+    u32 tris = count > 2 ? count - 2 : 0;
     u32 maxv = (MAX_VERTICES * VP_VERT_STRIDE - s_d3d.vp_vb_offset) / VP_VERT_STRIDE;
     if (tris * 3 > maxv) tris = maxv / 3;
     VPSlot* out = (VPSlot*)((u8*)s_d3d.vp_vb_mapped
@@ -10887,18 +10899,22 @@ static u32 upload_strip_vp_indexed(const rsx_state* state, u32 first, u32 count,
      * split across two entries continues here: restart from the unfinished
      * segment's first index and skip the triangles the previous entry already
      * emitted. Without this a glyph quad straddling the boundary loses one of
-     * its two triangles. */
-    static u32 s_carry_epoch, s_carry_next = ~0u, s_carry_start, s_carry_len;
-    u32 base = first, skip = 0;
-    if (restart && s_carry_epoch == state->begin_epoch && s_carry_next == first &&
+     * its two triangles. The carried indices hold no sentinel, so the scan
+     * resumes at this entry instead of reading them again: a long strip sent
+     * as hundreds of entries (Code Veronica's flooded rooms) stays linear. */
+    u32 base = first, skip = 0, k0 = 0;
+    if ((restart || cont) && s_carry_epoch == state->begin_epoch && s_carry_next == first &&
         s_carry_len && first - s_carry_start == s_carry_len) {
         base = s_carry_start;
         skip = s_carry_len > 2 ? s_carry_len - 2 : 0;
+        k0 = s_carry_len;
     }
     u32 total = first + count - base;
-    if (total - 2 > tris && (total - 2) * 3 <= maxv) tris = total - 2;
-    u32 seg = 0, seg_len = 0;   /* current segment's first index (rel. base), length */
-    for (u32 k = 0; k <= total && o + 3 <= tris * 3; k++) {
+    if (total < 3) { s_carry_epoch = state->begin_epoch; s_carry_next = first + count;
+                     s_carry_start = base; s_carry_len = total; return 0; }
+    if (total - 2 > tris) tris = (total - 2) * 3 <= maxv ? total - 2 : maxv / 3;
+    u32 seg = 0, seg_len = k0;  /* current segment's first index (rel. base), length */
+    for (u32 k = k0; k <= total && o + 3 <= tris * 3; k++) {
         u32 idx = k < total ? read_guest_index(state, base + k) : 0;
         if (k < total && !(restart && idx == sentinel)) { seg_len++; continue; }
         /* Segment [seg, seg + seg_len) closed by a sentinel or the end. */
@@ -11108,11 +11124,19 @@ static void d3d12_draw_arrays_impl(void* ud, u32 primitive, u32 first, u32 count
             if (pv->is_vp && pv->fp_addr == fpnow &&
                 pv->begin_epoch == s_d3d.current_rsx_state->begin_epoch &&
                 pv->vb_byte_offset + pv->vertex_count * VP_VERT_STRIDE == s_d3d.vp_vb_offset) {
-                s_d3d.vp_vb_offset = pv->vb_byte_offset;   /* drop the partial expansion */
                 u32 total = first + count - s_d3d.merge_strip_first;
+                u32 done = first - s_d3d.merge_strip_first;   /* indices already expanded */
                 ps3_tl_begin(8);
-                pv->vertex_count = upload_strip_vp(s_d3d.current_rsx_state, s_d3d.merge_strip_first,
-                                                   total, primitive == RSX_PRIMITIVE_TRIANGLE_FAN);
+                if (done >= 3 && pv->vertex_count == (done - 2) * 3) {
+                    /* Append only the new triangles: re-expanding the whole run
+                     * for every entry was quadratic in its length. */
+                    pv->vertex_count += upload_strip_vp_from(s_d3d.current_rsx_state, s_d3d.merge_strip_first,
+                                                             total, primitive == RSX_PRIMITIVE_TRIANGLE_FAN, done - 2);
+                } else {
+                    s_d3d.vp_vb_offset = pv->vb_byte_offset;   /* drop the partial expansion */
+                    pv->vertex_count = upload_strip_vp(s_d3d.current_rsx_state, s_d3d.merge_strip_first,
+                                                       total, primitive == RSX_PRIMITIVE_TRIANGLE_FAN);
+                }
                 ps3_tl_end(8);
                 s_d3d.merge_first_end = first + count;
                 { static int n = 0; if (n++ < 4)
@@ -11309,18 +11333,25 @@ static void d3d12_draw_indexed_impl(void* ud, u32 primitive, u32 first, u32 coun
         if (pv->is_vp && pv->fp_addr == s_d3d.current_rsx_state->shader_program &&
             pv->begin_epoch == s_d3d.current_rsx_state->begin_epoch &&
             pv->vb_byte_offset + pv->vertex_count * VP_VERT_STRIDE == s_d3d.vp_vb_offset) {
-            s_d3d.vp_vb_offset = pv->vb_byte_offset;   /* drop the partial expansion */
             u32 total = first + count - s_d3d.merge_strip_first;
             ps3_tl_begin(8);
-            u32 n = upload_strip_vp_indexed(s_d3d.current_rsx_state, s_d3d.merge_strip_first, total,
-                                            primitive == RSX_PRIMITIVE_TRIANGLE_FAN);
+            if (s_carry_epoch == s_d3d.current_rsx_state->begin_epoch && s_carry_next == first) {
+                /* Append only this entry's triangles: re-expanding the whole
+                 * run for every entry was quadratic in its length. */
+                pv->vertex_count += upload_strip_vp_indexed(s_d3d.current_rsx_state, first, count,
+                                                            primitive == RSX_PRIMITIVE_TRIANGLE_FAN, 1);
+            } else {
+                s_d3d.vp_vb_offset = pv->vb_byte_offset;   /* drop the partial expansion */
+                u32 n = upload_strip_vp_indexed(s_d3d.current_rsx_state, s_d3d.merge_strip_first, total,
+                                                primitive == RSX_PRIMITIVE_TRIANGLE_FAN, 0);
+                if (n) pv->vertex_count = n;
+                else   s_d3d.vp_vb_offset = pv->vb_byte_offset + pv->vertex_count * VP_VERT_STRIDE;
+            }
             ps3_tl_end(8);
-            if (n) pv->vertex_count = n;
-            else   s_d3d.vp_vb_offset = pv->vb_byte_offset + pv->vertex_count * VP_VERT_STRIDE;
             s_d3d.merge_first_end = first + count;
             { static int k = 0; if (k++ < 4)
                 fprintf(stderr, "[STRIPJOIN] indexed prim=%u joined %u indices from %u -> %u vertices%c",
-                        primitive, total, s_d3d.merge_strip_first, n, 10); }
+                        primitive, total, s_d3d.merge_strip_first, pv->vertex_count, 10); }
             return;
         }
     }
@@ -11329,8 +11360,8 @@ static void d3d12_draw_indexed_impl(void* ud, u32 primitive, u32 first, u32 coun
     ps3_tl_begin(8);
     if (primitive == RSX_PRIMITIVE_QUADS)             emitted = upload_quads_vp_indexed(s_d3d.current_rsx_state, first, count);
     else if (primitive == RSX_PRIMITIVE_TRIANGLES)    emitted = upload_tris_vp_indexed(s_d3d.current_rsx_state, first, count);
-    else if (primitive == RSX_PRIMITIVE_TRIANGLE_STRIP) emitted = upload_strip_vp_indexed(s_d3d.current_rsx_state, first, count, 0);
-    else if (primitive == RSX_PRIMITIVE_TRIANGLE_FAN)   emitted = upload_strip_vp_indexed(s_d3d.current_rsx_state, first, count, 1);
+    else if (primitive == RSX_PRIMITIVE_TRIANGLE_STRIP) emitted = upload_strip_vp_indexed(s_d3d.current_rsx_state, first, count, 0, 0);
+    else if (primitive == RSX_PRIMITIVE_TRIANGLE_FAN)   emitted = upload_strip_vp_indexed(s_d3d.current_rsx_state, first, count, 1, 0);
     else {
         ps3_tl_end(8);
         static int _skip = 0;
