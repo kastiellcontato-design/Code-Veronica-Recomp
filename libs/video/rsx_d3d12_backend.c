@@ -936,6 +936,8 @@ static void subvp_capture(u32 fi)
         }
         D3D12_RESOURCE_BARRIER bb[2] = {0};
         bb[0].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+static int s_rtnew_dump = 0;      /* CV_SMALLFRAME: frames to dump after an RT was (re)created */
+static int s_gameplay_seen = 0;   /* a 3D frame (>1000 records) went by: CV_SMALLFRAME */
         bb[0].Transition.pResource   = s_d3d.render_targets[fi];
         bb[0].Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
         bb[0].Transition.StateAfter  = D3D12_RESOURCE_STATE_COPY_SOURCE;
@@ -6895,6 +6897,7 @@ static int off_rt_get(u32 off, u32 w, u32 h, u32 rsx_fmt)
         u32 src = cellGcmResolveOffset(off);
         if (vm_base && src != 0xFFFFFFFFu) {
             D3D12_HEAP_PROPERTIES hu = {0}; hu.Type = D3D12_HEAP_TYPE_UPLOAD;
+    u32 dbg_evicted = 0; int dbg_why = 0;   /* CV_SMALLFRAME log: 0 new, 1 resize, 2 evict */
             D3D12_RESOURCE_DESC bd = {0};
             bd.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
             bd.Width = (u64)pitch * ph; bd.Height = 1; bd.DepthOrArraySize = 1;
@@ -6907,9 +6910,11 @@ static int off_rt_get(u32 off, u32 w, u32 h, u32 rsx_fmt)
                 void* mp = NULL; D3D12_RANGE nr = {0,0};
                 if (SUCCEEDED(r->up->lpVtbl->Map(r->up, 0, &nr, &mp)) && mp) {
                     const u8* sp = vm_base + src;
-                    if (sc != 1.0f) {   /* RES_SCALE: nearest-neighbour upscale */
+                    if (zero_init) memset(mp, 0, (size_t)pitch * ph);
+                    else if (sc != 1.0f) {   /* RES_SCALE: nearest-neighbour upscale */
                         for (u32 y = 0; y < ph; y++) {
                             const u8* srow = sp + (u64)(u32)((float)y / sc) * w * bpp;
+        dbg_why = 1;
                             u8* drow = (u8*)mp + (u64)y * pitch;
                             for (u32 x = 0; x < pw; x++) {
                                 const u8* sx = srow + (u64)(u32)((float)x / sc) * bpp;
@@ -6921,6 +6926,7 @@ static int off_rt_get(u32 off, u32 w, u32 h, u32 rsx_fmt)
                                 } else {
                                     for (u32 k = 0; k < bpp; k += 4) {
                                         dx[k] = sx[k+3]; dx[k+1] = sx[k+2]; dx[k+2] = sx[k+1]; dx[k+3] = sx[k]; }
+            dbg_why = 2; dbg_evicted = s_d3d.off_rt[slot].off;
                                 }
                             }
                         }
@@ -6950,6 +6956,32 @@ static int off_rt_get(u32 off, u32 w, u32 h, u32 rsx_fmt)
                                 drow[x*4+3] = srow[x*4+0];
                             }
                         }
+    /* A surface coming back after it was evicted or resized starts black, not
+     * from guest memory: the GPU drew it, and guest memory only follows the
+     * small surfaces off_rt_writeback_record copies back. Code Veronica's room
+     * load evicts its frame copy at 0x00A9C000; the display pass samples it
+     * before the new frame is copied in, and the stale bytes there flashed on
+     * screen as a rainbow of stripes and dots for one frame. */
+    int zero_init = 0;
+    { static u32 seen[256]; static int nseen = 0;
+      int known = 0;
+      for (int i = 0; i < nseen; i++) if (seen[i] == off) { known = 1; break; }
+      if (!known) { if (nseen < 256) seen[nseen++] = off; }
+      else if (want_fmt != DXGI_FORMAT_R8G8B8A8_UNORM || (u64)w * h > 16384u || sc != 1.0f)
+          zero_init = 1; }
+    { static int lg = -1; if (lg < 0) lg = getenv("CV_SMALLFRAME") ? 1 : 0;
+      static int n = 0;
+      if (lg && s_gameplay_seen && n++ < 400) {
+          extern uint8_t* vm_base; extern u32 cellGcmResolveOffset(u32);
+          u32 src = cellGcmResolveOffset(off), nz = 0;
+          if (vm_base && src != 0xFFFFFFFFu)
+              for (u32 i = 0; i < w * h * 4u; i += 4093) if (vm_base[src + i]) nz++;
+          fprintf(stderr, "[RTNEW] t=%llu off=0x%08X %ux%u dxgi=%u slot=%d %s 0x%08X guest_nonzero=%u%s%c",
+                  (unsigned long long)GetTickCount64(), off, w, h, (u32)want_fmt, slot,
+                  dbg_why == 2 ? "evicted" : dbg_why == 1 ? "resized" : "new", dbg_evicted, nz,
+                  zero_init ? " -> black" : "", 10);
+          s_rtnew_dump = 3;
+      } }
                     }
                     r->up->lpVtbl->Unmap(r->up, 0, NULL);
                     D3D12_TEXTURE_COPY_LOCATION cdst = {0}, csrc = {0};
@@ -9939,6 +9971,32 @@ static void render_frame_impl(void)
                 cdst.PlacedFootprint.Footprint.Height   = r->h;
                 cdst.PlacedFootprint.Footprint.Depth    = 1;
                 cdst.PlacedFootprint.Footprint.RowPitch = pitch;
+    /* CV_SMALLFRAME=<N>: every presented batch of at most N records, record by
+     * record -- the frames around a room load are a handful of draws, and the
+     * one that shows garbage is among them. */
+    { static int mx = -1; if (mx < 0) { const char* e = getenv("CV_SMALLFRAME"); mx = e ? atoi(e) : 0; }
+      static int lines = 0;
+      if (s_rb.count > 1000) s_gameplay_seen = 1;   /* menus and title before it are small too */
+      if (mx > 0 && s_gameplay_seen && s_rb.present && s_rb.count > 0 && s_rb.count <= (u32)mx && lines < 8000) {
+          fprintf(stderr, "[SMALLF] #%llu t=%llu records=%u%c", (unsigned long long)s_d3d.frame_count,
+                  (unsigned long long)GetTickCount64(), s_rb.count, 10);
+          lines++;
+          for (u32 i = 0; i < s_rb.count && lines < 8000; i++, lines++) {
+              const D3D12DrawRecord* r = &s_rb.draws[i];
+              if (r->is_clear) { fprintf(stderr, "[SMALLF]   %u CLEAR rt=0x%08X flags=0x%X c=%.2f,%.2f,%.2f%c",
+                                         i, r->rt_off, r->clr_flags, r->cc[0], r->cc[1], r->cc[2], 10); continue; }
+              if (r->is_copy) { fprintf(stderr, "[SMALLF]   %u COPY 0x%08X -> rt=0x%08X %ux%u%c",
+                                        i, r->copy_src, r->rt_off, r->copy_w, r->copy_h, 10); continue; }
+              fprintf(stderr, "[SMALLF]   %u DRAW rt=0x%08X %ux%u vp=%u,%u %ux%u fp=0x%X n=%u blend=%d",
+                      i, r->rt_off, r->rt_w, r->rt_h, r->vp_x, r->vp_y, r->vp_w, r->vp_h,
+                      r->fp_addr, r->vertex_count, r->blend);
+              for (int u = 0; u < FP_TEX_UNITS; u++)
+                  if (r->tex[u].set)
+                      fprintf(stderr, " t%d=0x%08X(off 0x%08X) %ux%u fmt=0x%02X rt=%d", u, r->tex[u].raw,
+                              r->tex[u].off, r->tex[u].w, r->tex[u].h, r->tex[u].fmt, r->tex_rt[u]);
+              fprintf(stderr, "%c", 10);
+          }
+      } }
                 csrc.pResource = r->res;
                 csrc.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
                 s_d3d.cmd_list->lpVtbl->CopyTextureRegion(s_d3d.cmd_list, &cdst, 0, 0, 0, &csrc, NULL);
@@ -10049,6 +10107,12 @@ skip_dump_consider: ;
                     fprintf(stderr, "[D3D12-IQ][sev=%d id=%d] %s\n",
                             (int)m->Severity, (int)m->ID, m->pDescription);
                     _printed++;
+    /* CELLMARK_DUMP_MAXDRAWS=<N>: only frames of at most N records (loads). */
+    { static int maxd = -1;
+      if (maxd < 0) { const char* e = getenv("CELLMARK_DUMP_MAXDRAWS"); maxd = e ? atoi(e) : 0; }
+      if (maxd > 0 && dumping && s_rb.present && s_rtnew_dump > 0) { s_rtnew_dump--;
+          fprintf(stderr, "[RTNEW] dumping frame after RT creation (%u records)%c", s_dbg_last_draws, 10); }
+      else if (maxd > 0 && (s_dbg_last_draws > (u32)maxd || !s_rb.present || !s_gameplay_seen)) dumping = 0; }
                 }
                 free(m);
             }
