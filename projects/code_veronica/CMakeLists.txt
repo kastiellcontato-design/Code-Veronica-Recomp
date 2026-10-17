@@ -264,7 +264,7 @@ endif()
 # title's own artwork and are not in the repository; without them the launcher
 # draws a plain banner and the exe keeps the default icon.
 if(WIN32)
-    target_sources(${PROJECT_NAME} PRIVATE native_pc_menu.cpp boot_skip.cpp cv_test_tools.cpp)
+    target_sources(${PROJECT_NAME} PRIVATE native_pc_menu.cpp boot_skip.cpp cv_test_tools.cpp cv_native_libc.cpp)
     file(GLOB LAUNCHER_ART CONFIGURE_DEPENDS
          "${CMAKE_CURRENT_SOURCE_DIR}/launcher_art/*.png"
          "${CMAKE_CURRENT_SOURCE_DIR}/launcher_art/*.jpg")

@@ -2219,6 +2219,54 @@ void vm_write64(uint64_t a, uint64_t v) {
     barrier_watch_hit((uint32_t)a + 4, (uint32_t)v,         4, __builtin_return_address(0));
     if (vm_oob((uint32_t)a,8) || vm_null_store((uint32_t)a, (uint32_t)(v >> 32), 8, __builtin_return_address(0))) return;
     v = __builtin_bswap64(v); VM_WRITE_COH(a, &v, 8); }
+
+/* Guest memset/memmove done natively, for a title's lifted libc routines:
+ * the lifted loops call vm_write64 per 8 bytes. Same rules as those stores:
+ * a line an SPU holds a reservation on is written under the lockline and
+ * notified; the diagnostics, the null-page guard and the bounds guard keep
+ * the store-by-store path. Byte values need no swapping. */
+static int vm_bulk_plain(uint32_t a, uint32_t n)
+{
+    return !vm_diag() && a >= 0x1000u && !g_null_sweep_hi && !ppu_vm_size &&
+           (uint64_t)a + n <= 0x100000000ull;
+}
+void ppu_vm_fill(uint32_t a, uint8_t c, uint32_t n)
+{
+    if (!vm_bulk_plain(a, n)) { for (uint32_t i = 0; i < n; i++) vm_write8(a + i, c); return; }
+    if (!s_coh_armed) { memset(vm_base + a, c, n); return; }
+    while (n) {
+        const uint32_t k = ((a | 127u) + 1u - a) < n ? ((a | 127u) + 1u - a) : n;
+        if (vm_coh_reserved(a)) {
+            spu_lockline_lock(); memset(vm_base + a, c, k); spu_coh_notify_write(a); spu_lockline_unlock();
+        } else memset(vm_base + a, c, k);
+        a += k; n -= k;
+    }
+}
+void ppu_vm_move(uint32_t d, uint32_t s, uint32_t n)
+{
+    if (!n) return;
+    if (!vm_bulk_plain(d, n) || (uint64_t)s + n > 0x100000000ull) {
+        if (d <= s || d >= s + n) for (uint32_t i = 0; i < n; i++) vm_write8(d + i, vm_read8(s + i));
+        else for (uint32_t i = n; i-- > 0;) vm_write8(d + i, vm_read8(s + i));
+        return;
+    }
+    int reserved = 0;
+    if (s_coh_armed)
+        for (uint32_t l = d >> 7; l <= (d + n - 1) >> 7 && !reserved; l++) reserved = vm_coh_reserved(l << 7);
+    if (!reserved) { memmove(vm_base + d, vm_base + s, n); return; }
+    /* Some destination line is reserved: copy the source first (it may
+     * overlap), then store line by line. */
+    uint8_t stack_buf[4096];
+    uint8_t* tmp = n <= sizeof stack_buf ? stack_buf : (uint8_t*)malloc(n);
+    if (!tmp) { for (uint32_t i = 0; i < n; i++) vm_write8(d + i, vm_read8(s + i)); return; }
+    memcpy(tmp, vm_base + s, n);
+    for (uint32_t o = 0; o < n;) {
+        const uint32_t a = d + o, k = ((a | 127u) + 1u - a) < n - o ? ((a | 127u) + 1u - a) : n - o;
+        VM_WRITE_COH(a, tmp + o, k);
+        o += k;
+    }
+    if (tmp != stack_buf) free(tmp);
+}
 }
 
 /* ---- malloc allocation tracker (PS3_ALLOCTAG) -------------------------------

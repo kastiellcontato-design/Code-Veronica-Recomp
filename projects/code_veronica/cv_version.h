@@ -62,6 +62,11 @@
 #define CV_OG_LOGO         cv_original_001FF7C0
 /* Remove Door Animations (patches.json has the same site) */
 #define CV_DOOR_SKIP_SITE  0x001AE304u
+/* The guest libc memset and memmove, done natively (cv_native_libc.cpp). */
+#define CV_FN_MEMSET  func_007B5568
+#define CV_OG_MEMSET  cv_original_007B5568
+#define CV_FN_MEMMOVE func_007AD0E0
+#define CV_OG_MEMMOVE cv_original_007AD0E0
 #elif defined(CV_REGION_US)
 #define CV_TITLE_ID        "NPUB30467"
 /* SRT: read-only guest state. Source of address facts: Kapdap (MIT). */
@@ -100,6 +105,11 @@
 #define CV_OG_TITLE        cv_original_0002AEEC
 #define CV_OG_LOGO         cv_original_001FF46C
 #define CV_DOOR_SKIP_SITE  0x001AE25Cu
+/* The guest libc memset and memmove, done natively (cv_native_libc.cpp). */
+#define CV_FN_MEMSET  func_007B4C78
+#define CV_OG_MEMSET  cv_original_007B4C78
+#define CV_FN_MEMMOVE func_007AC7F0
+#define CV_OG_MEMMOVE cv_original_007AC7F0
 #else
 #define CV_TITLE_ID        "NPEB00553"
 /* SRT: read-only guest state. Source of address facts: Kapdap (MIT). */
@@ -138,4 +148,9 @@
 #define CV_OG_TITLE        cv_original_0002B35C
 #define CV_OG_LOGO         cv_original_0020140C
 #define CV_DOOR_SKIP_SITE  0x001AFCCCu
+/* The guest libc memset and memmove, done natively (cv_native_libc.cpp). */
+#define CV_FN_MEMSET  func_007B6C38
+#define CV_OG_MEMSET  cv_original_007B6C38
+#define CV_FN_MEMMOVE func_007AE7B0
+#define CV_OG_MEMMOVE cv_original_007AE7B0
 #endif
