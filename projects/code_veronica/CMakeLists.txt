@@ -264,7 +264,7 @@ endif()
 # title's own artwork and are not in the repository; without them the launcher
 # draws a plain banner and the exe keeps the default icon.
 if(WIN32)
-    target_sources(${PROJECT_NAME} PRIVATE native_pc_menu.cpp boot_skip.cpp)
+    target_sources(${PROJECT_NAME} PRIVATE native_pc_menu.cpp boot_skip.cpp cv_test_tools.cpp)
     file(GLOB LAUNCHER_ART CONFIGURE_DEPENDS
          "${CMAKE_CURRENT_SOURCE_DIR}/launcher_art/*.png"
          "${CMAKE_CURRENT_SOURCE_DIR}/launcher_art/*.jpg")
@@ -463,4 +463,12 @@ if(WIN32)
     elseif(CV_REGION_LC STREQUAL "us")
         target_compile_definitions(code_veronica_srt_tests PRIVATE CV_REGION_US=1)
     endif()
+endif()
+
+# Optional tests of host map commands against isolated synthetic guest memory.
+if(WIN32)
+    add_executable(code_veronica_map_tests EXCLUDE_FROM_ALL tests/test_map_tools.cpp)
+    target_include_directories(code_veronica_map_tests PRIVATE "${RECOMP_DIR}")
+    target_compile_options(code_veronica_map_tests PRIVATE /UNDEBUG)
+    target_link_libraries(code_veronica_map_tests PRIVATE user32 gdi32)
 endif()

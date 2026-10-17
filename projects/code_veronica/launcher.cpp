@@ -40,6 +40,7 @@
 #include "cv_srt_i18n.h"
 #include "cv_launcher_controls.h"
 #include "log_viewer.h"
+#include "cv_test_tools.h"
 
 /* button_icons.cpp: the keycaps' short labels and font, shared with the game. */
 std::wstring cv_key_cap_label(int vk);
@@ -182,6 +183,7 @@ struct Settings {
     std::wstring tex_dir;              /* texture mods (Mods page); empty: "textures" beside the exe */
     std::wstring tex_dump_dir;         /* where dumps go; empty: <tex_dir>\<version>\dump */
     bool tex_replace = false, tex_dump = false;
+    bool test_tools=false; // optional experimental map window, off by default
     bool srt=false;
     bool srt_parts[5]={true,true,true,true,false}; // name, health, time, stats, inventory
     int srt_enemies=3, srt_corner=0, srt_scale=100, srt_language=0, srt_opacity=70, srt_inventory_below=0, srt_window=0, srt_boss_bar=0; // 0 follow, 1 EN, 2 PT-BR; 3..13 other launcher languages
@@ -349,6 +351,7 @@ Settings load_settings()
     if(s.srt_enemies>5&&s.srt_enemies!=99)s.srt_enemies=5;
     s.srt_corner=std::clamp(_wtoi(ini_get(L"srt",L"posicao",L"0").c_str()),0,3);
     s.srt_scale=std::clamp(_wtoi(ini_get(L"srt",L"tamanho",L"100").c_str()),50,200);
+    s.test_tools=_wtoi(ini_get(L"testes",L"mapas",L"0").c_str())!=0;
     s.srt_opacity=std::clamp(_wtoi(ini_get(L"srt",L"opacidade",L"70").c_str()),0,100);
     s.srt_inventory_below=std::clamp(_wtoi(ini_get(L"srt",L"inventario_embaixo",L"0").c_str()),0,1);
     s.srt_window=std::clamp(_wtoi(ini_get(L"srt",L"janela",L"0").c_str()),0,1);
@@ -409,6 +412,7 @@ void save_settings(const Settings& s)
     ini_set(L"launcher", L"idioma", g_lang_pick < 0 ? std::wstring(L"system") : widen(k_lang_id[g_lang_pick]));
     for (int i = 0; i < NPATCHES; i++)
         ini_set(L"patches", widen(k_patches[i].id).c_str(), s.patch[i] ? L"1" : L"0");
+    ini_set(L"testes",L"mapas",s.test_tools?L"1":L"0");
     ini_set(L"srt", L"mostrar",s.srt?L"1":L"0");
     { const wchar_t* keys[]={L"nome",L"vida",L"tempo",L"contadores",L"inventario"};
       for(int i=0;i<5;i++)ini_set(L"srt",keys[i],s.srt_parts[i]?L"1":L"0"); }
@@ -571,6 +575,7 @@ struct UI {
     int fpatch_files = 0; float patch_scroll = 0, patch_scroll_max = 0;
     std::wstring log_msg;   /* after Copy / Save on the Advanced page */
     uint32_t pad_prev[PAD_PHYS_MAX] = {};
+    uint32_t test_combo_prev=0;
     std::vector<Hit> hits;
     std::wstring play_msg;
     int result = 0;              /* 1 = play */
@@ -598,6 +603,7 @@ enum {
     ID_GAME_BROWSE = 500, ID_GAME_OPEN, ID_RAP_BROWSE, ID_RAP_OPEN, ID_SAVE_BROWSE, ID_SAVE_OPEN, ID_SAVE_DEFAULT,
     ID_LAYOUT_PS = 600, ID_LAYOUT_XB, ID_LAYOUT_AUTO, ID_LAYOUT_KB,
     ID_KEY = 700, ID_BTN = 800, ID_RESTORE = 900, ID_PATCH = 1000,  /* + index (keys and buttons: action * slots + slot) */
+    ID_TEST_ENABLE=2500, ID_TEST_OPEN,
     ID_CACHE_CLEAR = 1100, ID_CACHE_OPEN,
     ID_KEY_CLEAR = 1200, ID_BTN_CLEAR = 1300,                      /* + action * slots + slot */
     ID_OVERLAY = 1400, ID_OVERLAY_ITEM = 1410,                     /* + item */
@@ -1014,8 +1020,10 @@ void draw_jogo(Graphics& gr, const Font& head, const Font& body, const Font& fsm
     save_note(gr, T(S_SAVE_NO_MOVE), x + 175, y + 114, fsm);
     button(gr, RectF(x + 175, y + 168, 330, 32), T(S_SAVE_DEFAULT), ID_SAVE_DEFAULT,
            body, false, !g.s.saves.empty());
+    button(gr,RectF(x,y+228,390,32),T(g.s.test_tools?S_TEST_ENABLED:S_TEST_ENABLE),ID_TEST_ENABLE,body);
+    button(gr,RectF(x+404,y+228,260,32),T(S_TEST_OPEN),ID_TEST_OPEN,body,false,g.s.test_tools&&g.running);
     if (g.running)
-        text(gr, T(S_PATHS_RESTART), x, y + 218, body, C_RED_HI,
+        text(gr, T(S_PATHS_RESTART), x, y + 195, body, C_RED_HI,
              StringAlignmentNear, 820, 24);
 }
 
@@ -1808,6 +1816,7 @@ void finish_srt_drag();
 
 void apply_live(bool restore_menu = true)
 {
+    cv_test_tools_enable(g.s.test_tools);
     if (!g.running) return;
     if (g.s.mode != g.applied_mode) {
         g.applied_mode = g.s.mode;
@@ -1853,8 +1862,10 @@ const UINT WM_PC_SETTINGS_READ_SATURATION = WM_APP + 4;
 void menu_hook() { PostMessageW(g.hwnd, WM_TOGGLE_MENU, 0, 0); }   /* game window thread */
 const UINT WM_TOGGLE_TEXTURES = WM_APP + 5;
 const UINT WM_TOGGLE_SRT = WM_APP + 6;
+const UINT WM_TEST_MAPS = WM_APP + 20;
 void key_hook(unsigned vk) { if (vk == VK_F9) PostMessageW(g.hwnd, WM_TOGGLE_TEXTURES, 0, 0);
-    else if(vk==VK_F8)PostMessageW(g.hwnd,WM_TOGGLE_SRT,0,0); }   /* game window thread */
+    else if(vk==VK_F8)PostMessageW(g.hwnd,WM_TOGGLE_SRT,0,0);
+    else if(vk==VK_F7)PostMessageW(g.hwnd,WM_TEST_MAPS,0,0); }   /* game window thread */
 /* F9 in the game or R3+R2 on a controller: texture mods on or off at once,
  * with a notice in the game's corner. The replacements stay loaded while
  * off, so going back and forth to compare is immediate. */
@@ -1938,6 +1949,8 @@ void click(int id)
     }
     else if (id == ID_CACHE_CLEAR && !g.running) g.cache_msg = Tf(S_CACHE_CLEARED_FMT, cache_clear());
     else if (id == ID_CACHE_OPEN) { std::error_code ec; fs::create_directories(cache_dir(), ec); open_in_explorer(cache_dir().wstring()); }
+    else if(id==ID_TEST_ENABLE){g.s.test_tools=!g.s.test_tools;cv_test_tools_enable(g.s.test_tools);changed();}
+    else if(id==ID_TEST_OPEN&&g.running)cv_test_tools_show(g.hwnd,g.s.game,g_lang);
     else if (id == ID_GAME_BROWSE) { auto p = pick(true, g.s.game, nullptr, nullptr); if (!p.empty()) { g.s.game = p; changed(); } }
     else if (id == ID_RAP_BROWSE) { auto p = pick(false, g.s.rap, T(S_RAP_FILTER), L"*.rap"); if (!p.empty()) { g.s.rap = p; changed(); } }
     else if (id == ID_SAVE_BROWSE) { auto p = pick(true, save_folder().wstring(), nullptr, nullptr); if (!p.empty()) { g.s.saves = p; changed(); } }
@@ -2144,6 +2157,10 @@ LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp)
             return 0;
         }
         if (g.running) {   /* L2+R3+R1, all on the same controller, toggles the menu. */
+            uint32_t test_combo=0;
+            for(int i=0;i<PAD_PHYS_MAX;i++){PadPhys p{};if(pad_phys_poll(i,&p)&&cv_launcher_controls::chord_active(p.buttons,cv_launcher_controls::test_chord))test_combo|=1u<<i;}
+            if(test_combo&~g.test_combo_prev)PostMessageW(g.hwnd,WM_TEST_MAPS,0,0);
+            g.test_combo_prev=test_combo;
             uint32_t combo = 0;
             for (int i = 0; i < PAD_PHYS_MAX; i++) {
                 PadPhys p; if (!pad_phys_poll(i, &p)) continue;
@@ -2200,6 +2217,7 @@ LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp)
     if (m == WM_TOGGLE_MENU) { toggle_menu(); return 0; }
     if (m == WM_TOGGLE_TEXTURES) { toggle_textures("F9"); return 0; }
     if(m==WM_TOGGLE_SRT) {toggle_srt();return 0;}
+    if(m==WM_TEST_MAPS) {if(g.running)cv_test_tools_show(g.hwnd,g.s.game,g_lang);return 0;}
     return DefWindowProcW(h, m, wp, lp);
 }
 
@@ -2433,6 +2451,7 @@ DWORD WINAPI launcher_thread(void*)
     GdiplusStartupInput gsi; ULONG_PTR gtok;
     GdiplusStartup(&gtok, &gsi, NULL);
     g.s = load_settings();
+    cv_test_tools_enable(g.s.test_tools);
     set_icon_env();   /* the button capture below reads the layout it implies */
     g.banner = load_png("BANNER");
 
@@ -2459,7 +2478,8 @@ DWORD WINAPI launcher_thread(void*)
         click(ID_PLAY);
     }
     MSG msg;
-    while (GetMessageW(&msg, NULL, 0, 0) > 0) { TranslateMessage(&msg); DispatchMessageW(&msg); }
+    while (GetMessageW(&msg, NULL, 0, 0) > 0) { if(cv_test_tools_message(&msg))continue;TranslateMessage(&msg); DispatchMessageW(&msg); }
+    cv_test_tools_close();
     /* closed before Jogar: the main thread sees this thread end */
     delete g.banner; g.banner = nullptr;
     GdiplusShutdown(gtok);

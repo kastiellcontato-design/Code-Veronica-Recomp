@@ -85,3 +85,9 @@ if "%CV_SRT_TESTS%"=="1" (
   build-release\bin\cv_srt_tests_us.exe || exit /b 1
  )
 )
+
+rem Map test tools: isolated guest-memory and input/dispatch checks.
+if "%CV_MAP_TESTS%"=="1" (
+ cmake --build build-release --target code_veronica_map_tests -j 6 || exit /b 1
+ build-release\bin\code_veronica_map_tests.exe || exit /b 1
+)

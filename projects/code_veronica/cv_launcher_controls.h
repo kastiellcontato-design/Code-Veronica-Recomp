@@ -4,6 +4,7 @@
 #include <cstdint>
 #include "../../libs/input/pad_phys.h"
 namespace cv_launcher_controls {
+constexpr uint32_t test_chord=(1u<<PB_L3)|(1u<<PB_R3)|(1u<<PB_NORTH);
 constexpr uint32_t srt_chord=(1u<<PB_L3)|(1u<<PB_R1)|(1u<<PB_EAST);
 constexpr uint32_t menu_chord=(1u<<PB_L2)|(1u<<PB_R3)|(1u<<PB_R1);
 constexpr bool chord_active(uint32_t buttons,uint32_t chord) {return (buttons&chord)==chord;}

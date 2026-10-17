@@ -64,6 +64,7 @@ enum StrId {
     S_SRT_INV_POS, S_SRT_INV_SIDE, S_SRT_INV_BELOW,
     S_SRT_SHOW_IN, S_SRT_IN_GAME, S_SRT_IN_WINDOW, S_SRT_WINDOW_HINT,
     S_SRT_BOSS_BAR, S_SRT_BOSS_PANEL, S_SRT_BOSS_TOP, S_SRT_BOSS_BOTTOM,
+    S_TEST_ENABLE, S_TEST_ENABLED, S_TEST_OPEN,
     S_COUNT
 };
 
@@ -229,6 +230,9 @@ static const wchar_t* const k_str_pt[] = {
     L"No painel",
     L"No centro, em cima",
     L"No centro, embaixo",
+    L"Ativar mapas de teste (F7)",
+    L"Mapas de teste: ativados (F7)",
+    L"Abrir lista de mapas",
 };
 static_assert(sizeof k_str_pt / sizeof k_str_pt[0] == S_COUNT, "k_str_pt: one text per StrId");
 
@@ -394,6 +398,9 @@ static const wchar_t* const k_str_en[] = {
     L"In the panel",
     L"Centre, top",
     L"Centre, bottom",
+    L"Enable test maps (F7)",
+    L"Test maps: enabled (F7)",
+    L"Open map list",
 };
 static_assert(sizeof k_str_en / sizeof k_str_en[0] == S_COUNT, "k_str_en: one text per StrId");
 
@@ -559,6 +566,9 @@ static const wchar_t* const k_str_es[] = {
     L"En el panel",
     L"Centro, arriba",
     L"Centro, abajo",
+    L"Activar mapas de prueba (F7)",
+    L"Mapas de prueba: activados (F7)",
+    L"Abrir lista de mapas",
 };
 static_assert(sizeof k_str_es / sizeof k_str_es[0] == S_COUNT, "k_str_es: one text per StrId");
 
@@ -724,6 +734,9 @@ static const wchar_t* const k_str_ja[] = {
     L"パネル内",
     L"中央・上",
     L"中央・下",
+    L"テスト用マップを有効化 (F7)",
+    L"テスト用マップ: 有効 (F7)",
+    L"マップ一覧を開く",
 };
 static_assert(sizeof k_str_ja / sizeof k_str_ja[0] == S_COUNT, "k_str_ja: one text per StrId");
 
@@ -943,6 +956,9 @@ static const wchar_t* const k_str_fr[] = {
     L"Dans le panneau",
     L"Centre, en haut",
     L"Centre, en bas",
+    L"Activer les cartes de test (F7)",
+    L"Cartes de test : activées (F7)",
+    L"Ouvrir la liste des cartes",
 };
 static_assert(sizeof k_str_fr / sizeof k_str_fr[0] == S_COUNT, "k_str_fr: one text per StrId");
 
@@ -1162,6 +1178,9 @@ static const wchar_t* const k_str_de[] = {
     L"Im Panel",
     L"Mitte, oben",
     L"Mitte, unten",
+    L"Testkarten aktivieren (F7)",
+    L"Testkarten: aktiviert (F7)",
+    L"Kartenliste öffnen",
 };
 static_assert(sizeof k_str_de / sizeof k_str_de[0] == S_COUNT, "k_str_de: one text per StrId");
 
@@ -1381,6 +1400,9 @@ static const wchar_t* const k_str_it[] = {
     L"Nel pannello",
     L"Al centro, in alto",
     L"Al centro, in basso",
+    L"Attiva mappe di test (F7)",
+    L"Mappe di test: attive (F7)",
+    L"Apri elenco mappe",
 };
 static_assert(sizeof k_str_it / sizeof k_str_it[0] == S_COUNT, "k_str_it: one text per StrId");
 
@@ -1600,6 +1622,9 @@ static const wchar_t* const k_str_pl[] = {
     L"W panelu",
     L"Środek, u góry",
     L"Środek, na dole",
+    L"Włącz mapy testowe (F7)",
+    L"Mapy testowe: włączone (F7)",
+    L"Otwórz listę map",
 };
 static_assert(sizeof k_str_pl / sizeof k_str_pl[0] == S_COUNT, "k_str_pl: one text per StrId");
 
@@ -1819,6 +1844,9 @@ static const wchar_t* const k_str_tr[] = {
     L"Panelde",
     L"Ortada, üstte",
     L"Ortada, altta",
+    L"Test haritalarını etkinleştir (F7)",
+    L"Test haritaları: etkin (F7)",
+    L"Harita listesini aç",
 };
 static_assert(sizeof k_str_tr / sizeof k_str_tr[0] == S_COUNT, "k_str_tr: one text per StrId");
 
@@ -2038,6 +2066,9 @@ static const wchar_t* const k_str_ar[] = {
     L"في اللوحة",
     L"في الوسط، أعلى",
     L"في الوسط، أسفل",
+    L"تفعيل خرائط الاختبار (F7)",
+    L"خرائط الاختبار: مفعّلة (F7)",
+    L"فتح قائمة الخرائط",
 };
 static_assert(sizeof k_str_ar / sizeof k_str_ar[0] == S_COUNT, "k_str_ar: one text per StrId");
 
@@ -2257,6 +2288,9 @@ static const wchar_t* const k_str_zh[] = {
     L"在面板中",
     L"居中，顶部",
     L"居中，底部",
+    L"启用测试地图 (F7)",
+    L"测试地图：已启用 (F7)",
+    L"打开地图列表",
 };
 static_assert(sizeof k_str_zh / sizeof k_str_zh[0] == S_COUNT, "k_str_zh: one text per StrId");
 
@@ -2476,6 +2510,9 @@ static const wchar_t* const k_str_ko[] = {
     L"패널 안",
     L"가운데 위",
     L"가운데 아래",
+    L"테스트 맵 사용 (F7)",
+    L"테스트 맵: 사용 중 (F7)",
+    L"맵 목록 열기",
 };
 static_assert(sizeof k_str_ko / sizeof k_str_ko[0] == S_COUNT, "k_str_ko: one text per StrId");
 
@@ -2695,6 +2732,9 @@ static const wchar_t* const k_str_ru[] = {
     L"На панели",
     L"По центру, сверху",
     L"По центру, снизу",
+    L"Включить тестовые карты (F7)",
+    L"Тестовые карты: включены (F7)",
+    L"Открыть список карт",
 };
 static_assert(sizeof k_str_ru / sizeof k_str_ru[0] == S_COUNT, "k_str_ru: one text per StrId");
 
