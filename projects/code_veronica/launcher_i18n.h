@@ -65,6 +65,7 @@ enum StrId {
     S_SRT_SHOW_IN, S_SRT_IN_GAME, S_SRT_IN_WINDOW, S_SRT_WINDOW_HINT,
     S_SRT_BOSS_BAR, S_SRT_BOSS_PANEL, S_SRT_BOSS_TOP, S_SRT_BOSS_BOTTOM,
     S_TEST_ENABLE, S_TEST_ENABLED, S_TEST_OPEN,
+    S_FPS_60_DIAG,
     S_COUNT
 };
 
@@ -233,6 +234,7 @@ static const wchar_t* const k_str_pt[] = {
     L"Ativar mapas de teste (F7)",
     L"Mapas de teste: ativados (F7)",
     L"Abrir lista de mapas",
+    L"60 FPS (Experimental)",
 };
 static_assert(sizeof k_str_pt / sizeof k_str_pt[0] == S_COUNT, "k_str_pt: one text per StrId");
 
@@ -401,6 +403,7 @@ static const wchar_t* const k_str_en[] = {
     L"Enable test maps (F7)",
     L"Test maps: enabled (F7)",
     L"Open map list",
+    L"60 FPS (Experimental)",
 };
 static_assert(sizeof k_str_en / sizeof k_str_en[0] == S_COUNT, "k_str_en: one text per StrId");
 
@@ -569,6 +572,7 @@ static const wchar_t* const k_str_es[] = {
     L"Activar mapas de prueba (F7)",
     L"Mapas de prueba: activados (F7)",
     L"Abrir lista de mapas",
+    L"60 FPS (Experimental)",
 };
 static_assert(sizeof k_str_es / sizeof k_str_es[0] == S_COUNT, "k_str_es: one text per StrId");
 
@@ -737,6 +741,7 @@ static const wchar_t* const k_str_ja[] = {
     L"テスト用マップを有効化 (F7)",
     L"テスト用マップ: 有効 (F7)",
     L"マップ一覧を開く",
+    L"60 FPS（実験的）",
 };
 static_assert(sizeof k_str_ja / sizeof k_str_ja[0] == S_COUNT, "k_str_ja: one text per StrId");
 
@@ -959,6 +964,7 @@ static const wchar_t* const k_str_fr[] = {
     L"Activer les cartes de test (F7)",
     L"Cartes de test : activées (F7)",
     L"Ouvrir la liste des cartes",
+    L"60 FPS (expérimental)",
 };
 static_assert(sizeof k_str_fr / sizeof k_str_fr[0] == S_COUNT, "k_str_fr: one text per StrId");
 
@@ -1181,6 +1187,7 @@ static const wchar_t* const k_str_de[] = {
     L"Testkarten aktivieren (F7)",
     L"Testkarten: aktiviert (F7)",
     L"Kartenliste öffnen",
+    L"60 FPS (Experimentell)",
 };
 static_assert(sizeof k_str_de / sizeof k_str_de[0] == S_COUNT, "k_str_de: one text per StrId");
 
@@ -1403,6 +1410,7 @@ static const wchar_t* const k_str_it[] = {
     L"Attiva mappe di test (F7)",
     L"Mappe di test: attive (F7)",
     L"Apri elenco mappe",
+    L"60 FPS (sperimentale)",
 };
 static_assert(sizeof k_str_it / sizeof k_str_it[0] == S_COUNT, "k_str_it: one text per StrId");
 
@@ -1625,6 +1633,7 @@ static const wchar_t* const k_str_pl[] = {
     L"Włącz mapy testowe (F7)",
     L"Mapy testowe: włączone (F7)",
     L"Otwórz listę map",
+    L"60 FPS (eksperymentalne)",
 };
 static_assert(sizeof k_str_pl / sizeof k_str_pl[0] == S_COUNT, "k_str_pl: one text per StrId");
 
@@ -1847,6 +1856,7 @@ static const wchar_t* const k_str_tr[] = {
     L"Test haritalarını etkinleştir (F7)",
     L"Test haritaları: etkin (F7)",
     L"Harita listesini aç",
+    L"60 FPS (Deneysel)",
 };
 static_assert(sizeof k_str_tr / sizeof k_str_tr[0] == S_COUNT, "k_str_tr: one text per StrId");
 
@@ -2069,6 +2079,7 @@ static const wchar_t* const k_str_ar[] = {
     L"تفعيل خرائط الاختبار (F7)",
     L"خرائط الاختبار: مفعّلة (F7)",
     L"فتح قائمة الخرائط",
+    L"60 FPS (تجريبي)",
 };
 static_assert(sizeof k_str_ar / sizeof k_str_ar[0] == S_COUNT, "k_str_ar: one text per StrId");
 
@@ -2291,6 +2302,7 @@ static const wchar_t* const k_str_zh[] = {
     L"启用测试地图 (F7)",
     L"测试地图：已启用 (F7)",
     L"打开地图列表",
+    L"60 FPS（实验性）",
 };
 static_assert(sizeof k_str_zh / sizeof k_str_zh[0] == S_COUNT, "k_str_zh: one text per StrId");
 
@@ -2513,6 +2525,7 @@ static const wchar_t* const k_str_ko[] = {
     L"테스트 맵 사용 (F7)",
     L"테스트 맵: 사용 중 (F7)",
     L"맵 목록 열기",
+    L"60 FPS (실험적)",
 };
 static_assert(sizeof k_str_ko / sizeof k_str_ko[0] == S_COUNT, "k_str_ko: one text per StrId");
 
@@ -2735,6 +2748,7 @@ static const wchar_t* const k_str_ru[] = {
     L"Включить тестовые карты (F7)",
     L"Тестовые карты: включены (F7)",
     L"Открыть список карт",
+    L"60 FPS (эксперим.)",
 };
 static_assert(sizeof k_str_ru / sizeof k_str_ru[0] == S_COUNT, "k_str_ru: one text per StrId");
 

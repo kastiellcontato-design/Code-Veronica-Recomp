@@ -171,6 +171,7 @@ struct Settings {
     int mode = 0;          /* 0 janela, 1 sem borda, 2 tela cheia */
     int res = 1;           /* index into k_res */
     int aa = 0;            /* anti-aliasing: 0 off, 1 FXAA, 2 SMAA */
+    int fps = 0;           /* 0 the original 30; 1 unlocked 60 to measure maps (runs fast) */
     int brightness = 0;   /* -80..80, zero leaves the image unchanged */
     int contrast = 100;   /* 50..180 percent */
     int saturation = 100; /* 0..200 percent */
@@ -207,6 +208,7 @@ const char* k_mode_env[] = { "window", "borderless", "fullscreen" };
 std::wstring res_name(int i) { return i == 1 ? T(S_RES_NATIVE) : k_res[i].name; }
 std::wstring mode_name(int i) { return T(S_MODE_WINDOW + i); }
 std::wstring aa_name(int i) { return T(S_AA_OFF + i); }
+std::wstring fps_name(int i) { return T(i ? S_FPS_60_DIAG : S_FPS_ORIG); }
 
 /* Game patches (projects/code_veronica/patches.json, lifted as switchable
  * sites): id = the runtime flag name. */
@@ -316,6 +318,7 @@ Settings load_settings()
     s.mode   = _wtoi(ini_get(L"tela", L"modo", L"0").c_str());
     s.res    = _wtoi(ini_get(L"tela", L"resolucao", L"1").c_str());
     s.aa     = _wtoi(ini_get(L"tela", L"antialias", L"0").c_str());
+    s.fps    = _wtoi(ini_get(L"tela", L"fps", L"0").c_str()) == 1;
     s.brightness = _wtoi(ini_get(L"tela", L"brilho", L"0").c_str());
     s.contrast = _wtoi(ini_get(L"tela", L"contraste", L"100").c_str());
     s.saturation = _wtoi(ini_get(L"tela", L"saturacao", L"100").c_str());
@@ -405,6 +408,7 @@ void save_settings(const Settings& s)
     ini_set(L"tela", L"modo", std::to_wstring(s.mode));
     ini_set(L"tela", L"resolucao", std::to_wstring(s.res));
     ini_set(L"tela", L"antialias", std::to_wstring(s.aa));
+    ini_set(L"tela", L"fps", std::to_wstring(s.fps));
     ini_set(L"tela", L"brilho", std::to_wstring(s.brightness));
     ini_set(L"tela", L"contraste", std::to_wstring(s.contrast));
     ini_set(L"tela", L"saturacao", std::to_wstring(s.saturation));
@@ -597,7 +601,7 @@ UI g;
 /* ids */
 enum {
     ID_NAV = 100,               /* + page */
-    ID_DD_MODE = 200, ID_DD_RES = 201, ID_DD_AA = 202, ID_DD_LANG = 203, ID_DD_ITEM = 300,  /* + item index */
+    ID_DD_MODE = 200, ID_DD_RES = 201, ID_DD_AA = 202, ID_DD_LANG = 203, ID_DD_FPS = 204, ID_DD_ITEM = 300,  /* + item index */
     ID_DD_UP = 390, ID_DD_DOWN = 391,
     ID_PLAY = 400, ID_RESUME, ID_QUIT,
     ID_GAME_BROWSE = 500, ID_GAME_OPEN, ID_RAP_BROWSE, ID_RAP_OPEN, ID_SAVE_BROWSE, ID_SAVE_OPEN, ID_SAVE_DEFAULT,
@@ -912,12 +916,12 @@ void draw_inicio(Graphics& gr, const Font& head, const Font& body, const Font& c
     text(gr, T(S_DISPLAY_MODE), x, y, body, C_TEXT, StringAlignmentNear, 200, 30);
     dropdown(gr, RectF(x + 210, y, 200, 30), mode_name(g.s.mode), ID_DD_MODE, body);
     text(gr, T(S_FRAME_LIMIT), x + 450, y, body, C_TEXT, StringAlignmentNear, 180, 30);
-    dropdown(gr, RectF(x + 630, y, 150, 30), T(S_FPS_ORIG), -1, body, false);
+    dropdown(gr, RectF(x + 630, y, 180, 30), fps_name(g.s.fps), g.running ? -1 : ID_DD_FPS, body, !g.running);
     y += 44;
     text(gr, T(S_RENDER_RES), x, y, body, C_TEXT, StringAlignmentNear, 205, 30);
     dropdown(gr, RectF(x + 210, y, 200, 30), res_name(g.s.res), ID_DD_RES, body);
     text(gr, T(S_AA), x + 450, y, body, C_TEXT, StringAlignmentNear, 180, 30);
-    dropdown(gr, RectF(x + 630, y, 150, 30), aa_name(g.s.aa), ID_DD_AA, body);
+    dropdown(gr, RectF(x + 630, y, 180, 30), aa_name(g.s.aa), ID_DD_AA, body);
     y += 54;
     bool o1, o2;
     std::wstring m1 = check_game(g.s.game, &o1), m2 = check_rap(g.s.rap, &o2);
@@ -1670,6 +1674,7 @@ void paint(HDC hdc)
         if (g.open_dd == ID_DD_MODE) { for (int i = 0; i < 3; i++) items.push_back(mode_name(i)); sel = g.s.mode; }
         else if (g.open_dd == ID_DD_RES) { for (int i = 0; i < 5; i++) items.push_back(res_name(i)); sel = g.s.res; }
         else if (g.open_dd == ID_DD_AA) { for (int i = 0; i < 3; i++) items.push_back(aa_name(i)); sel = g.s.aa; }
+        else if (g.open_dd == ID_DD_FPS) { for (int i = 0; i < 2; i++) items.push_back(fps_name(i)); sel = g.s.fps; }
         else if (g.open_dd == ID_DD_SRT_ENEMIES) { for(int i=0;i<=5;i++)items.push_back(srt_enemy_value(i));items.push_back(T(S_SRT_ALL));sel=g.s.srt_enemies==99?6:g.s.srt_enemies; }
         else if (g.open_dd == ID_DD_SRT_CORNER) {for(int i=0;i<4;i++)items.push_back(T(S_SRT_TL+i));sel=g.s.srt_corner;}
         else if (g.open_dd == ID_DD_SRT_INVPOS) { items = { T(S_SRT_INV_SIDE), T(S_SRT_INV_BELOW) }; sel = g.s.srt_inventory_below; }
@@ -1919,6 +1924,7 @@ void click(int id)
             if (g.open_dd == ID_DD_MODE) g.s.mode = i;
             else if (g.open_dd == ID_DD_RES) g.s.res = i;
             else if (g.open_dd == ID_DD_AA) g.s.aa = i;
+            else if (g.open_dd == ID_DD_FPS) g.s.fps = i;
             else if(g.open_dd==ID_DD_SRT_ENEMIES)g.s.srt_enemies=i==6?99:i;
             else if(g.open_dd==ID_DD_SRT_CORNER)g.s.srt_corner=i;
             else if(g.open_dd==ID_DD_SRT_LANGUAGE)g.s.srt_language=i;
@@ -1940,7 +1946,7 @@ void click(int id)
         if (g.page == P_MODS) g.tex_rep = -1;        /* count the textures again */
     }
     else if (id >= ID_PATCH && id < ID_PATCH + NPATCHES) { g.s.patch[id - ID_PATCH] ^= true; changed(); }
-    else if (id == ID_DD_MODE || id == ID_DD_RES || id == ID_DD_AA || id == ID_DD_LANG || id==ID_DD_SRT_ENEMIES || id==ID_DD_SRT_CORNER || id==ID_DD_SRT_LANGUAGE || id == ID_DD_OV_CORNER || id == ID_DD_OV_LAYOUT || id == ID_DD_SRT_INVPOS || id == ID_DD_SRT_WINDOW || id == ID_DD_SRT_BOSSBAR) {
+    else if (id == ID_DD_MODE || id == ID_DD_RES || id == ID_DD_AA || id == ID_DD_FPS || id == ID_DD_LANG || id==ID_DD_SRT_ENEMIES || id==ID_DD_SRT_CORNER || id==ID_DD_SRT_LANGUAGE || id == ID_DD_OV_CORNER || id == ID_DD_OV_LAYOUT || id == ID_DD_SRT_INVPOS || id == ID_DD_SRT_WINDOW || id == ID_DD_SRT_BOSSBAR) {
         g.open_dd = id; g.dd_scroll = 0;
         if (id == ID_DD_LANG && g_lang_pick >= 0)   /* open with the chosen language in view */
             for (int i = 0; i < LANG_COUNT; i++)
@@ -2396,6 +2402,15 @@ void start_game()
     set_env("RES_SCALE", k_res[s.res].scale);
     set_env("WINDOW_MODE", k_mode_env[s.mode]);
     set_env("AA_MODE", std::to_string(s.aa));
+    /* Unlocked 60 (cv_fps_experimental.cpp, raw benchmark): the game logic
+     * still steps once per drawn frame, so it runs fast. Only this process
+     * sees it; the ELF and the save stay as they are. 30 leaves the
+     * environment alone, as before this option existed. */
+    if (s.fps == 1) {
+        set_env("CV_FPS_TEST_60", "1");
+        set_env("CV_FPS_BENCHMARK_RAW", "1");
+        set_env("CV_RENDER_INTERPOLATION", "");
+    }
     set_env("CV_BRIGHTNESS", std::to_string(s.brightness));
     set_env("CV_CONTRAST", std::to_string(s.contrast));
     set_env("CV_SATURATION", std::to_string(s.saturation));

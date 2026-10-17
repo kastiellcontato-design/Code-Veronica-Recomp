@@ -44,15 +44,16 @@ rem set "PS3_POLLTOP=10"
 set "GAME_EXE=%~dp0build-release\bin\MyGameRecomp.exe"
 set "GAME_ELF=%PS3_VFS_ROOT%\USRDIR\EBOOT.elf"
 set "GAME_LOG=%~dp0run-log-release.txt"
-rem The normal entry point always preserves FXC. DXC is opt-in per process;
-rem it never becomes a saved launcher setting or leaks into the next launch.
-set "SHADER_COMPILER=fxc"
+rem DXC is the normal shader compiler (tested better than FXC). FXC stays
+rem available per process with --fxc; neither is saved in the launcher.
+set "SHADER_COMPILER=dxc"
+if /i "%~1"=="--fxc" set "SHADER_COMPILER=fxc"
 if /i "%~1"=="--dxc-experimental" (
  set "SHADER_COMPILER=dxc"
  set "GAME_LOG=%~dp0run-log-dxc-experimental.txt"
  title Code Veronica - DXC experimental
  echo DXC EXPERIMENTAL: pode apresentar falhas nas sombras.
- echo Para voltar ao FXC, feche o jogo e use o iniciador normal.
+ echo Para usar o FXC, feche o jogo e rode este atalho com --fxc.
 )
 rem Limpar opcoes de diagnostico que podem alterar o desenho.
 for /f "delims==" %%V in ('set FP_ 2^>nul') do set "%%V="
