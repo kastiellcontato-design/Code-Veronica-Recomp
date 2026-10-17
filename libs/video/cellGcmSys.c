@@ -3309,7 +3309,8 @@ s32 cellGcmBindZcull(u8 index)
     if (index >= CELL_GCM_MAX_ZCULL_COUNT)
         return CELL_GCM_ERROR_INVALID_VALUE;
 
-    printf("[cellGcmSys] BindZcull(index=%u)\n", index);
+    /* The game binds its three zcull areas every frame: log the first few only. */
+    { static u32 n = 0; if (n++ < 8) printf("[cellGcmSys] BindZcull(index=%u)\n", index); }
     s_zcull[index].bound = 1;
     return CELL_OK;
 }

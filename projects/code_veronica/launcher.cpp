@@ -180,7 +180,7 @@ struct Settings {
     bool overlay = false;  /* the performance overlay (rsx_perf_overlay.h) */
     int overlay_items = 3; /* bits of k_overlay_items: FPS and frame time */
     int overlay_corner = 1, overlay_layout = 0;   /* 0 tl, 1 tr, 2 bl, 3 br; 0 a row, 1 a column */
-    bool shader_opt[5] = { true, true, true, true, true };   /* k_shader_opts, Desempenho page */
+    bool shader_opt[6] = { true, true, true, true, true, false };   /* k_shader_opts, Desempenho page */
     std::wstring tex_dir;              /* texture mods (Mods page); empty: "textures" beside the exe */
     std::wstring tex_dump_dir;         /* where dumps go; empty: <tex_dir>\<version>\dump */
     bool tex_replace = false, tex_dump = false;
@@ -233,6 +233,9 @@ const ShaderOpt k_shader_opts[] = {
     { L"compilar_em_segundo_plano", S_SH_BUILD_T, S_SH_BUILD_D },
     { L"carregamento_paralelo", S_SH_PAR_T, S_SH_PAR_D },
     { L"mostrar_progresso", S_SH_NOTE_T, S_SH_NOTE_D },
+    /* RSX_GPU_VFETCH: the vertex shader converts the guest's vertices. Off by
+     * default until it has been through the whole game; read at start. */
+    { L"vertices_na_gpu", S_VF_T, S_VF_D },
 };
 const int NSHADER_OPTS = sizeof k_shader_opts / sizeof k_shader_opts[0];
 
@@ -362,7 +365,7 @@ Settings load_settings()
     s.srt_language=std::clamp(_wtoi(ini_get(L"srt",L"idioma",L"0").c_str()),0,int(LANG_COUNT));
     s.overlay = _wtoi(ini_get(L"overlay", L"mostrar", L"0").c_str()) != 0;
     for (int i = 0; i < NSHADER_OPTS; i++)
-        s.shader_opt[i] = _wtoi(ini_get(L"shaders", k_shader_opts[i].key, L"1").c_str()) != 0;
+        s.shader_opt[i] = _wtoi(ini_get(L"shaders", k_shader_opts[i].key, i == 5 ? L"0" : L"1").c_str()) != 0;
     s.tex_dir = ini_get(L"texturas", L"pasta", L"");
     s.tex_dump_dir = ini_get(L"texturas", L"pasta_extraidas", L"");
     s.tex_replace = _wtoi(ini_get(L"texturas", L"substituir", L"0").c_str()) != 0;
@@ -1569,9 +1572,10 @@ void draw_desempenho(Graphics& gr, const Font& head, const Font& body, const Fon
     text(gr, T(S_SH_HINT), x, y + 32, fsm, C_DIM, StringAlignmentNear, w, 20);
     y += 74;
     for (int i = 0; i < NSHADER_OPTS; i++) {
-        option_card(gr, x, y, w, 92, g.s.shader_opt[i], ID_SHADER_OPT + i,
+        /* Six cards end above the Jogar button (its top is H - 78). */
+        option_card(gr, x, y, w, 86, g.s.shader_opt[i], ID_SHADER_OPT + i,
                     T(k_shader_opts[i].title), T(k_shader_opts[i].desc), body, fsm);
-        y += 104;
+        y += 94;
     }
 }
 
@@ -2034,6 +2038,7 @@ void click(int id)
     else if(id>=ID_SRT_PART&&id<ID_SRT_PART+5) {g.s.srt_parts[id-ID_SRT_PART]^=true;set_srt_env();changed();}
     else if (id == ID_OVERLAY) { g.s.overlay = !g.s.overlay; set_overlay_env(); changed(); }
     else if (id >= ID_SHADER_OPT && id < ID_SHADER_OPT + NSHADER_OPTS) {
+        if (id - ID_SHADER_OPT == 5 && g.running) return;   /* fixed once the game runs */
         g.s.shader_opt[id - ID_SHADER_OPT] ^= true;
         set_env("SHADER_PRELOAD_NOTE", g.s.shader_opt[4] ? "1" : "0");   /* the note, at once */
         changed();
@@ -2428,6 +2433,7 @@ void start_game()
     set_env("FP_ASYNC", s.shader_opt[2] ? "1" : "0");
     set_env("SHADER_PRELOAD_PARALLEL", s.shader_opt[3] ? "1" : "0");
     set_env("SHADER_PRELOAD_NOTE", s.shader_opt[4] ? "1" : "0");
+    if (s.shader_opt[5]) set_env("RSX_GPU_VFETCH", "1");   /* off: as before (a shortcut may still set it) */
     set_texture_env();
     set_srt_env();
     set_note_text_env();
