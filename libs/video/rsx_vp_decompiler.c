@@ -595,6 +595,13 @@ static int rsx_vp_decompile_impl(
         "    float4 fog:FOG;\n"
         "    float4 t0:TEXCOORD0; float4 t1:TEXCOORD1; float4 t2:TEXCOORD2; float4 t3:TEXCOORD3;\n"
         "    float4 t4:TEXCOORD4; float4 t5:TEXCOORD5; float4 t6:TEXCOORD6; float4 t7:TEXCOORD7;\n"
+        /* RSX clips HPOS against -w <= z <= w (before the viewport) and clamps
+         * the depth that lands outside [0, 1]; D3D's own depth clip (0 <= z')
+         * cut away everything between the near plane and z = 0 -- Code
+         * Veronica's flooded room lost the water in front of the camera. The
+         * pipeline turns D3D's depth clip off and clips here instead. Last, so
+         * the pixel shaders' input registers are unchanged. */
+        "    float2 zclip:SV_ClipDistance0;\n"
         "};\n"
         /* b0: 512 vec4 transform constants + the RSX viewport transform,
          * pre-mapped by the harness to D3D clip space:
@@ -668,6 +675,7 @@ static int rsx_vp_decompile_impl(
         "    Out.col0 = o[1]; Out.col1 = o[2]; Out.fog = o[5].xxxx;\n"
         "    Out.t0=o[7];  Out.t1=o[8];  Out.t2=o[9];  Out.t3=o[10];\n"
         "    Out.t4=o[11]; Out.t5=o[12]; Out.t6=o[13]; Out.t7=o[14];\n"
+        "    Out.zclip = float2(_p.z + _p.w, _p.w - _p.z);\n"
         "    return Out;\n"
         "}\n");
 

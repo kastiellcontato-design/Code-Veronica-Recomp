@@ -540,8 +540,43 @@ static CellGcmTileInfo s_tiles[CELL_GCM_MAX_TILE_COUNT];
 /* Zcull configuration (8 zcull regions) */
 static CellGcmZcullInfo s_zcull[CELL_GCM_MAX_ZCULL_COUNT];
 
-/* Report data area (256 slots, each 16 bytes) */
+/* Report data area (16 bytes per slot). The host table answers the
+ * cellGcmGetReport* value calls; the same reports are mirrored, big-endian,
+ * into GUEST memory -- the title's own report area (IO 0x0E000000) when it
+ * mapped one, else GCM_REPORT_GUEST_BASE -- because a title that takes a
+ * report's address (cellGcmGetReportDataAddress*) reads the slot itself. A host
+ * pointer handed to it was read as a guest address: Code Veronica's occlusion
+ * queries then read 0 and culled every underwater object, so the flooded
+ * rooms had no riverbed and their water no refraction. */
 static CellGcmReportData s_report_data[CELL_GCM_MAX_REPORT_COUNT];
+#define GCM_REPORT_GUEST_BASE (VM_HLE_INJECT_BASE + 0x100000u)   /* 1 MB */
+#define GCM_REPORT_IO_BASE 0x0E000000u   /* RSX's main-memory report area */
+static u32 gcm_report_guest(u32 index)
+{
+    /* Where the title mapped IO 0x0E000000 (cellGcmMapEaIoAddress), the slot is
+     * its own memory, as on hardware; Code Veronica maps it at 0x44000000. */
+    const u32 io = GCM_REPORT_IO_BASE + index * (u32)sizeof(CellGcmReportData);
+    for (int i = 0; i < CELL_GCM_MAX_IO_MAPPINGS; i++)
+        if (s_io_mappings[i].active && io >= s_io_mappings[i].io &&
+            io - s_io_mappings[i].io + (u32)sizeof(CellGcmReportData) <= s_io_mappings[i].size)
+            return s_io_mappings[i].ea + (io - s_io_mappings[i].io);
+    static int ready = 0;
+    if (!ready) {
+        ready = vm_commit(GCM_REPORT_GUEST_BASE,
+                          CELL_GCM_MAX_REPORT_COUNT * (u32)sizeof(CellGcmReportData)) == CELL_OK ? 1 : -1;
+        if (ready < 0) printf("[cellGcmSys] report area could not be committed%c", 10);
+    }
+    return ready > 0 ? GCM_REPORT_GUEST_BASE + index * (u32)sizeof(CellGcmReportData) : 0u;
+}
+static void gcm_report_store(u32 index)
+{
+    const u32 at = gcm_report_guest(index);
+    if (!at) return;
+    vm_write32(at + 0, (u32)(s_report_data[index].timestamp >> 32));
+    vm_write32(at + 4, (u32)s_report_data[index].timestamp);
+    vm_write32(at + 8, s_report_data[index].value);
+    vm_write32(at + 12, 0);
+}
 
 /* Label area (256 labels, each u32). Labels live in GUEST memory so the
  * recompiled game can poll them via vm_read32; cellGcmGetLabelAddress returns a
@@ -2247,6 +2282,7 @@ static void gcm_rsx_process_fifo_unlocked(void)
                         if (idx < CELL_GCM_MAX_REPORT_COUNT) {
                             s_report_data[idx].timestamp = get_timestamp_ns();
                             s_report_data[idx].value = (v >> 24) == 1u ? 0xFFFFu : 0u;
+                            gcm_report_store(idx);
                         }
                     }
                 } else
@@ -3171,7 +3207,7 @@ CellGcmReportData* cellGcmGetReportDataAddress(u32 index)
         printf("[cellGcmSys] WARNING: GetReportDataAddress index %u out of range\n", index);
         return NULL;
     }
-    return &s_report_data[index];
+    return (CellGcmReportData*)(uintptr_t)gcm_report_guest(index);   /* a GUEST address */
 }
 
 /* NID: 0x97FC4B73 */
@@ -3710,7 +3746,7 @@ CellGcmReportData* cellGcmGetReportDataAddressLocation(u32 index, u32 location)
         printf("[cellGcmSys] WARNING: GetReportDataAddressLocation index %u out of range\n", index);
         return NULL;
     }
-    return &s_report_data[index];
+    return (CellGcmReportData*)(uintptr_t)gcm_report_guest(index);   /* a GUEST address */
 }
 
 /* Get report value at index with location */
