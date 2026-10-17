@@ -20,6 +20,7 @@
 #include "rsx_d3d12_backend.h"
 #include "rsx_primitives.h"
 #include "rsx_vertex_fetch.h"
+#include "rsx_packed16_filter.h"
 #include "rsx_ui_batch.h"
 #include "rsx_texture_layout.h"
 #include "rsx_tex_hook.h"
@@ -198,6 +199,7 @@ typedef struct {
     u32 fp_bytes;              /* exact complete bytecode length, 0 = invalid */
 } D3D12DrawRecord;
 static const u8* fp_snap_ptr(const D3D12DrawRecord* dr);
+static u32 dr_cube_mask(const D3D12DrawRecord* dr);
 static u32 fp_guest_program_size(const u8* src, u32* constants);
 
 /* Offscreen render target (render-to-texture). Persistent across frames --
@@ -1077,6 +1079,24 @@ static u32    s_lock_n  = 0;
  * runs (rsx_d3d12_set_window_mode, Alt+Enter); the switch is applied on the
  * window's own thread. */
 #define WM_RSX_SET_MODE (WM_APP + 0x51)
+/* Opt-in Code Veronica shadow isolation. F10 changes only this process's
+ * shadow visibility term; geometry, depth, light colour and guest data stay.
+ * Reserved b1 metadata lane is used only by these diagnostic shaders. */
+static int s_lighter_probe;
+static volatile LONG s_lighter_shadow_bypass;
+static int lighter_shadow_code(u32 code) {
+    return code == 0x0C121A16u || code == 0x59540949u ||
+           code == 0x4D26314Du;
+}
+static int lighter_probe_key(WPARAM wp, LPARAM lp) {
+    if (!s_lighter_probe || wp != VK_F10) return 0;
+    if (!(lp & ((LPARAM)1 << 30))) {
+        LONG mode = InterlockedXor(&s_lighter_shadow_bypass, 1) ^ 1;
+        fprintf(stderr, "[LIGHTER] F10: shadow visibility %s (light remains on)\n",
+                mode ? "BYPASSED" : "NORMAL");
+    }
+    return 1;
+}
 static int  s_hide_cursor;
 static int  s_wmode;
 static HWND s_backdrop;
@@ -1156,13 +1176,19 @@ static LRESULT CALLBACK d3d12_wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         if (s_backdrop) { DestroyWindow(s_backdrop); s_backdrop = NULL; }
         PostQuitMessage(0);
         return 0;
+    case WM_SYSKEYUP:
+        if (s_lighter_probe && wp == VK_F10) return 0;
+        break;
     case WM_SYSKEYDOWN:
+        /* Windows delivers F10 as a system key, even without Alt. */
+        if (lighter_probe_key(wp, lp)) return 0;
         if (wp == VK_RETURN && !(lp & (1 << 30))) {   /* Alt+Enter: window <-> fullscreen */
             window_apply_mode(hwnd, s_wmode == 0 ? 2 : 0);
             return 0;
         }
         break;
     case WM_KEYDOWN:
+        if (lighter_probe_key(wp, lp)) return 0;
         if (wp == VK_ESCAPE) {
             s_d3d.window_closed = 1;
             DestroyWindow(hwnd);
@@ -2456,6 +2482,19 @@ static void cap_readback_write(ID3D12Resource* res, u32 w, u32 h, u32 dxgi,
     void* mp = NULL; D3D12_RANGE rr = {0, (SIZE_T)pitch * h};
     if (SUCCEEDED(rb->lpVtbl->Map(rb, 0, &rr, &mp)) && mp) {
         cap_write_bmp(path, mp, w, h, pitch, dxgi);
+        /* This title's 3x2 shadow atlas packs two moments into RGBA8.
+         * BMP drops alpha (the first moment's high byte): preserve exact
+         * rows in a capture-only sidecar. No additional GPU copy. */
+        if (dxgi == DXGI_FORMAT_R8G8B8A8_UNORM && w == 768 && h == 512) {
+            char rawpath[600];
+            snprintf(rawpath, sizeof rawpath, "%s.rgba8", path);
+            FILE* raw = fopen(rawpath, "wb");
+            if (raw) {
+                for (u32 y = 0; y < h; y++)
+                    fwrite((const u8*)mp + (size_t)y * pitch, 4, w, raw);
+                fclose(raw);
+            }
+        }
         D3D12_RANGE wr = {0, 0};
         rb->lpVtbl->Unmap(rb, 0, &wr);
     }
@@ -2528,18 +2567,19 @@ static void rsx_capture_frame(u32 fi, u32 ndraws, u32 capidx)
                 if (fp_ucode) {
                     u32 fp_hdr[4];
                     memcpy(fp_hdr, fp_ucode - 16, sizeof fp_hdr);
-                    fprintf(mf, "      fp_snapshot bytes=%u code=%08X source=fp_%08X_%08X.hlsl\n",
-                            fp_hdr[2], fp_hdr[1], r->fp_addr, fp_hdr[1]);
+                    fprintf(mf, "      fp_snapshot bytes=%u code=%08X source=fp_%08X_%08X_c%X_e%d.hlsl\n",
+                            fp_hdr[2], fp_hdr[1], r->fp_addr, fp_hdr[1], dr_cube_mask(r), r->fp_exp32);
                 }
                 fprintf(mf, "      surf tgt=0x%X offA=0x%08X offB=0x%08X clip=%ux%u%c",
                         r->s_tgt, r->s_offa, r->s_offb, r->s_clipw, r->s_cliph, 10);
                 for (int u = 0; u < FP_TEX_UNITS; u++)
                     if (r->tex[u].set)
-                        fprintf(mf, "      t%d off=0x%08X fmt=0x%02X (%s%s) %ux%u remap=0x%04X\n", u,
+                        fprintf(mf, "      t%d off=0x%08X fmt=0x%02X (%s%s) %ux%u remap=0x%04X cube=%d mips=%u addr=0x%08X\n", u,
                                 r->tex[u].off, r->tex[u].fmt,
                                 (r->tex[u].fmt & 0x20) ? "LN" : "SZ",
                                 (r->tex[u].fmt & 0x40) ? ",NR" : "",
-                                r->tex[u].w, r->tex[u].h, r->tex[u].ctrl1 & 0xFFFF);
+                                r->tex[u].w, r->tex[u].h, r->tex[u].ctrl1 & 0xFFFF,
+                                r->tex[u].cube, r->tex[u].mips, r->tex[u].addr);
             }
         }
         fprintf(mf, "--- step snapshots (state before the indicated op) ---\n");
@@ -2597,6 +2637,15 @@ static void rsx_capture_frame(u32 fi, u32 ndraws, u32 capidx)
                 int last = -1;
                 for (int i = 0; i < FP_MAX_K * 4; i++) if (k[i] > 1e-9f || k[i] < -1e-9f) last = i / 4;
                 fprintf(mf, "op%03u fp=0x%08X", d, r->fp_addr);
+                /* Include the probe's reserved lane even though unit 7 is
+                 * intentionally unbound; otherwise its mode is invisible. */
+                if (s_lighter_probe) fprintf(mf, " lighter_probe=%s",
+                    k[-FP_K_BASE + 7*4+3] == -1234.0f ? "BYPASSED" : "NORMAL");
+                /* b1 includes packed-RT interpretation and wrap/gamma modes. */
+                for (int u = 0; u < FP_TEX_UNITS; u++) if (r->tex[u].set) {
+                    const float* t = k - FP_K_BASE + u * 4;
+                    fprintf(mf, " texaddr%d=(%g %g %g %g)", u, t[0], t[1], t[2], t[3]);
+                }
                 for (int i = 0; i <= last && i < FP_MAX_K; i++)
                     fprintf(mf, " k%d=(%g %g %g %g)", i, k[i*4], k[i*4+1], k[i*4+2], k[i*4+3]);
                 fputc('\n', mf);
@@ -2660,7 +2709,7 @@ static void rsx_capture_frame(u32 fi, u32 ndraws, u32 capidx)
         extern u32 rsx_fp_code_hash(const u8*, u32);
         char* fph = NULL;
         u32 fph_cap = 0;
-        struct { u32 addr, code; } seen[512]; int ns = 0;
+        struct { u32 addr, code, cube; int exp32; } seen[512]; int ns = 0;
         for (u32 d = 0; d < ndraws && d < MAX_DRAWS && vm_base; d++) {
             const D3D12DrawRecord* r = &s_rb.draws[d];
             if (r->is_clear || r->is_copy || !r->fp_addr) continue;
@@ -2670,18 +2719,21 @@ static void rsx_capture_frame(u32 fi, u32 ndraws, u32 capidx)
             const u32 bytes = r->fp_bytes ? r->fp_bytes : fp_guest_program_size(ucode, NULL);
             if (!bytes) continue;
             const u32 code = rsx_fp_code_hash(ucode, bytes);
+            const u32 cube = dr_cube_mask(r);
             int dup = 0;
             for (int i = 0; i < ns; i++)
-                if (seen[i].addr == r->fp_addr && seen[i].code == code) dup = 1;
+                if (seen[i].addr == r->fp_addr && seen[i].code == code &&
+                    seen[i].cube == cube && seen[i].exp32 == r->fp_exp32) dup = 1;
             if (dup || ns >= 512) continue;
-            seen[ns].addr = r->fp_addr; seen[ns++].code = code;
+            seen[ns].addr = r->fp_addr; seen[ns].code = code;
+            seen[ns].cube = cube; seen[ns++].exp32 = r->fp_exp32;
             u32 nk = 0;
-            if (rsx_fp_decompile_alloc(ucode, bytes, r->fp_exp32 ? 0x40u : 0u, 0u,
+            if (rsx_fp_decompile_alloc(ucode, bytes, r->fp_exp32 ? 0x40u : 0u, cube,
                                        1, &fph, &fph_cap, &nk) <= 0) continue;
-            snprintf(path, sizeof path, "%s/fp_%08X_%08X.hlsl", dir, r->fp_addr, code);
+            snprintf(path, sizeof path, "%s/fp_%08X_%08X_c%X_e%d.hlsl", dir, r->fp_addr, code, cube, r->fp_exp32);
             FILE* f = fopen(path, "w");
-            if (f) { fprintf(f, "/* first op%03u, %u constants (fp_constants[i] == fp_k[i]) */\n%s",
-                             d, nk, fph);
+            if (f) { fprintf(f, "/* raw translation: first op%03u, %u constants, cube=0x%X, exp32=%d (fp_constants[i] == fp_k[i]); backend sampling helpers not included */\n%s",
+                             d, nk, cube, r->fp_exp32, fph);
                      /* Raw ucode, 16 bytes (one instruction or constant) per line. */
                      const u8* uc = ucode;
                      fprintf(f, "/* raw ucode:\n");
@@ -2789,6 +2841,8 @@ static char s_shader_cache_dir[128] = "shader_cache";
 static BOOL CALLBACK shader_compiler_init(PINIT_ONCE once, PVOID arg, PVOID* context)
 {
     (void)once; (void)arg; (void)context;
+    if (s_lighter_probe)
+        snprintf(s_shader_cache_dir, sizeof s_shader_cache_dir, "shader_cache/lighter-probe1");
     const char* requested = getenv("SHADER_COMPILER");
     if (!requested || _stricmp(requested, "dxc")) {
         fprintf(stderr, "[SHADER] compiler: FXC (default)%c", 10);
@@ -3691,15 +3745,17 @@ static u32 dr_cube_mask(const D3D12DrawRecord* dr)
     if (!en) return 0;
     u32 m = 0;
     for (int u = 0; u < FP_TEX_UNITS; u++) if (dr->tex[u].set && dr->tex[u].cube) m |= 1u << u;
-    /* Bits 16+u: a cube of Y16_X16 lookups, read unfiltered. Code Veronica's
-     * lighter finds the shadow face and its texel through two such cubes;
-     * linear filtering blended indices across face seams and drew black
-     * lines out from the flame. CUBE_LUT_LINEAR=1 keeps them filtered. */
-    { static int lin = -1; if (lin < 0) lin = getenv("CUBE_LUT_LINEAR") ? 1 : 0;
-      if (!lin)
-          for (int u = 0; u < FP_TEX_UNITS; u++)
-              if ((m >> u & 1u) && (dr->tex[u].fmt & 0x9Fu) == 0x95u) m |= 1u << (16 + u); }
     return m;
+}
+
+/* Cube textures are bound as 6-slice Texture2DArray views and sampled face
+ * by face in the shader (rsx_cube), as RSX filters them; RSX_CUBE_SEAMLESS=1
+ * goes back to D3D's TextureCube, which filters across face seams. */
+static int rsx_cube_as_array(void)
+{
+    static int on = -1;
+    if (on < 0) on = getenv("RSX_CUBE_SEAMLESS") ? 0 : 1;
+    return on;
 }
 
 /* Set by vp_get_fp_pso when the program cannot be translated and the draw
@@ -4119,7 +4175,59 @@ static int fp_build_pso(FpJob* j)
         "    if (m & 1u) c.r = l.r; if (m & 2u) c.g = l.g; if (m & 4u) c.b = l.b;\n"
         "    return c;\n"
         "}\n"
-        "#define RSX_TEXOUT(u, x) rsx_texgamma(u, x)\n";
+        "#define RSX_TEXOUT(u, x) rsx_texgamma(u, x)\n"
+        /* Return logical filtered values directly. Re-encoding and rounding
+         * the interpolated moments to UINT16 introduced discontinuities at
+         * carries (e.g. 255 -> 256) and lost sub-LSB variance precision. */
+        RSX_PACKED16_FILTER_HLSL
+        "#define RSX_S2D_OUT(u, x) (x)\n"
+        "float4 rsx_s2d(Texture2D t, SamplerState s, uint u, float2 c) {\n"
+        "    if (u < 8u && (((uint)rsx_texaddr[min(u, 7u)].z) & 128u))\n"
+        "        return float4(rsx_filter_pair16(t, c), 0.0, 1.0);\n"
+        "    return rsx_texgamma(u, t.Sample(s, c));\n"
+        "}\n"
+        /* Cube textures are bound as 6-slice arrays and sampled one face at a
+         * time, filtered within that face (clamped at its edge) as RSX does.
+         * D3D12's own cube sampling filters across face seams; Code Veronica's
+         * lighter reads its shadow atlas through two cube look-up tables
+         * (which tile, and where in it), and blending two faces' entries at a
+         * seam gave positions in no tile at all -- thin dark lines along the
+         * seams. Face selection and orientation are the D3D/GL cube rules. */
+        "float3 rsx_cubeuv(float3 d) {\n"
+        "    float3 a = abs(d); float sc, tc, ma, f;\n"
+        "    if (a.x >= a.y && a.x >= a.z) { ma = a.x; f = d.x >= 0.0 ? 0.0 : 1.0; sc = d.x >= 0.0 ? -d.z : d.z; tc = -d.y; }\n"
+        "    else if (a.y >= a.z)          { ma = a.y; f = d.y >= 0.0 ? 2.0 : 3.0; sc = d.x; tc = d.y >= 0.0 ? d.z : -d.z; }\n"
+        "    else                          { ma = a.z; f = d.z >= 0.0 ? 4.0 : 5.0; sc = d.z >= 0.0 ? d.x : -d.x; tc = -d.y; }\n"
+        "    ma = ma > 0.0 ? ma : 1.0;\n"
+        "    return float3(sc / ma * 0.5 + 0.5, tc / ma * 0.5 + 0.5, f);\n"
+        "}\n"
+        "float3 rsx_cubeclamp(Texture2DArray t, float3 c) {\n"
+        "    uint W, H, N; t.GetDimensions(W, H, N);\n"
+        "    float2 e = 0.5 / float2(W, H);\n"
+        "    return float3(clamp(c.xy, e, 1.0 - e), c.z);\n"
+        "}\n"
+        /* .z bit 8 (vp_record_cb): a Y16_X16 cube look-up table whose texels
+         * hold i/(N-1), edge to edge -- Code Veronica's lighter maps a light
+         * direction to its place in the shadow atlas through one. Sampled at
+         * texel centres the answer is off by (u-0.5)/(N-1): up to two atlas
+         * texels near a face edge, the opposite way on the next face, and the
+         * jump at every seam drew a thin dark line across lit walls. Map the
+         * coordinate onto the stored grid so the table returns u itself. */
+        "float4 rsx_cube(Texture2DArray t, SamplerState s, uint u, float3 d) {\n"
+        "    if (u < 8u && (((uint)rsx_texaddr[min(u, 7u)].z) & 256u)) {\n"
+        "        uint W, H, N; t.GetDimensions(W, H, N);\n"
+        "        float3 c = rsx_cubeuv(d); float2 n = float2(W, H);\n"
+        "        c.xy = (saturate(c.xy) * (n - 1.0) + 0.5) / n;\n"
+        "        return t.Sample(s, c);\n"
+        "    }\n"
+        "    return t.Sample(s, rsx_cubeclamp(t, rsx_cubeuv(d)));\n"
+        "}\n"
+        "float4 rsx_cube_b(Texture2DArray t, SamplerState s, float3 d, float b) {\n"
+        "    return t.SampleBias(s, rsx_cubeclamp(t, rsx_cubeuv(d)), b);\n"
+        "}\n"
+        "float4 rsx_cube_l(Texture2DArray t, SamplerState s, float3 d, float l) {\n"
+        "    return t.SampleLevel(s, rsx_cubeclamp(t, rsx_cubeuv(d)), l);\n"
+        "}\n";
     const size_t k_pre = sizeof k_addr_prelude - 1;
     /* Constants must come from fp_k[], not literals: the pipeline is keyed on
      * the code hash alone, so a literal baked from the first draw's constants
@@ -4316,15 +4424,44 @@ static int fp_build_pso(FpJob* j)
               }
           }
       } }
-    /* Lookup cubes (dr_cube_mask bits 16+u) sample through the point/clamp
-     * static sampler, s(FP_TEX_UNITS + 4), inside rsx_samp[16]'s range. */
-    for (int _u = 0; _u < FP_TEX_UNITS; _u++)
-        if (cube_mask & (1u << (16 + _u))) {
-            char f[48], r[48];
-            snprintf(f, sizeof f, "rsx_samp[%d], RSX_CUBEDIR", _u);
-            snprintf(r, sizeof r, "rsx_samp[%d], RSX_CUBEDIR", FP_TEX_UNITS + 4);
-            hlsl_replace_all(hlsl, hlsl_cap, f, r);
-        }
+    /* 2D fetches through rsx_s2d (see the prelude): Y16_X16 reads of colour
+     * targets are filtered as 16-bit values. RSX_S2D_OFF=1 keeps plain Sample. */
+    { static int off = -1; if (off < 0) off = getenv("RSX_S2D_OFF") ? 1 : 0;
+      if (!off)
+          for (int _u = 0; _u < FP_TEX_UNITS; _u++) {
+              char f[64], r[80];
+              snprintf(f, sizeof f, "rsx_tex[%d].Sample(rsx_samp[%d], ", _u, _u);
+              snprintf(r, sizeof r, "rsx_s2d(rsx_tex[%d], rsx_samp[%d], %d, ", _u, _u, _u);
+              hlsl_replace_all(hlsl, hlsl_cap, f, r);
+              snprintf(f, sizeof f, "rsx_tex%d.Sample(rsx_samp[%d], RSX_ADDR(", _u, _u);
+              snprintf(r, sizeof r, "rsx_s2d(rsx_tex%d, rsx_samp[%d], %d, RSX_ADDR(", _u, _u, _u);
+              hlsl_replace_all(hlsl, hlsl_cap, f, r);
+              /* rsx_s2d already returns logical channels, including gamma on
+               * ordinary textures. Skip the outer decode for this fetch only;
+               * cube, bias/LOD and non-wrapped fetches keep RSX_TEXOUT. */
+              snprintf(f, sizeof f, "RSX_TEXOUT(%d, rsx_s2d(", _u);
+              snprintf(r, sizeof r, "RSX_S2D_OUT(%d, rsx_s2d(", _u);
+              hlsl_replace_all(hlsl, hlsl_cap, f, r);
+          } }
+    /* Cube units: 6-slice arrays sampled face by face (rsx_cube, see the
+     * prelude). The SRVs match (srv_write_ex / the slot view). */
+    if (rsx_cube_as_array())
+        for (int _u = 0; _u < FP_TEX_UNITS; _u++)
+            if (cube_mask & (1u << _u)) {
+                char f[64], r[80];
+                snprintf(f, sizeof f, "TextureCube rsx_tex%d ", _u);
+                snprintf(r, sizeof r, "Texture2DArray rsx_tex%d ", _u);
+                hlsl_replace_all(hlsl, hlsl_cap, f, r);
+                snprintf(f, sizeof f, "rsx_tex%d.Sample(rsx_samp[%d], RSX_CUBEDIR(", _u, _u);
+                snprintf(r, sizeof r, "rsx_cube(rsx_tex%d, rsx_samp[%d], %d, RSX_CUBEDIR(", _u, _u, _u);
+                hlsl_replace_all(hlsl, hlsl_cap, f, r);
+                snprintf(f, sizeof f, "rsx_tex%d.SampleBias(rsx_samp[%d], RSX_CUBEDIR(", _u, _u);
+                snprintf(r, sizeof r, "rsx_cube_b(rsx_tex%d, rsx_samp[%d], RSX_CUBEDIR(", _u, _u);
+                hlsl_replace_all(hlsl, hlsl_cap, f, r);
+                snprintf(f, sizeof f, "rsx_tex%d.SampleLevel(rsx_samp[%d], RSX_CUBEDIR(", _u, _u);
+                snprintf(r, sizeof r, "rsx_cube_l(rsx_tex%d, rsx_samp[%d], RSX_CUBEDIR(", _u, _u);
+                hlsl_replace_all(hlsl, hlsl_cap, f, r);
+            }
     /* RSX_CUBE_FLIP=x|y|z|xz|...: mirror the cube lookup direction on those
      * axes (an orientation test for Code Veronica's water reflection). */
     { const char* cf = getenv("RSX_CUBE_FLIP");
@@ -4377,27 +4514,12 @@ static int fp_build_pso(FpJob* j)
         hlsl_replace_all(hlsl, hlsl_cap,
             "float4(input.position.xyz, 1.0 / input.position.w)",
             "float4(input.position.xy * (rsx_alpha_k.w > 0.0 ? rsx_alpha_k.w : 1.0), input.position.z, 1.0 / input.position.w)");
-    /* Retarget the samplers the guest bound as CUBE textures. The decompiler
-     * always emits 2D samplers; a cube is sampled with a 3-component direction
-     * and no texel-scale, and the emitted coordinate always ends in the fixed
-     * tail ".xy * rsx_texscale[N].xy", so both edits are exact replacements. */
+    /* (Cube units are declared and sampled by the decompiler, which gets the
+     * mask, and turned into face-by-face array reads above.) */
     if (cube_mask) {
-        for (int _u = 0; _u < FP_TEX_UNITS; _u++) {
-            if (!(cube_mask & (1u << _u))) continue;
-            char f1[64], r1[64], f2[64], r2[64];
-            snprintf(f1, sizeof f1, "Texture2D    rsx_tex%d", _u);
-            snprintf(r1, sizeof r1, "TextureCube  rsx_tex%d", _u);
-            hlsl_replace_all(hlsl, hlsl_cap, f1, r1);
-            snprintf(f1, sizeof f1, "Texture2D rsx_tex%d", _u);
-            snprintf(r1, sizeof r1, "TextureCube rsx_tex%d", _u);
-            hlsl_replace_all(hlsl, hlsl_cap, f1, r1);
-            snprintf(f2, sizeof f2, ".xy * rsx_texscale[%d].xy", _u);
-            snprintf(r2, sizeof r2, ".xyz");
-            hlsl_replace_all(hlsl, hlsl_cap, f2, r2);
-        }
-        { static int _n = 0; if (_n++ < 4)
+        static int _n = 0; if (_n++ < 4)
             fprintf(stderr, "[CUBE] fp=0x%X compiled with cube units mask 0x%X%c",
-                    fp_addr, cube_mask, 10); }
+                    fp_addr, cube_mask, 10);
     }
     /* FP_IDCOLOR=1: give every fragment program a distinct flat colour derived
      * from its address. One frame then shows which program paints which surface,
@@ -4513,6 +4635,16 @@ static int fp_build_pso(FpJob* j)
     if (getenv("FP_FORCE")) {
         char* rp = strstr(hlsl, "return r[0];");
         if (rp) memcpy(rp, "return float4(1,0,1,1)", 23);
+    }
+    if (s_lighter_probe && lighter_shadow_code(uhash)) {
+        /* These programs export the light's visibility/attenuation in r0.
+         * Override only in the explicit probe. Runtime uniform avoids PSO
+         * recompilation on F10; normal launch does not inject this expression. */
+        hlsl_replace_all(hlsl, hlsl_cap, "float4 _o0 = r[0];",
+            "float4 _o0 = rsx_texaddr[7].w == -1234.0 ? float4(1,1,1,1) : r[0];");
+        hlsl_replace_all(hlsl, hlsl_cap, "float4 _o = r[0];",
+            "float4 _o = rsx_texaddr[7].w == -1234.0 ? float4(1,1,1,1) : r[0];");
+        fprintf(stderr, "[LIGHTER] diagnostic visibility shader code=%08X\n", uhash);
     }
     ID3DBlob* pb = NULL; ID3DBlob* e = NULL;
     HRESULT hr = shader_compile_cached(hlsl, strlen(hlsl), "guest_fp", "ps_5_0", &pb, &e);
@@ -6234,7 +6366,15 @@ static int vp_upload_tex_slot_impl(u32 off, u32 w, u32 h, u32 fmt, int cube, u32
     D3D12_CPU_DESCRIPTOR_HANDLE sh;
     s_d3d.srv_heap->lpVtbl->GetCPUDescriptorHandleForHeapStart(s_d3d.srv_heap, &sh);
     sh.ptr += (u64)(1 + slot) * s_d3d.srv_inc;
-    if (cube) {
+    if (cube && rsx_cube_as_array()) {
+        sv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2DARRAY;
+        sv.Texture2DArray.MostDetailedMip = 0;
+        sv.Texture2DArray.MipLevels = 1;
+        sv.Texture2DArray.FirstArraySlice = 0;
+        sv.Texture2DArray.ArraySize = 6;
+        sv.Texture2DArray.PlaneSlice = 0;
+        sv.Texture2DArray.ResourceMinLODClamp = 0.0f;
+    } else if (cube) {
         sv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURECUBE;
         sv.TextureCube.MipLevels = 1;
         sv.TextureCube.MostDetailedMip = 0;
@@ -6317,6 +6457,15 @@ static void vp_record_cb(u32 slot, int vs_idx, const D3D12DrawRecord* dr)
                         ts[_u*4+2] = (float)((dr->tex[_u].addr & 0xFu) |
                                              (((dr->tex[_u].addr >> 20) & 0xFu) << 4));
                 }
+        /* rsx_texaddr[u].z bit 8: an edge-to-edge Y16_X16 cube look-up table
+         * (rsx_cube). RSX_CUBE_LUT_RAW=1 samples it at texel centres instead. */
+        { static int raw = -1; if (raw < 0) raw = getenv("RSX_CUBE_LUT_RAW") ? 1 : 0;
+          if (dr && !raw)
+              for (int _u = 0; _u < FP_TEX_UNITS; _u++)
+                  if (dr->tex[_u].set && dr->tex[_u].cube && (dr->tex[_u].fmt & 0x9Fu) == 0x95u &&
+                      dr->tex[_u].w > 1 && dr->tex[_u].w <= 64 && dr->tex[_u].w == dr->tex[_u].h)
+                      ts[_u*4+2] = (float)((u32)ts[_u*4+2] | 256u);
+        }
         /* TEX_NOGAMMA_FP=<code hex>:<unit>,...: drop the sRGB decode of those
          * units for the program with that code hash (an experiment: RPCS3
          * reads Code Veronica's water normal map raw). */
@@ -6358,6 +6507,13 @@ static void vp_record_cb(u32 slot, int vs_idx, const D3D12DrawRecord* dr)
             ts[FP_ALPHA_BASE+3] = 1.0f / sc;
         }
 
+        /* Record phase: fp_snap_ptr() belongs to the frozen render batch,
+         * not this recording arena. Do not inspect it here: the same offset
+         * can name another program in the previous frame, causing flicker.
+         * The shader-side code whitelist already limits who reads this lane. */
+        if (s_lighter_probe && dr && dr->rt_off == 0x01C30000u && !dr->tex[7].set) {
+            ts[7*4+3] = InterlockedCompareExchange(&s_lighter_shadow_bypass, 0, 0) ? -1234.0f : 0.0f;
+        }
         /* fp_k[]: the program's inline fragment constants, re-read from the
          * guest ucode every draw. The decompiler emits fp_k[i] lookups instead
          * of baking these in as literals, so the compiled shader no longer
@@ -6864,7 +7020,15 @@ static void srv_write_ex(u32 heap_slot, ID3D12Resource* res, DXGI_FORMAT fmt,
     sv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
     sv.Shader4ComponentMapping = mapping;
     sv.Texture2D.MipLevels = (UINT)-1;   /* every level: a texture mod's mip chain (others have one) */
-    if (cube) {   /* must match the TextureCube declaration in the HLSL */
+    if (cube && rsx_cube_as_array()) {   /* matches the Texture2DArray the HLSL declares */
+        sv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2DARRAY;
+        sv.Texture2DArray.MostDetailedMip = 0;
+        sv.Texture2DArray.MipLevels = 1;
+        sv.Texture2DArray.FirstArraySlice = 0;
+        sv.Texture2DArray.ArraySize = 6;
+        sv.Texture2DArray.PlaneSlice = 0;
+        sv.Texture2DArray.ResourceMinLODClamp = 0.0f;
+    } else if (cube) {   /* must match the TextureCube declaration in the HLSL */
         sv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURECUBE;
         sv.TextureCube.MipLevels = 1;
         sv.TextureCube.MostDetailedMip = 0;
@@ -10080,6 +10244,11 @@ skip_dump_consider: ;
                      g_rsx_title_base,
                      s_tframes * 1000.0 / (double)(tnow - s_tt0),
                      s_dbg_last_draws, rs_dim(s_d3d.width, s_rs), rs_dim(s_d3d.height, s_rs));
+            if (s_lighter_probe) {
+                size_t used = strlen(tb);
+                snprintf(tb + used, sizeof tb - used, " | F10 SOMBRA: %s",
+                         InterlockedCompareExchange(&s_lighter_shadow_bypass, 0, 0) ? "SEM SOMBRA" : "NORMAL");
+            }
             /* Posted, not SetWindowText: this runs on the render thread, and
              * SetWindowText on another thread's window waits for that thread
              * to pump. The window thread applies it in pump_messages. */
@@ -12026,6 +12195,10 @@ int rsx_d3d12_backend_init(u32 width, u32 height, const char* title)
       if (s_rs != 1.0f)
           printf("[D3D12] RES_SCALE %.2f: rendering %ux%u for a %ux%u guest\n",
                  s_rs, rs_dim(width, s_rs), rs_dim(height, s_rs), width, height); }
+    { const char* probe = getenv("CV_LIGHTER_PROBE");
+      s_lighter_probe = probe && !strcmp(probe, "1");
+      InterlockedExchange(&s_lighter_shadow_bypass, 0);
+      if (s_lighter_probe) fprintf(stderr, "[LIGHTER] isolation active: F10 toggles visibility, F12 captures; separate FXC cache\n"); }
     s_d3d.hwnd = create_window(rs_dim(width, s_rs), rs_dim(height, s_rs), title);
     if (!s_d3d.hwnd) {
         printf("[D3D12] ERROR: Window creation failed\n");
