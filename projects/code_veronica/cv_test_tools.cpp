@@ -26,22 +26,25 @@ extern "C" PPU_THREAD_LOCAL ppu_context* g_active_ctx;
 extern "C" PPU_THREAD_LOCAL void (*g_trampoline_fn)(void*);
 extern "C" int g_pad_block;
 extern "C" void* rsx_d3d12_window(void);
+// JP/US: the same functions as EU, matched by their normalized lifted bodies;
+// they differ only in global addresses, with the same state and save-object
+// offsets (CONTINUAR-MAPAS-E-SAVES.md).
 #if defined(CV_REGION_JP)
 #define TEST_FRAME func_00032F80
 #define ORIGINAL_FRAME cv_original_00032F80
 #define TEST_WARP func_0018ED00
 #define TEST_SERIALIZE func_001D76D0
 #define ORIGINAL_SERIALIZE cv_original_001D76D0
-#define SAVE_OBJECT 0u   /* not mapped for this version yet */
-#define SAVE_MANAGER 0u
+#define SAVE_OBJECT 0x00AAEE44u    /* EU 0x00ABF0D4: written by func_001D788C (EU func_001D952C) */
+#define SAVE_MANAGER 0x00AE9548u   /* EU 0x00AF97C8: read by the AutoSave entry func_00272718 */
 #elif defined(CV_REGION_US)
 #define TEST_FRAME func_00032FA0
 #define ORIGINAL_FRAME cv_original_00032FA0
 #define TEST_WARP func_0018ED68
 #define TEST_SERIALIZE func_001D7550
 #define ORIGINAL_SERIALIZE cv_original_001D7550
-#define SAVE_OBJECT 0u   /* not mapped for this version yet */
-#define SAVE_MANAGER 0u
+#define SAVE_OBJECT 0x00AAED88u    /* EU 0x00ABF0D4: written by func_001D770C (EU func_001D952C) */
+#define SAVE_MANAGER 0x00AE94C8u   /* EU 0x00AF97C8: read by the AutoSave entry func_00271E28 */
 #else
 #define TEST_FRAME func_000333A0
 #define ORIGINAL_FRAME cv_original_000333A0
@@ -315,7 +318,7 @@ void TEST_FRAME(ppu_context* ctx) {
         uint32_t pending=request.exchange(0);
         if(pending){if(valid){call_warp(ctx,pending);result=2;ready=false;}else{result=4;std::printf("[CVTest] warp refused: no controllable live game\n");}}
         // The request the typewriter makes once its ribbon is accepted:
-        // func_001AEED4 (EU) sees +74 bit 0x00200000 and opens the save screen.
+        // func_001AEED4 (EU; JP func_001AD524, US func_001AD47C) sees +74 bit 0x00200000 and opens the save screen.
         if(save_request.exchange(false)) {
             if(valid) {vm_write32(state_base+0x74,vm_read32(state_base+0x74)|0x00200000u);tool_save=true;result=6;ready=false;
                 std::printf("[CVTest] save screen requested\n");std::fflush(stdout);}

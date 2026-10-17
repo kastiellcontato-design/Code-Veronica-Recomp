@@ -51,6 +51,14 @@ int main(){
  assert((vm_read32(state_base+0x74)&0x00200000u)!=0&&tool_save&&result==6);
  const uint32_t inventory=CV_SRT_INVENTORY;vm_write32(inventory+4,0x001F0002u);vm_write32(state_base+0x90,7);
  TEST_SERIALIZE(&c);assert(serializations==1&&vm_read32(inventory+4)==0x001F0002u&&vm_read32(state_base+0x90)==7);
- cv_test_tools_enable(false);TEST_SERIALIZE(&c);assert(serializations==2);TEST_FRAME(&c);assert(warps==1&&frames==7);
- std::puts("[map-tools-test] PASS: catalog validation, separate chords, live-state gates, one-shot dispatch, guest stack/TLS preservation, save-here request and kept ribbon/count, original save path unchanged");
+ // A room with no typewriter: once the file is written, the slot list's display wait is ended.
+ const uint32_t object=0x200000,manager=0x210000,ui=0x220000,slots=0x230000;
+ vm_write32(SAVE_OBJECT,object);vm_write32(SAVE_MANAGER,manager);vm_write32(manager+0x4E8,1);
+ vm_write32(object+0x30,2);vm_write32(object+0x58,4);vm_write8(object+0x2B,1);vm_write32(object+0xA0,ui);vm_write32(ui+0x34,slots);
+ vm_write32(slots,1);vm_write16(slots+0x14,3);vm_write32(slots+0x20,8);
+ vm_write32(state_base+0x68,0x10000);TEST_FRAME(&c);assert(vm_read32(slots+0x20)==8&&vm_read32(slots)==1); // still writing
+ vm_write32(manager+0x4E8,0);TEST_FRAME(&c);assert(vm_read32(slots+0x20)==0&&vm_read32(slots)==0&&vm_read16(slots+0x14)==0xFFFA);
+ vm_write32(state_base+0x68,0x18000);
+ cv_test_tools_enable(false);TEST_SERIALIZE(&c);assert(serializations==2);TEST_FRAME(&c);assert(warps==1&&frames==9);
+ std::puts("[map-tools-test] PASS: catalog validation, separate chords, live-state gates, one-shot dispatch, guest stack/TLS preservation, save-here request and kept ribbon/count, save screen released after the write (" CV_TITLE_ID "), original save path unchanged");
 }
