@@ -9,6 +9,8 @@
 #include <vector>
 #include <set>
 #include <cstdio>
+#include <cstring>
+#include <string_view>
 #include <cwctype>
 #include "cv_launcher_controls.h"
 #include "cv_test_tools_i18n.h"
@@ -37,6 +39,9 @@ extern "C" void* rsx_d3d12_window(void);
 #define ORIGINAL_SERIALIZE cv_original_001D76D0
 #define SAVE_OBJECT 0x00AAEE44u    /* EU 0x00ABF0D4: written by func_001D788C (EU func_001D952C) */
 #define SAVE_MANAGER 0x00AE9548u   /* EU 0x00AF97C8: read by the AutoSave entry func_00272718 */
+#define SAVE_DATA 0x00AB2AD4u      /* EU 0x00AC2D64 */
+#define TEST_ROW func_001D63F0
+#define ORIGINAL_ROW cv_original_001D63F0
 #elif defined(CV_REGION_US)
 #define TEST_FRAME func_00032FA0
 #define ORIGINAL_FRAME cv_original_00032FA0
@@ -45,6 +50,9 @@ extern "C" void* rsx_d3d12_window(void);
 #define ORIGINAL_SERIALIZE cv_original_001D7550
 #define SAVE_OBJECT 0x00AAED88u    /* EU 0x00ABF0D4: written by func_001D770C (EU func_001D952C) */
 #define SAVE_MANAGER 0x00AE94C8u   /* EU 0x00AF97C8: read by the AutoSave entry func_00271E28 */
+#define SAVE_DATA 0x00AB2A18u      /* EU 0x00AC2D64 */
+#define TEST_ROW func_001D6270
+#define ORIGINAL_ROW cv_original_001D6270
 #else
 #define TEST_FRAME func_000333A0
 #define ORIGINAL_FRAME cv_original_000333A0
@@ -53,9 +61,13 @@ extern "C" void* rsx_d3d12_window(void);
 #define ORIGINAL_SERIALIZE cv_original_001D9370
 #define SAVE_OBJECT 0x00ABF0D4u    /* the save screen's object (func_001D952C) */
 #define SAVE_MANAGER 0x00AF97C8u   /* the savedata thread's manager */
+#define SAVE_DATA 0x00AC2D64u      /* DATA0.DAT's buffer: 15 slots of 0x838 bytes from +30 */
+#define TEST_ROW func_001D8090      /* draws one row of the save/load slot list */
+#define ORIGINAL_ROW cv_original_001D8090
 #endif
 void ORIGINAL_FRAME(ppu_context*);
 void ORIGINAL_SERIALIZE(ppu_context*);
+void ORIGINAL_ROW(ppu_context*);
 namespace {
 namespace fs=std::filesystem;
 constexpr uint32_t state_base=CV_SRT_CHARACTER-0x94;
@@ -67,6 +79,10 @@ std::atomic<uint32_t> room_now{0};
 // "Save here": the game's own save screen, opened as the typewriter opens it.
 std::atomic<bool> save_request{false};
 bool tool_save=false;   // game thread: the open save screen came from this window
+// Saves made from this window, known by a hash of their slot: the slot list
+// shows "F7: rm_XXXX" as their location. Nothing is written into the save.
+std::set<uint64_t> f7_saves;bool f7_loaded=false;
+std::wstring f7_file;   // empty: cv_f7_saves.txt beside the executable
 HWND window=nullptr,filter=nullptr,list=nullptr,entry=nullptr,travel=nullptr,save_button=nullptr;
 std::vector<cv_test::Room> rooms;
 std::vector<size_t> visible_rooms;
@@ -90,6 +106,56 @@ bool active_game() {
     if(character>=4||vm_read32(CV_SRT_RDX)!=rdx[character]||int32_t(vm_read32(CV_SRT_HEALTH))<=0)return false;   // 32-bit, as the SRT reads it
     uint32_t tasks=vm_read32(state_base+0x64),blocked=vm_read32(state_base+0x68);
     return ((tasks&~blocked)&0x80)&&!((tasks&~blocked)&0x1803F)&&!(vm_read32(state_base+0x74)&7)&&!(vm_read32(state_base+0x70)&0x1C040008);
+}
+// A slot is the game state from +8C: +4 the save count, +8 the character,
+// +9/+A/+B the room (area, number, variant); +0 is 0xA in a used slot.
+uint32_t slot_address(uint32_t slot) {
+    const uint32_t data=mapped(SAVE_DATA,4)?vm_read32(SAVE_DATA):0;
+    const uint32_t at=data+0x30+slot*0x838;
+    return data&&slot<15&&mapped(at,0x838)&&vm_read32(at)==0xA?at:0;
+}
+uint64_t slot_hash(uint32_t at) {
+    uint64_t h=1469598103934665603ull;
+    for(uint32_t i=0;i<0x838;i++){h^=vm_read8(at+i);h*=1099511628211ull;}
+    return h;
+}
+std::wstring f7_path() {
+    if(!f7_file.empty())return f7_file;
+    wchar_t exe[MAX_PATH]={};GetModuleFileNameW(nullptr,exe,MAX_PATH);
+    return (fs::path(exe).parent_path()/L"cv_f7_saves.txt").wstring();
+}
+void f7_load() {
+    if(f7_loaded)return;
+    f7_loaded=true;
+    if(FILE* f=_wfopen(f7_path().c_str(),L"r")) {
+        char id[16];unsigned long long h;
+        while(std::fscanf(f,"%15s %llx",id,&h)==2)if(!std::strcmp(id,CV_TITLE_ID))f7_saves.insert(h);
+        std::fclose(f);
+    }
+}
+void f7_record(uint32_t slot) {
+    const uint32_t at=slot_address(slot);if(!at)return;
+    f7_load();const uint64_t h=slot_hash(at);
+    if(!f7_saves.insert(h).second)return;
+    if(FILE* f=_wfopen(f7_path().c_str(),L"a")){std::fprintf(f,"%s %016llx\n",CV_TITLE_ID,(unsigned long long)h);std::fclose(f);}
+    std::printf("[CVTest] tool save in slot %u marked for the slot list\n",slot+1);std::fflush(stdout);
+}
+// "F7: rm_XXXX" in the font's codes: ASCII - 0x20 (EU/US); the Japanese font
+// has only upper case (A = 0) and its digits at 0xD8. FF01 is a space.
+std::vector<uint16_t> f7_label(unsigned area,unsigned room,unsigned variant) {
+    const unsigned digits[4]={area%10,room/10%10,room%10,variant%10};
+    std::vector<uint16_t> text;
+#if defined(CV_REGION_JP)
+    text={uint16_t('F'-'A'),0xDF,0xFF01,uint16_t('R'-'A'),uint16_t('M'-'A')};
+    for(unsigned d:digits)text.push_back(uint16_t(0xD8+d));
+#else
+    for(char c:std::string_view("F7:"))text.push_back(uint16_t(c-0x20));
+    text.push_back(0xFF01);
+    for(char c:std::string_view("rm_"))text.push_back(uint16_t(c-0x20));
+    for(unsigned d:digits)text.push_back(uint16_t('0'+d-0x20));
+#endif
+    text.push_back(0xFFFF);
+    return text;
 }
 void call_warp(ppu_context* caller,uint32_t packed) {
     ppu_context work=*caller;
@@ -334,6 +400,9 @@ void TEST_FRAME(ppu_context* ctx) {
             // the save object waiting at state 2/4), end it as that timeout does.
             if(tool_save&&(active&0x8000)&&SAVE_OBJECT) {
                 const uint32_t o=vm_read32(SAVE_OBJECT),mgr=vm_read32(SAVE_MANAGER);
+                // Step 5 follows the copy of the state into the chosen slot (+A0 -> +10),
+                // before the file is written: remember that slot as made here.
+                if(o&&mapped(o,0xA4)&&vm_read32(o+0x54)==5) {const uint32_t ui=vm_read32(o+0xA0);if(ui&&mapped(ui,0x14))f7_record(vm_read32(ui+0x10));}
                 if(o&&mapped(o,0xA4)&&mgr&&mapped(mgr,0x4F0)&&vm_read32(o+0x30)==2&&vm_read32(o+0x58)==4&&vm_read8(o+0x2B)==1&&vm_read32(mgr+0x4E8)==0) {
                     const uint32_t ui=vm_read32(o+0xA0),list=ui&&mapped(ui,0x38)?vm_read32(ui+0x34):0;
                     if(list&&mapped(list,0x28)&&vm_read32(list)&&int32_t(vm_read32(list+0x20))>=8) {
@@ -358,5 +427,30 @@ void TEST_SERIALIZE(ppu_context* ctx) {
     ORIGINAL_SERIALIZE(ctx);
     if(restore) {for(int i=0;i<12;i++)vm_write32(inventory+i*4,items[i]);vm_write32(state_base+0x90,saves);
         std::printf("[CVTest] tool save: ribbon and save count kept\n");std::fflush(stdout);}
+}
+// A slot saved from this window shows "F7: rm_XXXX" where the location goes.
+// The row's location message is drawn from a borrowed entry of the system
+// message table (state +1B3F0: text = table + entry[id + 1]), pointed for this
+// call at the label, which sits in a stack block above the callee's frames.
+void TEST_ROW(ppu_context* ctx) {
+    const uint32_t row=uint32_t(ctx->gpr[3]);
+    const uint32_t at=mapped(row,0x10)?slot_address(vm_read32(row)-1):0;
+    const uint32_t table=at&&mapped(state_base+0x1B3F0,4)?vm_read32(state_base+0x1B3F0):0;
+    if(table&&mapped(table,8)) {f7_load();
+        if(f7_saves.count(slot_hash(at))) {
+            constexpr int8_t id=1;   // any message; restored below
+            const auto text=f7_label(vm_read8(at+9),vm_read8(at+0xA),vm_read8(at+0xB));
+            const uint64_t sp=ctx->gpr[1],block=sp-0x200;
+            const uint32_t label=uint32_t(block+0x100),entry=table+4+id*4;
+            vm_write64(block,sp);
+            for(size_t i=0;i<text.size();i++)vm_write16(label+uint32_t(i*2),text[i]);
+            const uint32_t old_entry=vm_read32(entry);const uint8_t old_id=vm_read8(row+0xD);
+            vm_write32(entry,label-table);vm_write8(row+0xD,uint8_t(id));
+            ctx->gpr[1]=block;ORIGINAL_ROW(ctx);ctx->gpr[1]=sp;
+            vm_write32(entry,old_entry);vm_write8(row+0xD,old_id);
+            return;
+        }
+    }
+    ORIGINAL_ROW(ctx);
 }
 #endif

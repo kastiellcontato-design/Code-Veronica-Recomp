@@ -15,11 +15,20 @@ void vm_write8(uint64_t a,uint8_t v){assert(a<memory.size());memory[a]=v;}
 void vm_write16(uint64_t a,uint16_t v){vm_write8(a,uint8_t(v>>8));vm_write8(a+1,uint8_t(v));}
 void vm_write32(uint64_t a,uint32_t v){for(int i=0;i<4;i++)vm_write8(a+i,uint8_t(v>>(24-i*8)));}
 void vm_write64(uint64_t a,uint64_t v){vm_write32(a,uint32_t(v>>32));vm_write32(a+4,uint32_t(v));}
+uint64_t vm_read64(uint64_t a){return uint64_t(vm_read32(a))<<32|vm_read32(a+4);}
 void* rsx_d3d12_window(){return nullptr;}
 int pad_phys_poll(int,PadPhys*){return 0;}
 }
 void ORIGINAL_FRAME(ppu_context*){++frames;}
 void ORIGINAL_SERIALIZE(ppu_context*){++serializations;}
+static int rows=0;static std::vector<uint16_t> row_text;
+void ORIGINAL_ROW(ppu_context* c){   // reads the location as func_001D8090 does
+ ++rows;const uint32_t row=uint32_t(c->gpr[3]),table=vm_read32(state_base+0x1B3F0);
+ const int id=int8_t(vm_read8(row+0xD));row_text.clear();
+ if(c->gpr[1]>=0x9000)return;   // a slot without the label: nothing borrowed
+ assert(id!=0&&c->gpr[1]==0x9000-0x200&&vm_read64(c->gpr[1])==0x9000);
+ for(uint32_t t=table+vm_read32(table+4+id*4);;t+=2){uint16_t v=vm_read16(t);row_text.push_back(v);if(v==0xFFFF)break;}
+}
 static void tail(void* raw){assert(raw==g_active_ctx);static_cast<ppu_context*>(raw)->gpr[3]=999;}
 void TEST_WARP(ppu_context* c){
  ++warps;assert(c==g_active_ctx&&c!=caller_context);assert(c->gpr[1]==caller_context->gpr[1]-0x400&&c->gpr[2]==CV_TOC);
@@ -58,7 +67,25 @@ int main(){
  vm_write32(slots,1);vm_write16(slots+0x14,3);vm_write32(slots+0x20,8);
  vm_write32(state_base+0x68,0x10000);TEST_FRAME(&c);assert(vm_read32(slots+0x20)==8&&vm_read32(slots)==1); // still writing
  vm_write32(manager+0x4E8,0);TEST_FRAME(&c);assert(vm_read32(slots+0x20)==0&&vm_read32(slots)==0&&vm_read16(slots+0x14)==0xFFFA);
- vm_write32(state_base+0x68,0x18000);
- cv_test_tools_enable(false);TEST_SERIALIZE(&c);assert(serializations==2);TEST_FRAME(&c);assert(warps==1&&frames==9);
- std::puts("[map-tools-test] PASS: catalog validation, separate chords, live-state gates, one-shot dispatch, guest stack/TLS preservation, save-here request and kept ribbon/count, save screen released after the write (" CV_TITLE_ID "), original save path unchanged");
+ // The chosen slot, once the state is copied into it (step 5), is remembered;
+ // its row then shows "F7: rm_XXXX" where the location goes.
+ const uint32_t data=0x240000,slot=data+0x30+2*0x838,table=0x260000,row=0x270000;
+ f7_file=(fs::temp_directory_path()/L"cv_f7_saves_test.txt").wstring();_wremove(f7_file.c_str());
+ vm_write32(SAVE_DATA,data);vm_write32(slot,0xA);vm_write8(slot+9,2);vm_write8(slot+0xA,14);vm_write8(slot+0xB,0);
+ vm_write32(state_base+0x1B3F0,table);vm_write32(table+8,0x40);
+ vm_write32(row,3);vm_write8(row+0xD,0);c.gpr[3]=row;c.gpr[1]=0x9000;
+ TEST_ROW(&c);assert(rows==1&&row_text.empty()); // not a tool save yet
+ vm_write32(ui+0x10,2);vm_write32(object+0x54,5);TEST_FRAME(&c);assert(f7_saves.size()==1);
+ TEST_ROW(&c);assert(rows==2&&c.gpr[1]==0x9000&&vm_read32(table+8)==0x40&&vm_read8(row+0xD)==0);
+ const std::vector<uint16_t> label=f7_label(2,14,0);
+ assert(row_text==label&&label.back()==0xFFFF);
+#if !defined(CV_REGION_JP)
+ {std::string shown;for(uint16_t v:label)if(v!=0xFFFF)shown+=v==0xFF01?' ':char(v+0x20);assert(shown=="F7: rm_2140");}
+#endif
+ f7_saves.clear();f7_loaded=false;TEST_ROW(&c);assert(rows==3&&!row_text.empty()); // read back from the file
+ vm_write8(slot+0x20,1);TEST_ROW(&c);assert(rows==4&&row_text.empty()); // overwritten by a normal save
+ _wremove(f7_file.c_str());
+ vm_write32(object+0x54,0);vm_write32(state_base+0x68,0x18000);
+ cv_test_tools_enable(false);TEST_SERIALIZE(&c);assert(serializations==2);TEST_FRAME(&c);assert(warps==1&&frames==10);
+ std::puts("[map-tools-test] PASS: catalog validation, separate chords, live-state gates, one-shot dispatch, guest stack/TLS preservation, save-here request and kept ribbon/count, save screen released after the write, F7 slot label (" CV_TITLE_ID "), original save path unchanged");
 }

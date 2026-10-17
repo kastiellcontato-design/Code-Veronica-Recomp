@@ -72,9 +72,33 @@ deslocamento de estrutura muda nas funções da tela de salvar (EU 0x1D7000 a
   (Kastiel só tem a europeia); os testes sintéticos rodam por versão
   (`CV_MAP_TESTS=1` com `CV_BUILD_JP=1`/`CV_BUILD_US=1`).
 
+## Rótulo "F7" na lista de slots (16/10/2026)
+
+Pedido de Kastiel: o save feito pelo F7 aparecia como NO_DATA quando o jogo
+ainda não tinha save nenhum. Causa: a linha do slot (func_001D8090) escreve
+NO_DATA quando contador, modo, personagem e local são todos 0 (jogo novo,
+Claire = 0, contador 0 e sala sem nome de local).
+
+- Slot no DATA0 (*SAVE_DATA: EU 0xAC2D64, JP 0xAB2AD4, US 0xAB2A18): 15 slots
+  de 0x838 a partir de +30. Ao confirmar, func_001DAB20 copia o estado a partir
+  de +8C (+0 = 0xA, +4 contador, +8 personagem, +9/+A/+B área, sala, variante).
+  O objeto da tela passa ao passo +54 == 5 logo após a cópia; o slot é +A0 -> +10.
+- Linha da lista: entrada de 16 bytes (+0 número 1..15, +4 contador, +8 modo,
+  +C personagem, +D mensagem do local). func_0003356C(100 * área + sala) dá a
+  mensagem do local.
+- Mensagens do sistema: tabela em estado +1B3F0 (texto = tabela + entrada[id+1]),
+  16 bits, FFFF fim, FF01 espaço. EU/US: código = ASCII - 0x20 (sysmes.msb).
+  JP: só maiúsculas (A = 0x00) e dígitos em 0xD8.
+- Ferramenta: no passo 5 de um save do F7, guarda um hash dos 0x838 bytes do
+  slot em `cv_f7_saves.txt` (ao lado do exe, com o ID da versão). Nada é
+  escrito no save. Gancho TEST_ROW (EU func_001D8090, JP func_001D63F0, US
+  func_001D6270): se o slot bate com um hash, a mensagem do local é desenhada
+  de uma entrada emprestada da tabela, apontada para "F7: rm_XXXX" (JP
+  "F7 RMXXXX") numa área de pilha, e restaurada logo depois. Save normal por
+  cima muda o hash e volta o texto do jogo.
+
 ## Pendente
 
-- Teste em jogo no JP e no US (troca de sala e "Salvar aqui").
-- Nome do local nos saves feitos fora das salas de save (hoje "NO_DATA").
+- Teste em jogo do rótulo F7 nas três versões.
 
 Testes: `CV_MAP_TESTS=1 build-release.cmd` (memória sintética, sem jogo).
