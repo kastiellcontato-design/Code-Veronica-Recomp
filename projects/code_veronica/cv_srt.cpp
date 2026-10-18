@@ -246,6 +246,12 @@ struct Canvas {
             g.DrawImage(&reduced,RectF(x,y,size,size),0,0,REAL(detail),REAL(detail),UnitPixel);
         }
         g.Restore(saved);
+        // The half-pixel offset moves the photo half a pixel up and left; the
+        // frame, drawn over it around where it really lands, is equally thick
+        // on all four sides.
+        const float b=1.5f,o=.5f/scale,px=x-o,py=y-o;
+        box(px-b,py-b,size+2*b,b,frame);box(px-b,py+size,size+2*b,b,frame);
+        box(px-b,py,b,size,frame);box(px+size,py,b,size,frame);
     }
     void diamond(float cx,float cy,float r,Color c,bool filled) {
         const PointF p[]={PointF(cx,cy-r),PointF(cx+r,cy),PointF(cx,cy+r),PointF(cx-r,cy)};
