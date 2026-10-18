@@ -4446,9 +4446,8 @@ static int fp_build_pso(FpJob* j)
      * occurrences rather than assuming a fixed amount of slack suffices. */
     size_t needed = strlen(j->hlsl) + k_pre + 8192u;
     const char* wpos = "float4(input.position.xyz, 1.0 / input.position.w)";
-    if (s_rs != 1.0f)
-        for (const char* p = j->hlsl; (p = strstr(p, wpos)) != NULL; p += strlen(wpos))
-            needed += 128u;
+    for (const char* p = j->hlsl; (p = strstr(p, wpos)) != NULL; p += strlen(wpos))
+        needed += 128u;
     if (needed > RSX_FP_HLSL_LIMIT) return FPB_FAIL;
     u32 cap = j->hlsl_cap;
     while (cap < needed) cap = cap > RSX_FP_HLSL_LIMIT / 2 ? RSX_FP_HLSL_LIMIT : cap * 2;
@@ -4701,11 +4700,14 @@ static int fp_build_pso(FpJob* j)
                 }
             } }
       } }
-    /* RES_SCALE: SV_Position is in host pixels; WPOS must stay in guest ones. */
-    if (s_rs != 1.0f)
-        hlsl_replace_all(hlsl, hlsl_cap,
-            "float4(input.position.xyz, 1.0 / input.position.w)",
-            "float4(input.position.xy * (rsx_alpha_k.w > 0.0 ? rsx_alpha_k.w : 1.0), input.position.z, 1.0 / input.position.w)");
+    /* RES_SCALE: SV_Position is in host pixels; WPOS must stay in guest ones.
+     * Always, not only when the game started scaled: the scale can change
+     * while running (the options menu), and a program compiled at 1x then
+     * read the lighter's screen-space light buffer at the wrong place. At 1x
+     * rsx_alpha_k.w is 0 and the factor 1. */
+    hlsl_replace_all(hlsl, hlsl_cap,
+        "float4(input.position.xyz, 1.0 / input.position.w)",
+        "float4(input.position.xy * (rsx_alpha_k.w > 0.0 ? rsx_alpha_k.w : 1.0), input.position.z, 1.0 / input.position.w)");
     /* (Cube units are declared and sampled by the decompiler, which gets the
      * mask, and turned into face-by-face array reads above.) */
     if (cube_mask) {
