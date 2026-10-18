@@ -640,7 +640,8 @@ void build(const cv_srt_state& st,const Config& cfg,uint32_t width,uint32_t heig
         const Color gold(255,201,162,74);
         const float ratio=centre_boss.maximum?std::clamp(float(centre_boss.hp)/centre_boss.maximum,0.f,1.f):0;
         const float art_h=art_height(wide_art,centre_w),under=centre_name+art_h*(wide_art.cy+wide_art.ch)/wide_art.h;
-        cc.text(engraved(upper(cv_srt_i18n::enemy(b->phase?12:centre_boss.type,cfg.lang))),0,0,centre_w,28,cc.cream,false,false,true,centre_name,false,true,true);
+        // The name sits down into the frame's empty top, just above its centre gem.
+        cc.text(engraved(upper(cv_srt_i18n::enemy(b->phase?12:centre_boss.type,cfg.lang))),0,14,centre_w,28,cc.cream,false,false,true,centre_name,false,true,true);
         cc.text(number(int(ratio*100+.5f))+L"%",centre_w*.104f,under,140,19,cc.cream,false,false,true,centre_h-under);
         cc.text(number(centre_boss.hp)+L" / "+number(centre_boss.maximum),centre_w*.907f-200,under,200,19,cc.cream,false,true,true,centre_h-under);
         if(b->phase) {
