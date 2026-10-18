@@ -69,6 +69,7 @@ enum StrId {
     S_VF_T, S_VF_D,
     S_ANISO,
     S_SHARPNESS,
+    S_PATCH_CUSTOM_T, S_PATCH_CUSTOM_D,
     S_COUNT
 };
 
@@ -96,7 +97,7 @@ static const wchar_t* const k_str_pt[] = {
     L"PATCHES DO JOGO", L"Mudanças no próprio código do jogo. Valem na hora, mesmo com o jogo aberto.",
     L"Pular animação das portas",
     L"Ao passar por uma porta, a próxima sala carrega direto, sem a animação da porta abrindo.",
-    L"\"Remove Door Animations\" por Kapdap, da lista de patches do RPCS3. Vale para as versões europeia, americana e japonesa.",
+    L"por Kapdap · lista de patches do RPCS3",
     L"%s conectado", L"Nenhum controle conectado", L"O teclado também funciona junto.",
     L"Conecte por USB ou Bluetooth.", L"CONECTADO", L"DESCONECTADO",
     L"Controle Xbox",
@@ -241,6 +242,8 @@ static const wchar_t* const k_str_pt[] = {
     L"Vértices na GPU (experimental)", L"A placa de vídeo converte os vértices do jogo. Bem mais FPS nas salas pesadas. Vale ao abrir o jogo.",
     L"Filtro anisotrópico",
     L"Nitidez (FSR 1 RCAS)",
+    L"PATCHES PERSONALIZADOS",
+    L"Patches que não vêm com o port: feitos por você ou baixados de outras pessoas, no formato do RPCS3 (arquivos .yml, como o patch.yml). Escolha a pasta onde eles estão; cada um aparece abaixo com a sua chave.",
 };
 static_assert(sizeof k_str_pt / sizeof k_str_pt[0] == S_COUNT, "k_str_pt: one text per StrId");
 
@@ -268,7 +271,7 @@ static const wchar_t* const k_str_en[] = {
     L"GAME PATCHES", L"Changes to the game's own code. They apply at once, even while the game runs.",
     L"Skip door animations",
     L"When you go through a door, the next room loads right away, without the door-opening animation.",
-    L"\"Remove Door Animations\" by Kapdap, from RPCS3's patch list. Works with the European, American and Japanese versions.",
+    L"by Kapdap · RPCS3 patch list",
     L"%s connected", L"No controller connected", L"The keyboard works at the same time.",
     L"Connect via USB or Bluetooth.", L"CONNECTED", L"DISCONNECTED",
     L"Xbox controller",
@@ -413,6 +416,8 @@ static const wchar_t* const k_str_en[] = {
     L"Vertices on the GPU (experimental)", L"The graphics card converts the game's vertices. Much higher FPS in heavy rooms. Applies when the game starts.",
     L"Anisotropic filtering",
     L"Sharpness (FSR 1 RCAS)",
+    L"CUSTOM PATCHES",
+    L"Patches that don't ship with the port: made by you or downloaded from others, in RPCS3's format (.yml files such as patch.yml). Pick the folder they are in; each one shows up below with its own switch.",
 };
 static_assert(sizeof k_str_en / sizeof k_str_en[0] == S_COUNT, "k_str_en: one text per StrId");
 
@@ -440,7 +445,7 @@ static const wchar_t* const k_str_es[] = {
     L"PARCHES DEL JUEGO", L"Cambios en el propio código del juego. Se aplican al instante, incluso con el juego abierto.",
     L"Omitir animación de puertas",
     L"Al cruzar una puerta, la siguiente sala carga directamente, sin la animación de la puerta abriéndose.",
-    L"\"Remove Door Animations\" de Kapdap, de la lista de parches de RPCS3. Sirve para las versiones europea, americana y japonesa.",
+    L"de Kapdap · lista de parches de RPCS3",
     L"%s conectado", L"Ningún mando conectado", L"El teclado también funciona a la vez.",
     L"Conéctalo por USB o Bluetooth.", L"CONECTADO", L"DESCONECTADO",
     L"Mando de Xbox",
@@ -585,6 +590,8 @@ static const wchar_t* const k_str_es[] = {
     L"Vértices en la GPU (experimental)", L"La tarjeta gráfica convierte los vértices del juego. Muchos más FPS en las salas pesadas. Se aplica al iniciar el juego.",
     L"Filtrado anisotrópico",
     L"Nitidez (FSR 1 RCAS)",
+    L"PARCHES PERSONALIZADOS",
+    L"Parches que no vienen con el port: hechos por ti o descargados de otras personas, en el formato de RPCS3 (archivos .yml, como patch.yml). Elige la carpeta donde están; cada uno aparece abajo con su interruptor.",
 };
 static_assert(sizeof k_str_es / sizeof k_str_es[0] == S_COUNT, "k_str_es: one text per StrId");
 
@@ -612,7 +619,7 @@ static const wchar_t* const k_str_ja[] = {
     L"ゲームパッチ", L"ゲーム本体のコードへの変更です。ゲーム中でもすぐに反映されます。",
     L"ドア演出をスキップ",
     L"ドアを通ると、ドアが開く演出なしで次の部屋がすぐに読み込まれます。",
-    L"RPCS3 のパッチリストより「Remove Door Animations」（作者: Kapdap）。欧州版・北米版・日本版に対応。",
+    L"作者: Kapdap · RPCS3 パッチリスト",
     L"%s 接続中", L"コントローラー未接続", L"キーボードも同時に使えます。",
     L"USB または Bluetooth で接続してください。", L"接続中", L"未接続",
     L"Xbox コントローラー",
@@ -757,6 +764,8 @@ static const wchar_t* const k_str_ja[] = {
     L"GPU で頂点処理（実験的）", L"ゲームの頂点変換をグラフィックカードで行います。重い部屋で FPS が大きく向上します。ゲーム起動時に適用されます。",
     L"異方性フィルタリング",
     L"シャープネス (FSR 1 RCAS)",
+    L"カスタムパッチ",
+    L"ポートに含まれないパッチです。自作のものや他の人が作ったものを RPCS3 形式 (.yml ファイル、patch.yml など) で使えます。ファイルのあるフォルダーを選ぶと、各パッチが下にスイッチ付きで表示されます。",
 };
 static_assert(sizeof k_str_ja / sizeof k_str_ja[0] == S_COUNT, "k_str_ja: one text per StrId");
 
@@ -808,7 +817,7 @@ static const wchar_t* const k_str_fr[] = {
     L"Modifications du code même du jeu. Elles s'appliquent tout de suite, même jeu lancé.",
     L"Passer l'animation des portes",
     L"En franchissant une porte, la pièce suivante se charge directement, sans l'animation d'ouverture.",
-    L"« Remove Door Animations » de Kapdap, de la liste de patchs de RPCS3. Fonctionne avec les versions européenne, américaine et japonaise.",
+    L"de Kapdap · liste de patchs de RPCS3",
     L"%s connectée",
     L"Aucune manette connectée",
     L"Le clavier fonctionne en même temps.",
@@ -983,6 +992,8 @@ static const wchar_t* const k_str_fr[] = {
     L"Sommets sur le GPU (expérimental)", L"La carte graphique convertit les sommets du jeu. Bien plus d'images par seconde dans les salles lourdes. S'applique au lancement du jeu.",
     L"Filtrage anisotrope",
     L"Netteté (FSR 1 RCAS)",
+    L"PATCHS PERSONNALISÉS",
+    L"Patchs qui ne sont pas fournis avec le port : faits par vous ou récupérés auprès d'autres personnes, au format de RPCS3 (fichiers .yml, comme patch.yml). Choisissez leur dossier ; chacun apparaît ci-dessous avec son interrupteur.",
 };
 static_assert(sizeof k_str_fr / sizeof k_str_fr[0] == S_COUNT, "k_str_fr: one text per StrId");
 
@@ -1034,7 +1045,7 @@ static const wchar_t* const k_str_de[] = {
     L"Änderungen am Code des Spiels selbst. Sie gelten sofort, auch bei laufendem Spiel.",
     L"Türanimationen überspringen",
     L"Beim Durchqueren einer Tür lädt der nächste Raum sofort, ohne die Animation der sich öffnenden Tür.",
-    L"„Remove Door Animations“ von Kapdap, aus der Patch-Liste von RPCS3. Gilt für die europäische, amerikanische und japanische Version.",
+    L"von Kapdap · Patch-Liste von RPCS3",
     L"%s verbunden",
     L"Kein Controller verbunden",
     L"Die Tastatur funktioniert gleichzeitig.",
@@ -1209,6 +1220,8 @@ static const wchar_t* const k_str_de[] = {
     L"Vertices auf der GPU (experimentell)", L"Die Grafikkarte wandelt die Vertices des Spiels um. Deutlich mehr FPS in aufwendigen Räumen. Gilt ab dem Spielstart.",
     L"Anisotrope Filterung",
     L"Schärfe (FSR 1 RCAS)",
+    L"EIGENE PATCHES",
+    L"Patches, die nicht zum Port gehören: selbst erstellt oder von anderen heruntergeladen, im Format von RPCS3 (.yml-Dateien wie patch.yml). Wähle ihren Ordner; jeder erscheint unten mit eigenem Schalter.",
 };
 static_assert(sizeof k_str_de / sizeof k_str_de[0] == S_COUNT, "k_str_de: one text per StrId");
 
@@ -1260,7 +1273,7 @@ static const wchar_t* const k_str_it[] = {
     L"Modifiche al codice stesso del gioco. Valgono subito, anche a gioco aperto.",
     L"Salta l'animazione delle porte",
     L"Attraversando una porta, la stanza successiva si carica subito, senza l'animazione della porta che si apre.",
-    L"\"Remove Door Animations\" di Kapdap, dalla lista di patch di RPCS3. Vale per le versioni europea, americana e giapponese.",
+    L"di Kapdap · lista di patch di RPCS3",
     L"%s connesso",
     L"Nessun controller connesso",
     L"Anche la tastiera funziona insieme.",
@@ -1435,6 +1448,8 @@ static const wchar_t* const k_str_it[] = {
     L"Vertici sulla GPU (sperimentale)", L"La scheda video converte i vertici del gioco. Molti più FPS nelle stanze pesanti. Si applica all'avvio del gioco.",
     L"Filtro anisotropico",
     L"Nitidezza (FSR 1 RCAS)",
+    L"PATCH PERSONALIZZATE",
+    L"Patch che non sono incluse nel port: create da te o scaricate da altri, nel formato di RPCS3 (file .yml, come patch.yml). Scegli la cartella in cui si trovano; ognuna compare qui sotto con il suo interruttore.",
 };
 static_assert(sizeof k_str_it / sizeof k_str_it[0] == S_COUNT, "k_str_it: one text per StrId");
 
@@ -1486,7 +1501,7 @@ static const wchar_t* const k_str_pl[] = {
     L"Zmiany w samym kodzie gry. Działają od razu, nawet przy uruchomionej grze.",
     L"Pomiń animacje drzwi",
     L"Po przejściu przez drzwi następne pomieszczenie wczytuje się od razu, bez animacji otwierania drzwi.",
-    L"„Remove Door Animations” autorstwa Kapdap, z listy poprawek RPCS3. Działa z wersją europejską, amerykańską i japońską.",
+    L"autor: Kapdap · lista poprawek RPCS3",
     L"%s podłączony",
     L"Brak podłączonego kontrolera",
     L"Klawiatura działa równocześnie.",
@@ -1661,6 +1676,8 @@ static const wchar_t* const k_str_pl[] = {
     L"Wierzchołki na GPU (eksperymentalne)", L"Karta graficzna przetwarza wierzchołki gry. Znacznie więcej FPS w ciężkich pomieszczeniach. Działa od uruchomienia gry.",
     L"Filtrowanie anizotropowe",
     L"Ostrość (FSR 1 RCAS)",
+    L"WŁASNE ŁATKI",
+    L"Łatki spoza portu: zrobione przez ciebie lub pobrane od innych, w formacie RPCS3 (pliki .yml, np. patch.yml). Wybierz folder, w którym się znajdują; każda pojawi się poniżej z własnym przełącznikiem.",
 };
 static_assert(sizeof k_str_pl / sizeof k_str_pl[0] == S_COUNT, "k_str_pl: one text per StrId");
 
@@ -1712,7 +1729,7 @@ static const wchar_t* const k_str_tr[] = {
     L"Oyunun kendi kodunda değişiklikler. Oyun açıkken bile hemen uygulanır.",
     L"Kapı animasyonlarını atla",
     L"Bir kapıdan geçerken sonraki oda, kapının açılma animasyonu olmadan hemen yüklenir.",
-    L"RPCS3 yama listesinden Kapdap'in \"Remove Door Animations\" yaması. Avrupa, Amerika ve Japonya sürümleriyle çalışır.",
+    L"Kapdap · RPCS3 yama listesi",
     L"%s bağlı",
     L"Bağlı kumanda yok",
     L"Klavye de aynı anda çalışır.",
@@ -1887,6 +1904,8 @@ static const wchar_t* const k_str_tr[] = {
     L"Köşe noktaları GPU'da (deneysel)", L"Ekran kartı oyunun köşe noktalarını dönüştürür. Ağır odalarda çok daha yüksek FPS. Oyun başlatılırken uygulanır.",
     L"Anizotropik filtreleme",
     L"Keskinlik (FSR 1 RCAS)",
+    L"ÖZEL YAMALAR",
+    L"Portla gelmeyen yamalar: kendi yaptığın ya da başkalarından indirdiğin, RPCS3 biçiminde (.yml dosyaları, örneğin patch.yml). Bulundukları klasörü seç; her biri aşağıda kendi anahtarıyla görünür.",
 };
 static_assert(sizeof k_str_tr / sizeof k_str_tr[0] == S_COUNT, "k_str_tr: one text per StrId");
 
@@ -1938,7 +1957,7 @@ static const wchar_t* const k_str_ar[] = {
     L"تغييرات في شيفرة اللعبة نفسها. تُطبَّق فورًا حتى أثناء تشغيل اللعبة.",
     L"تخطي رسوم فتح الأبواب",
     L"عند المرور عبر باب، تُحمَّل الغرفة التالية مباشرة دون رسوم فتح الباب.",
-    L"تصحيح \"Remove Door Animations\" من Kapdap، من قائمة تصحيحات RPCS3. يعمل مع النسخ الأوروبية والأمريكية واليابانية.",
+    L"من Kapdap · قائمة تصحيحات RPCS3",
     L"%s متصل",
     L"لا توجد ذراع تحكم متصلة",
     L"لوحة المفاتيح تعمل في الوقت نفسه.",
@@ -2113,6 +2132,8 @@ static const wchar_t* const k_str_ar[] = {
     L"معالجة الرؤوس على GPU (تجريبي)", L"تحوّل بطاقة الرسومات رؤوس اللعبة. معدل إطارات أعلى بكثير في الغرف الثقيلة. يُطبَّق عند تشغيل اللعبة.",
     L"التصفية متباينة الخواص",
     L"الحدّة (FSR 1 RCAS)",
+    L"تصحيحات مخصصة",
+    L"تصحيحات لا تأتي مع المنفذ: من صنعك أو منزّلة من آخرين، بصيغة RPCS3 (ملفات .yml مثل patch.yml). اختر المجلد الذي توجد فيه؛ يظهر كل تصحيح أدناه بمفتاح خاص به.",
 };
 static_assert(sizeof k_str_ar / sizeof k_str_ar[0] == S_COUNT, "k_str_ar: one text per StrId");
 
@@ -2164,7 +2185,7 @@ static const wchar_t* const k_str_zh[] = {
     L"对游戏本身代码的修改。即使游戏正在运行也会立即生效。",
     L"跳过开门动画",
     L"穿过门时，下一个房间会直接载入，不再播放开门动画。",
-    L"来自 RPCS3 补丁列表的“Remove Door Animations”（作者：Kapdap）。适用于欧版、美版和日版。",
+    L"作者：Kapdap · RPCS3 补丁列表",
     L"%s 已连接",
     L"未连接手柄",
     L"键盘也可同时使用。",
@@ -2339,6 +2360,8 @@ static const wchar_t* const k_str_zh[] = {
     L"GPU 顶点处理（实验性）", L"由显卡转换游戏的顶点。在复杂房间中帧率大幅提升。启动游戏时生效。",
     L"各向异性过滤",
     L"锐化 (FSR 1 RCAS)",
+    L"自定义补丁",
+    L"不随移植版附带的补丁：可以是你自己制作的，也可以是从别人那里下载的，格式为 RPCS3 的 .yml 文件（例如 patch.yml）。选择它们所在的文件夹，每个补丁都会在下方显示并带有开关。",
 };
 static_assert(sizeof k_str_zh / sizeof k_str_zh[0] == S_COUNT, "k_str_zh: one text per StrId");
 
@@ -2390,7 +2413,7 @@ static const wchar_t* const k_str_ko[] = {
     L"게임 코드 자체를 바꾸는 기능입니다. 게임 실행 중에도 바로 적용됩니다.",
     L"문 열리는 연출 건너뛰기",
     L"문을 지나가면 문이 열리는 연출 없이 다음 방이 바로 로드됩니다.",
-    L"RPCS3 패치 목록의 \"Remove Door Animations\" (제작: Kapdap). 유럽판, 북미판, 일본판에서 작동합니다.",
+    L"제작: Kapdap · RPCS3 패치 목록",
     L"%s 연결됨",
     L"연결된 컨트롤러 없음",
     L"키보드도 함께 사용할 수 있습니다.",
@@ -2565,6 +2588,8 @@ static const wchar_t* const k_str_ko[] = {
     L"GPU 정점 처리 (실험적)", L"그래픽 카드가 게임의 정점을 변환합니다. 무거운 방에서 FPS가 크게 오릅니다. 게임 시작 시 적용됩니다.",
     L"이방성 필터링",
     L"선명도 (FSR 1 RCAS)",
+    L"사용자 패치",
+    L"포트에 포함되지 않은 패치입니다. 직접 만들거나 다른 사람에게서 받은 RPCS3 형식의 패치(.yml 파일, 예: patch.yml)를 쓸 수 있습니다. 파일이 있는 폴더를 고르면 각 패치가 아래에 스위치와 함께 표시됩니다.",
 };
 static_assert(sizeof k_str_ko / sizeof k_str_ko[0] == S_COUNT, "k_str_ko: one text per StrId");
 
@@ -2616,7 +2641,7 @@ static const wchar_t* const k_str_ru[] = {
     L"Изменения в самом коде игры. Применяются сразу, даже во время игры.",
     L"Пропуск анимации дверей",
     L"При проходе через дверь следующая комната загружается сразу, без анимации открывающейся двери.",
-    L"«Remove Door Animations» от Kapdap из списка патчей RPCS3. Работает с европейской, американской и японской версиями.",
+    L"от Kapdap · список патчей RPCS3",
     L"%s подключён",
     L"Геймпад не подключён",
     L"Клавиатура работает одновременно с ним.",
@@ -2791,6 +2816,8 @@ static const wchar_t* const k_str_ru[] = {
     L"Вершины на GPU (эксперимент.)", L"Видеокарта преобразует вершины игры. Намного выше FPS в тяжёлых комнатах. Применяется при запуске игры.",
     L"Анизотропная фильтрация",
     L"Резкость (FSR 1 RCAS)",
+    L"СВОИ ПАТЧИ",
+    L"Патчи, которых нет в порте: сделанные вами или скачанные у других, в формате RPCS3 (файлы .yml, например patch.yml). Выберите папку с ними; каждый появится ниже со своим переключателем.",
 };
 static_assert(sizeof k_str_ru / sizeof k_str_ru[0] == S_COUNT, "k_str_ru: one text per StrId");
 

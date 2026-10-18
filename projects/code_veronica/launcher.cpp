@@ -183,7 +183,7 @@ struct Settings {
     bool overlay = false;  /* the performance overlay (rsx_perf_overlay.h) */
     int overlay_items = 3; /* bits of k_overlay_items: FPS and frame time */
     int overlay_corner = 1, overlay_layout = 0;   /* 0 tl, 1 tr, 2 bl, 3 br; 0 a row, 1 a column */
-    bool shader_opt[6] = { true, true, true, true, true, false };   /* k_shader_opts, Desempenho page */
+    bool shader_opt[6] = { true, true, true, true, true, true };   /* k_shader_opts, Desempenho page */
     std::wstring tex_dir;              /* texture mods (Mods page); empty: "textures" beside the exe */
     std::wstring tex_dump_dir;         /* where dumps go; empty: <tex_dir>\<version>\dump */
     bool tex_replace = false, tex_dump = false;
@@ -372,7 +372,7 @@ Settings load_settings()
     s.srt_language=std::clamp(_wtoi(ini_get(L"srt",L"idioma",L"0").c_str()),0,int(LANG_COUNT));
     s.overlay = _wtoi(ini_get(L"overlay", L"mostrar", L"0").c_str()) != 0;
     for (int i = 0; i < NSHADER_OPTS; i++)
-        s.shader_opt[i] = _wtoi(ini_get(L"shaders", k_shader_opts[i].key, i == 5 ? L"0" : L"1").c_str()) != 0;
+        s.shader_opt[i] = _wtoi(ini_get(L"shaders", k_shader_opts[i].key, L"1").c_str()) != 0;
     s.tex_dir = ini_get(L"texturas", L"pasta", L"");
     s.tex_dump_dir = ini_get(L"texturas", L"pasta_extraidas", L"");
     s.tex_replace = _wtoi(ini_get(L"texturas", L"substituir", L"0").c_str()) != 0;
@@ -1069,9 +1069,13 @@ void patch_card(Graphics& gr, float x, float y, float w, float h, bool on, bool 
     SolidBrush sb(on ? C_RED : usable ? Color(255, 60, 52, 52) : Color(255, 40, 36, 36)); gr.FillPath(&sb, sp); delete sp;
     SolidBrush knob(usable ? C_TEXT : Color(255, 90, 84, 84));
     gr.FillEllipse(&knob, on ? sw.X + sw.Width - 23 : sw.X + 3, sw.Y + 3, 20.0f, 20.0f);
+    const Color foot_c = foot_warn ? C_RED_HI : Color(255, 120, 110, 104);
     text(gr, title, x + 18, y + 8, body, usable ? C_TEXT : C_DIM, StringAlignmentNear, w - 120, 24);
     text(gr, desc, x + 18, y + 32, fsm, C_DIM, StringAlignmentNear, w - 120, 20);
-    text(gr, foot, x + 18, y + 52, fsm, foot_warn ? C_RED_HI : Color(255, 120, 110, 104), StringAlignmentNear, w - 120, 20);
+    if (h < 70)   /* compact: the foot on the title's line, at the right */
+        text(gr, foot, x + 18, y + 10, fsm, foot_c, StringAlignmentFar, w - 100, 20);
+    else
+        text(gr, foot, x + 18, y + 52, fsm, foot_c, StringAlignmentNear, w - 120, 20);
     if (usable) hit(x, y, w, h, id);
 }
 
@@ -1089,12 +1093,20 @@ void draw_patches(Graphics& gr, const Font& head, const Font& body, const Font& 
     text(gr, T(S_PATCHES_HINT),
          x, y + 32, fsm, C_DIM, StringAlignmentNear, w, 20);
     y += 74;
+    /* the port's own patches: two lines each, the credit beside the title */
     for (int i = 0; i < NPATCHES; i++) {
-        patch_card(gr, x, y, w, 84, g.s.patch[i], true, ID_PATCH + i, T(k_patches[i].title), T(k_patches[i].desc),
+        patch_card(gr, x, y, w, 58, g.s.patch[i], true, ID_PATCH + i, T(k_patches[i].title), T(k_patches[i].desc),
                    T(k_patches[i].credit), false, body, fsm);
-        y += 96;
+        y += 66;
     }
-    /* the folder of patch files */
+    /* patches from files: made by the player or shared by others */
+    y += 10;
+    section(gr, T(S_PATCH_CUSTOM_T), x, y, w, head);
+    { StringFormat sf; sf.SetLineAlignment(StringAlignmentNear);   /* two lines, wrapped */
+      if (g_lang == LANG_AR) sf.SetFormatFlags(StringFormatFlagsDirectionRightToLeft);
+      SolidBrush brush(C_DIM);
+      gr.DrawString(T(S_PATCH_CUSTOM_D), -1, &fsm, RectF(x, y + 34, w, 40), &sf, &brush); }
+    y += 80;
     std::wstring note;
     if (!g.s.patch_dir.empty()) {
         wchar_t b[200];
@@ -2520,6 +2532,9 @@ DWORD WINAPI launcher_thread(void*)
         _putenv_s("CV_LAUNCHER_AUTOPLAY", "");
         click(ID_PLAY);
     }
+    /* CV_LAUNCHER_PAGE=<n>: open on page n (Page order), for screenshots. */
+    if (const char* p = getenv("CV_LAUNCHER_PAGE"); p && atoi(p) > 0 && atoi(p) < P_COUNT)
+        click(ID_NAV + atoi(p));
     MSG msg;
     while (GetMessageW(&msg, NULL, 0, 0) > 0) { if(cv_test_tools_message(&msg))continue;TranslateMessage(&msg); DispatchMessageW(&msg); }
     cv_test_tools_close();
