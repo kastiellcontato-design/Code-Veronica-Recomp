@@ -72,6 +72,7 @@ extern void (*g_rsx_menu_hook)(void);
 extern void (*g_rsx_key_hook)(unsigned vk);
 extern "C" void rsx_d3d12_request_screenshot(void);
 extern int g_pad_block;
+extern int g_pad_shortcut_chords;
 void  perf_overlay_toast(const wchar_t* text, int on);
 void  cv_focus_pause_enable(int on);               /* cv_focus_pause.cpp */
 void  cv_focus_pause_label(const wchar_t* text);
@@ -130,7 +131,20 @@ std::wstring with_code(std::wstring m, const std::wstring& code)
 /* ---------------------------------------------------------------- language */
 int g_lang = LANG_PT;        /* the language shown */
 int g_lang_pick = -1;        /* the choice: -1 = Sistema (follow Windows), else a Lang */
-const wchar_t* T(int id) { return k_str[g_lang][id]; }
+bool s_shortcut_xbox=false;
+const wchar_t* T(int id) {
+    const wchar_t* original=k_str[g_lang][id];
+    if(!s_shortcut_xbox||!wcsstr(original,L"R1+R2+L1+L2+"))return original;
+    static std::wstring hints[LANG_COUNT][S_COUNT];
+    auto& hint=hints[g_lang][id];
+    if(hint.empty()) {
+        hint=original;
+        const wchar_t* ps[]={L"R1+R2+L1+L2+L3",L"R1+R2+L1+L2+R3",L"R1+R2+L1+L2+△",L"R1+R2+L1+L2+○",L"R1+R2+L1+L2+✕",L"R1+R2+L1+L2+□"};
+        const wchar_t* xb[]={L"RB+RT+LB+LT+LS",L"RB+RT+LB+LT+RS",L"RB+RT+LB+LT+Y",L"RB+RT+LB+LT+B",L"RB+RT+LB+LT+A",L"RB+RT+LB+LT+X"};
+        for(int i=0;i<6;i++)for(size_t at=0;(at=hint.find(ps[i],at))!=std::wstring::npos;at+=wcslen(xb[i]))hint.replace(at,wcslen(ps[i]),xb[i]);
+    }
+    return hint.c_str();
+}
 
 /* Windows' display language -> ours; anything we lack shows in English. */
 int system_lang()
@@ -1077,6 +1091,7 @@ void draw_jogo(Graphics& gr, const Font& head, const Font& body, const Font& fsm
            body, false, !g.s.saves.empty());
     button(gr,RectF(x,y+228,390,32),T(g.s.test_tools?S_TEST_ENABLED:S_TEST_ENABLE),ID_TEST_ENABLE,body);
     button(gr,RectF(x+404,y+228,260,32),T(S_TEST_OPEN),ID_TEST_OPEN,body,false,g.s.test_tools&&g.running);
+    text(gr,s_shortcut_xbox?L"F7 / RB+RT+LB+LT+B":L"F7 / R1+R2+L1+L2+○",x,y+262,fsm,C_DIM,StringAlignmentNear,W-SIDE-64.0f,14);
     option_card(gr,x,y+276,W-SIDE-64.0f,84,g.s.focus_pause,ID_FOCUS_PAUSE,
                 T(S_FOCUS_PAUSE_T),T(S_FOCUS_PAUSE_D),body,fsm);
     text(gr,T(S_SHOT_HINT),x,y+380,fsm,C_DIM,StringAlignmentNear,W-SIDE-64.0f,24);
@@ -2024,6 +2039,7 @@ void apply_live(bool restore_menu = true)
     rsx_d3d12_set_color_adjust(g.s.brightness, g.s.contrast);
     rsx_d3d12_set_saturation(g.s.saturation);
     rsx_d3d12_set_sharpness(g.s.sharpness);
+    g_pad_shortcut_chords=1;
     cellpad_set_map(&g.s.btn[0][0], &g.s.key[0][0]);
     set_map_env();
     for (int i = 0; i < NPATCHES; i++) ps3_patch_set(k_patches[i].id, g.s.patch[i]);
@@ -2449,6 +2465,7 @@ LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp)
             if(was_exporting&&!e.running){g.tex_rep=-1;if(g.page==P_MODS)redraw=true;}
             was_exporting=e.running;
         }
+        s_shortcut_xbox=kind==PAD_KIND_XINPUT;
         g.pad_status = st; g.pad_count = cnt; g.pad_kind = kind;
         if (g.cap == CAP_BTN) {
             for (int i = 0; i < PAD_PHYS_MAX; i++) {

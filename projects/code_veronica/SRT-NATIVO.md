@@ -419,3 +419,24 @@ Continuação do trabalho do GPT (fotos, munição do equipado, 13 idiomas).
   painel ocupa a mesma borda, a barra se centraliza no espaço que sobra.
 - Com o SRT em janela separada, o painel vai para a janela e a barra do
   centro continua sobre o jogo (`design(...,panel,centre)`).
+
+### Status sem corte (2026-10-18)
+- Somente o nome da condicao de saude usa ajuste automatico de fonte ao
+  espaco de 90 unidades. Mede com a mesma familia GDI+ do desenho e reduz
+  apenas quando necessario, reservando margem para sombra/contorno.
+- Desativa reticencias nesse campo: ENVENENADO aparece por inteiro.
+  Nomes curtos mantem tamanho 14; vale para todos os idiomas/escalas.
+- Medicao feita na criacao do tile de texto em cache, sem trabalho extra
+  a cada quadro. Layout, ECG, cores e logica de vida permanecem iguais.
+- Validacao visual com personagem envenenado ainda depende do usuario.
+- Compilacao oficial concluida: EU, JP e US linkados com CV_BUILD_JP=1 e CV_BUILD_US=1; diff --check sem erros no ajuste.
+
+### Correcao do icone da alabarda (2026-10-18)
+- O item 0x51 estava mapeado para a celula da linha 1, coluna 3, que contem
+  outro objeto. A alabarda aparece no atlas de item1, pagina 1, linha 2,
+  coluna 3 (x=306, y=144, celula 102x72).
+- Corrigido o mapeamento da biblioteca SRT e adicionada assercao de coordenada
+  e cobertura de extracao de 0x51 na integracao com os arquivos regionais.
+- O atlas consultado e o original da instalacao local JP; o mod nao e empacotado.
+
+Validacao da alabarda: build-release.cmd concluiu EU/JP/US com CV_SRT_TESTS=1; testes PASS nas tres regioes. A integracao leu o atlas original JP (jpn) e extraiu o ID 0x51 com a celula corrigida. Executaveis atualizados para teste pelo usuario.

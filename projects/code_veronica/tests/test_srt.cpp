@@ -1,3 +1,4 @@
+#include "../../../libs/input/pad_shortcut_gate.h"
 #define NOMINMAX
 #include <windows.h>
 #include <objidl.h>
@@ -183,6 +184,7 @@ int main(int argc,char** argv) {
     using namespace cv_srt_icons;
     Sprite sprite_rect{};assert(sprite(8,sprite_rect)&&sprite_rect.page==0&&sprite_rect.x==510&&sprite_rect.y==72);
     assert(sprite(0x37,sprite_rect)&&sprite_rect.x==510&&sprite_rect.y==576);
+    assert(sprite(0x51,sprite_rect)&&sprite_rect.page==1&&sprite_rect.x==306&&sprite_rect.y==144&&sprite_rect.w==102&&sprite_rect.h==72);
     assert(sprite(0x91,sprite_rect)&&sprite_rect.page==1&&sprite_rect.x==612&&sprite_rect.y==648);
     assert(sprite(1,sprite_rect)&&sprite_rect.w==204);
     assert(!sprite(0,sprite_rect)&&!sprite(0x26,sprite_rect)&&!sprite(0x6d,sprite_rect)&&!sprite(9999,sprite_rect));
@@ -205,7 +207,7 @@ int main(int argc,char** argv) {
     if(const char* base=std::getenv("CV_SRT_TEST_GAME_ROOT")) {
         const auto root=std::filesystem::path(std::u8string(reinterpret_cast<const char8_t*>(base)))/CV_TITLE_ID;
         Library icons;assert(icons.load(root.wstring()));
-        for(int id:{1,6,7,8,9,12,0x14,0x15,0x16,0x17,0x21,0x22,0x37,0x40,0x43,0x5e,0x91}) {
+        for(int id:{1,6,7,8,9,12,0x14,0x15,0x16,0x17,0x21,0x22,0x37,0x40,0x43,0x51,0x5e,0x91}) {
             const auto* icon=icons.get(id);assert(icon&&icon->width>0&&icon->height>0);
             size_t clear=0,visible=0;for(uint32_t c:icon->argb) {if(c>>24)visible++;else clear++;}
             assert(clear&&visible);assert(icons.get(id)==icon);
@@ -215,6 +217,18 @@ int main(int argc,char** argv) {
         const auto root_utf8=root.u8string();_putenv_s("PS3_VFS_ROOT",reinterpret_cast<const char*>(root_utf8.c_str()));
     }
     using namespace cv_launcher_controls;
+    // Actual physical gate: all six shortcuts, independent ports, release tail.
+    for(uint32_t extra:{1u<<PB_L3,1u<<PB_NORTH,1u<<PB_EAST,1u<<PB_SOUTH,1u<<PB_WEST,1u<<PB_R3}) {
+        unsigned latch=0,other=0;
+        assert(!pad_shortcut_gate(&latch,1u<<PB_SOUTH));
+        assert(pad_shortcut_gate(&latch,shoulders));
+        assert(pad_shortcut_gate(&latch,shoulders|extra));
+        assert(pad_shortcut_gate(&latch,extra));
+        assert(!pad_shortcut_gate(&other,extra));
+        assert(pad_shortcut_gate(&latch,0));
+        assert(!pad_shortcut_gate(&latch,extra));
+    }
+
     for(uint32_t chord:{srt_chord,menu_chord}) {
         assert(chord_active(chord,chord));assert(chord_active(chord|(1u<<PB_START),chord));
         for(int b=0;b<PB_COUNT;b++)if(chord&(1u<<b))assert(!chord_active(chord&~(1u<<b),chord));

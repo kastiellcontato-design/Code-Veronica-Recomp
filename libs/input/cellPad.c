@@ -190,6 +190,8 @@ static void pad_map_load(void)
 /* A launcher's options menu, while the game runs: new mapping (applies on the
  * next poll) and input hold-off while the menu has the focus. */
 int g_pad_block;
+int g_pad_shortcut_chords; /* opt-in by the title launcher */
+#include "pad_shortcut_gate.h"
 void cellpad_set_map(const int* btn, const int* key)   /* [PA_COUNT][PAD_BTN_SLOTS], [PA_COUNT][PAD_KEY_SLOTS] */
 {
     s_map_live = 1;
@@ -291,7 +293,9 @@ static void pad_poll_xinput(void)
     for (int i = 0; i < PAD_MAX_HOST_PORTS; i++) {
         PadPhys p;
         PadHostState* hs = &s_host_state[i];
+        static unsigned shortcut_held[PAD_MAX_HOST_PORTS];
         if (!pad_phys_poll(i, &p)) {
+            shortcut_held[i] = 0;
             hs->connected = 0;
             hs->buttons = 0;
             hs->analog_lx = hs->analog_ly = hs->analog_rx = hs->analog_ry = 128;
@@ -299,6 +303,15 @@ static void pad_poll_xinput(void)
             continue;
         }
         hs->connected = 1;
+        if (g_pad_shortcut_chords && pad_shortcut_gate(&shortcut_held[i],p.buttons)) {
+            /* Launcher polls the unmodified physical state independently. */
+            hs->buttons = 0;
+            hs->analog_lx = hs->analog_ly = hs->analog_rx = hs->analog_ry = 128;
+            hs->trigger_l2 = hs->trigger_r2 = 0;
+            pad_set_pressures(hs);
+            if(p.buttons)s_last_input=p.kind;
+            continue;
+        }
         u16 btns = 0;
         for (int a = 0; a < PA_COUNT; a++)
             for (int k = 0; k < PAD_BTN_SLOTS; k++)

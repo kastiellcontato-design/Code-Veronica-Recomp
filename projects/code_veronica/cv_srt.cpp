@@ -182,7 +182,7 @@ struct Canvas {
     void box(float x,float y,float w,float h,Color color) {SolidBrush b(color);g.FillRectangle(&b,x,y,w,h);}
     void background(float x,float y,float w,float h,Color color) {box(x,y,w,h,Color(BYTE(std::lround(color.GetA()*opacity)),color.GetR(),color.GetG(),color.GetB()));}
     void line(float x,float y,float x2,float y2,Color c,float size=1) {Pen p(c,size);g.DrawLine(&p,x,y,x2,y2);}
-    void text(const std::wstring& value,float x,float y,float w,float size,Color c,bool bold=false,bool right=false,bool serif=false,float h=30,bool wrap=false,bool ellipsis=true,bool centred=false) {
+    void text(const std::wstring& value,float x,float y,float w,float size,Color c,bool bold=false,bool right=false,bool serif=false,float h=30,bool wrap=false,bool ellipsis=true,bool centred=false,bool shrink_to_fit=false) {
         // Resolve text at 2x into a cached, native-pixel tile. Only the text is
         // supersampled: the panel, game and per-frame ECG keep their own cost.
         using Key=std::tuple<std::wstring,std::wstring,int,int,int,int,uint32_t>;
@@ -190,7 +190,7 @@ struct Canvas {
         const int pw=std::max(1,int(std::ceil(w*scale))),ph=std::max(1,int(std::ceil(h*scale)));
         const bool rtl=cv_srt_i18n::rtl_text(value);
         const std::wstring face=serif?L"Georgia":cv_srt_i18n::font_face(lang,bold);
-        const int flags=(bold?1:0)|(right?2:0)|(serif?4:0)|(wrap?8:0)|(ellipsis?16:0)|(rtl?32:0)|(centred?64:0);
+        const int flags=(bold?1:0)|(right?2:0)|(serif?4:0)|(wrap?8:0)|(ellipsis?16:0)|(rtl?32:0)|(centred?64:0)|(shrink_to_fit?128:0);
         Key key{value,face,pw,ph,int(std::lround(size*scale*64)),flags,c.GetValue()};
         auto found=cache.find(key);
         if(found==cache.end()) {
@@ -200,7 +200,19 @@ struct Canvas {
             hg.Clear(Color(0,0,0,0));hg.ScaleTransform(2,2);
             hg.SetTextRenderingHint(TextRenderingHintAntiAliasGridFit);
             FontFamily family(face.c_str());
-            Font font(&family,size*scale,FontStyleRegular,UnitPixel);
+            float fitted_size=size*scale;
+            if(shrink_to_fit&&!value.empty()) {
+                // Use the same family and GDI+ metrics as the cached tile.
+                // Keep room for the shadow/halo at either edge of the slot.
+                const float available=std::max(1.f,float(pw)-3.f);
+                for(int pass=0;pass<3;pass++) {
+                    Font probe(&family,fitted_size,FontStyleRegular,UnitPixel);
+                    RectF bounds;hg.MeasureString(value.c_str(),-1,&probe,PointF(0,0),&bounds);
+                    if(bounds.Width<=available||bounds.Width<=0)break;
+                    fitted_size*=available/bounds.Width;
+                }
+            }
+            Font font(&family,fitted_size,FontStyleRegular,UnitPixel);
             StringFormat format;format.SetLineAlignment(StringAlignmentCenter);
             // Under RTL, Near is the right edge: swap so Arabic keeps the same layout slots.
             format.SetAlignment(centred?StringAlignmentCenter:right!=rtl?StringAlignmentFar:StringAlignmentNear);
@@ -547,7 +559,7 @@ void build(const cv_srt_state& st,const Config& cfg,uint32_t width,uint32_t heig
             c.text(number(pct)+L"%",222,y,64,17,state_color,false,true,false,28);
             c.bar(18,y+32,268,11,ratio,state_color);
             const int word=condition==SRT_FINE?7:condition<=SRT_WARNING?8:condition==SRT_DANGER?9:condition==SRT_POISON?10:condition==SRT_GAS?11:12;
-            c.text(upper(cfg.words[word]),196,y+57,90,14,state_color,true,false,false,34);
+            c.text(upper(cfg.words[word]),196,y+57,90,14,state_color,true,false,false,34,false,false,false,true);
             ecg_y=y+72;ecg_color=state_color.GetValue();
             for(int row=-1;row<=1;row++)c.line(18,y+72+row*12.f,184,y+72+row*12.f,Color(35,110,120,110),.5f);
             for(int col=0;col<=10;col++)c.line(18+col*16.f,y+60,18+col*16.f,y+84,Color(25,110,120,110),.5f);
