@@ -125,6 +125,25 @@ if "%CV_MAP_TESTS%"=="1" (
  )
 )
 
+rem F6 item menu: rules and guest write on synthetic memory, per region;
+rem with CV_ITEMS_PREVIEW=<folder> the EU run also draws the menu there.
+if "%CV_ITEMS_TESTS%"=="1" (
+ cmake --build build-release --target code_veronica_items_tests -j 6 || exit /b 1
+ if defined CV_ITEMS_PREVIEW (
+  build-release\bin\cv_items_tests_eu.exe "%CV_ITEMS_PREVIEW%" "D:/ps3recomp/JOGO/NPEB00553" || exit /b 1
+ ) else (
+  build-release\bin\cv_items_tests_eu.exe || exit /b 1
+ )
+ if "%CV_BUILD_JP%"=="1" (
+  cmake --build build-release-jp --target code_veronica_items_tests -j 6 || exit /b 1
+  build-release\bin\cv_items_tests_jp.exe || exit /b 1
+ )
+ if "%CV_BUILD_US%"=="1" (
+  cmake --build build-release-us --target code_veronica_items_tests -j 6 || exit /b 1
+  build-release\bin\cv_items_tests_us.exe || exit /b 1
+ )
+)
+
 rem Pause on focus loss: the decision logic, no game or window needed.
 if "%CV_FOCUS_PAUSE_TESTS%"=="1" (
  cmake --build build-release --target code_veronica_focus_pause_tests -j 6 || exit /b 1

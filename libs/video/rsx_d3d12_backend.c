@@ -1162,7 +1162,8 @@ static HWND s_backdrop;
 static u32  s_win_w = 1280, s_win_h = 720;   /* render size, for the framed window */
 void (*g_rsx_menu_hook)(void);               /* Insert: the title's options menu */
 void (*g_rsx_key_hook)(unsigned vk);         /* any other key pressed (not repeats): the title's hotkeys */
-static volatile LONG s_shot_request;   /* F11, taken by shot_record() */
+static volatile LONG s_shot_request;   /* F10 or a controller chord, taken by shot_record() */
+void rsx_d3d12_request_screenshot(void) { InterlockedExchange(&s_shot_request, 1); }
 
 static void window_apply_mode(HWND hwnd, int mode)
 {
@@ -1237,11 +1238,15 @@ static LRESULT CALLBACK d3d12_wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         PostQuitMessage(0);
         return 0;
     case WM_SYSKEYUP:
-        if (s_lighter_probe && wp == VK_F10) return 0;
+        if (wp == VK_F10) return 0;   /* the screenshot key: never the system menu on release */
         break;
     case WM_SYSKEYDOWN:
         /* Windows delivers F10 as a system key, even without Alt. */
         if (lighter_probe_key(wp, lp)) return 0;
+        if (wp == VK_F10) {   /* F10: screenshot; never the system menu */
+            if (!(lp & (1 << 30))) InterlockedExchange(&s_shot_request, 1);
+            return 0;
+        }
         if (wp == VK_RETURN && !(lp & (1 << 30))) {   /* Alt+Enter: window <-> fullscreen */
             window_apply_mode(hwnd, s_wmode == 0 ? 2 : 0);
             return 0;
@@ -1249,13 +1254,10 @@ static LRESULT CALLBACK d3d12_wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         break;
     case WM_KEYDOWN:
         if (lighter_probe_key(wp, lp)) return 0;
-        if (wp == VK_ESCAPE) {
-            s_d3d.window_closed = 1;
-            DestroyWindow(hwnd);
-        }
+        /* Esc no longer quits: the window's X or Alt+F4 does. */
         if (wp == VK_INSERT && !(lp & (1 << 30)) && g_rsx_menu_hook) g_rsx_menu_hook();
         else if (!(lp & (1 << 30)) && g_rsx_key_hook) g_rsx_key_hook((unsigned)wp);
-        if (wp == VK_F11 && !(lp & (1 << 30))) InterlockedExchange(&s_shot_request, 1);   /* F11: screenshot */
+
         if (wp == VK_F12 && !(lp & (1 << 30))) {   /* F12: rsxcap the next frame */
             extern volatile int g_rsx_cap_request;
             g_rsx_cap_request = 1;

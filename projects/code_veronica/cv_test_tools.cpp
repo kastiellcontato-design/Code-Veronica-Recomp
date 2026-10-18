@@ -14,6 +14,7 @@
 #include <cwctype>
 #include "cv_launcher_controls.h"
 #include "cv_test_tools_i18n.h"
+#include "cv_items.h"
 #ifdef _WIN32
 #include <commctrl.h>
 #include <dwmapi.h>
@@ -437,6 +438,7 @@ LRESULT CALLBACK proc(HWND h,UINT msg,WPARAM wp,LPARAM lp) {
         if(GetForegroundWindow()!=h)return 0;
         for(int i=0;i<PAD_PHYS_MAX;i++) {PadPhys p{};if(!pad_phys_poll(i,&p)){previous_pad[i]=0;continue;}
             uint32_t edge=p.buttons&~previous_pad[i];previous_pad[i]=p.buttons;
+            if(cv_launcher_controls::chord_held(p.buttons))continue;   // a shortcut chord: the launcher acts on it
             if(edge&(1u<<PB_EAST)){SendMessageW(h,WM_CLOSE,0,0);break;}
             if(edge&(1u<<PB_SOUTH)){confirm_action();break;}
             int delta=(p.buttons&(1u<<PB_DOWN))?1:(p.buttons&(1u<<PB_UP))?-1:0;
@@ -486,6 +488,7 @@ void cv_test_tools_show(HWND owner,const std::wstring& game,int lang) {
     for(int i=0;i<PAD_PHYS_MAX;i++){PadPhys p{};pad_phys_poll(i,&p);previous_pad[i]=p.buttons;}
 }
 void TEST_FRAME(ppu_context* ctx) {
+    cv_items::frame();   // the F6 item menu's one write, between game frames
     if(enabled) {
         bool valid=active_game()&&!tool_load;ready=valid;
         room_known=live_character();

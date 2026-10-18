@@ -41,6 +41,8 @@ unsigned ppu_boot_frames_presented(void);   /* main.cpp */
 namespace {
 
 std::atomic<int> g_enabled{1};
+std::atomic<int> g_held{0};   /* a port window that pauses the game while open (the F6 item menu) */
+bool g_applied = false;       /* the pause in effect: focus or held */
 SRWLOCK g_label_lock = SRWLOCK_INIT;
 wchar_t g_label[64] = L"Paused";
 cv_focus::Tracker g_tracker;
@@ -156,7 +158,7 @@ void show_notice(HWND game, bool on)
     place_notice(game);
 }
 
-void apply(bool pause, HWND game)
+void apply(bool pause, HWND game, bool held)
 {
     if (pause) {
         cellAudio_set_paused(1);
@@ -164,7 +166,7 @@ void apply(bool pause, HWND game)
         g_paused_at = GetTickCount64();
         g_guest_at = ps3_guest_qpc();
         g_frames_at = ppu_boot_frames_presented();
-        std::fprintf(stderr, "[pause] the game window lost focus: paused\n");
+        std::fprintf(stderr, held ? "[pause] held by a port window: paused\n" : "[pause] the game window lost focus: paused\n");
     } else {
         LARGE_INTEGER f; QueryPerformanceFrequency(&f);
         const double guest_ms = double(ps3_guest_qpc() - g_guest_at) * 1000.0 / double(f.QuadPart);
@@ -174,12 +176,16 @@ void apply(bool pause, HWND game)
                      (GetTickCount64() - g_paused_at) / 1000.0, guest_ms,
                      ppu_boot_frames_presented() - g_frames_at);
     }
-    show_notice(game, pause);
+    show_notice(game, pause && !held);   /* the window that holds the pause says so itself */
 }
 
 }  // namespace
 
 extern "C" void cv_focus_pause_enable(int on) { g_enabled.store(on ? 1 : 0); }
+
+/* Pause while a port window is open, whatever the option says; the frame
+ * clock applies it on its next poll. */
+extern "C" void cv_focus_pause_hold(int on) { g_held.store(on ? 1 : 0); }
 
 extern "C" void cv_focus_pause_label(const wchar_t* text)
 {
@@ -192,7 +198,7 @@ extern "C" int cv_focus_pause_poll(void)
 {
     static ULONGLONG last = 0;
     const ULONGLONG now = GetTickCount64();
-    if (now - last < 15) return g_tracker.paused();   /* the frame clock runs every millisecond */
+    if (now - last < 15) return g_applied;   /* the frame clock runs every millisecond */
     last = now;
 
     static const int forced = env_choice("CV_FOCUS_PAUSE");
@@ -210,9 +216,12 @@ extern "C" int cv_focus_pause_poll(void)
         if (selftest) { s.foreground_ours = (now - t0) % 12000 < 8000; s.minimized = false; }
     }
     const bool enabled = forced >= 0 ? forced != 0 : g_enabled.load() != 0;
-    const bool was = g_tracker.paused();
-    const bool paused = g_tracker.update(enabled, s, now);
-    if (paused != was) apply(paused, game);
-    else if (paused) place_notice(game);
+    const bool held = g_held.load() != 0;
+    const bool paused = g_tracker.update(enabled, s, now) || held;
+    if (paused != g_applied) { g_applied = paused; apply(paused, game, held); }
+    else if (paused && !held) {   /* the menu closed with the game still out of focus */
+        if (g_notice && IsWindowVisible(g_notice)) place_notice(game);
+        else show_notice(game, true);
+    }
     return paused;
 }

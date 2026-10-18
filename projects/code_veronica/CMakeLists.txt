@@ -264,7 +264,7 @@ endif()
 # title's own artwork and are not in the repository; without them the launcher
 # draws a plain banner and the exe keeps the default icon.
 if(WIN32)
-    target_sources(${PROJECT_NAME} PRIVATE native_pc_menu.cpp boot_skip.cpp cv_test_tools.cpp cv_native_libc.cpp cv_focus_pause.cpp)
+    target_sources(${PROJECT_NAME} PRIVATE native_pc_menu.cpp boot_skip.cpp cv_test_tools.cpp cv_native_libc.cpp cv_focus_pause.cpp cv_items.cpp cv_item_menu.cpp)
     file(GLOB LAUNCHER_ART CONFIGURE_DEPENDS
          "${CMAKE_CURRENT_SOURCE_DIR}/launcher_art/*.png"
          "${CMAKE_CURRENT_SOURCE_DIR}/launcher_art/*.jpg")
@@ -476,7 +476,7 @@ endif()
 
 # Optional tests of host map commands against isolated synthetic guest memory.
 if(WIN32)
-    add_executable(code_veronica_map_tests EXCLUDE_FROM_ALL tests/test_map_tools.cpp)
+    add_executable(code_veronica_map_tests EXCLUDE_FROM_ALL tests/test_map_tools.cpp cv_items.cpp)
     target_include_directories(code_veronica_map_tests PRIVATE "${RECOMP_DIR}")
     target_compile_options(code_veronica_map_tests PRIVATE /UNDEBUG)
     target_link_libraries(code_veronica_map_tests PRIVATE user32 gdi32)
@@ -487,6 +487,23 @@ if(WIN32)
         target_compile_definitions(code_veronica_map_tests PRIVATE CV_REGION_US=1)
         set_target_properties(code_veronica_map_tests PROPERTIES OUTPUT_NAME "code_veronica_map_tests_us")
     endif()
+# The F6 item menu: catalog, placement, the guest write and the drawing,
+# against synthetic memory with this build's region addresses.
+if(WIN32)
+    add_executable(code_veronica_items_tests EXCLUDE_FROM_ALL
+        tests/test_items.cpp cv_items.cpp cv_item_menu.cpp cv_srt_icons.cpp cv_srt_i18n.cpp
+        "${CMAKE_CURRENT_BINARY_DIR}/launcher_art.rc"
+        "${PS3RECOMP_DIR}/libs/filesystem/edat.c")
+    target_compile_options(code_veronica_items_tests PRIVATE /UNDEBUG)
+    target_link_libraries(code_veronica_items_tests PRIVATE gdi32 user32 gdiplus ole32 dwmapi)
+    set_target_properties(code_veronica_items_tests PROPERTIES OUTPUT_NAME "cv_items_tests_${CV_REGION_LC}")
+    if(CV_REGION_LC STREQUAL "jp")
+        target_compile_definitions(code_veronica_items_tests PRIVATE CV_REGION_JP=1)
+    elseif(CV_REGION_LC STREQUAL "us")
+        target_compile_definitions(code_veronica_items_tests PRIVATE CV_REGION_US=1)
+    endif()
+endif()
+
 endif()
 
 # Pause on focus loss: the decision (which windows count as the game's focus,

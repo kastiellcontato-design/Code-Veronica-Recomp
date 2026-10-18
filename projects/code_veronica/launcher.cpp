@@ -41,6 +41,7 @@
 #include "cv_launcher_controls.h"
 #include "log_viewer.h"
 #include "cv_test_tools.h"
+#include "cv_item_menu.h"
 #include "cv_keycap_style.h"
 
 /* button_icons.cpp: the keycaps' short labels and font, shared with the game. */
@@ -67,6 +68,7 @@ void  rsx_d3d12_close(void);
 void* rsx_d3d12_window(void);
 extern void (*g_rsx_menu_hook)(void);
 extern void (*g_rsx_key_hook)(unsigned vk);
+extern "C" void rsx_d3d12_request_screenshot(void);
 extern int g_pad_block;
 void  perf_overlay_toast(const wchar_t* text, int on);
 void  cv_focus_pause_enable(int on);               /* cv_focus_pause.cpp */
@@ -192,6 +194,7 @@ struct Settings {
     bool tex_replace = false, tex_dump = false;
     bool test_tools=false; // optional experimental map window, off by default
     bool focus_pause=true; // pause while the game window is out of focus (cv_focus_pause.cpp)
+    bool items_menu=false; // F6 item menu in the game (cv_item_menu.cpp), off by default
     bool srt=false;
     bool srt_parts[5]={true,true,true,true,false}; // name, health, time, stats, inventory
     bool srt_border=true;
@@ -228,6 +231,9 @@ const PatchOpt k_patches[] = {
     { "cv_skip_logos", S_PATCH_LOGO_T, S_PATCH_LOGO_D, S_PATCH_LOGO_C },   /* boot_skip.cpp */
 };
 const int NPATCHES = sizeof k_patches / sizeof k_patches[0];
+/* Infinite health and ammunition: shown on the Inventario page, beside the
+ * item menu, rather than with the game patches. */
+bool is_cheat(int i) { return !strncmp(k_patches[i].id, "cv_infinite_", 12); }
 
 /* The SHADERS switches on the Desempenho page (read by the game at start):
  * the pipeline library (PSO_LIBRARY), loading the saved shaders while the
@@ -370,6 +376,7 @@ Settings load_settings()
     s.srt_corner=std::clamp(_wtoi(ini_get(L"srt",L"posicao",L"0").c_str()),0,3);
     s.srt_scale=std::clamp(_wtoi(ini_get(L"srt",L"tamanho",L"100").c_str()),50,200);
     s.test_tools=_wtoi(ini_get(L"testes",L"mapas",L"0").c_str())!=0;
+    s.items_menu=_wtoi(ini_get(L"inventario",L"menu_itens",L"0").c_str())!=0;
     s.focus_pause=_wtoi(ini_get(L"jogo",L"pausar_sem_foco",L"1").c_str())!=0;
     s.srt_opacity=std::clamp(_wtoi(ini_get(L"srt",L"opacidade",L"70").c_str()),0,100);
     s.srt_inventory_below=std::clamp(_wtoi(ini_get(L"srt",L"inventario_embaixo",L"0").c_str()),0,1);
@@ -436,6 +443,7 @@ void save_settings(const Settings& s)
     for (int i = 0; i < NPATCHES; i++)
         ini_set(L"patches", widen(k_patches[i].id).c_str(), s.patch[i] ? L"1" : L"0");
     ini_set(L"testes",L"mapas",s.test_tools?L"1":L"0");
+    ini_set(L"inventario",L"menu_itens",s.items_menu?L"1":L"0");
     ini_set(L"jogo",L"pausar_sem_foco",s.focus_pause?L"1":L"0");
     ini_set(L"srt", L"mostrar",s.srt?L"1":L"0");
     { const wchar_t* keys[]={L"nome",L"vida",L"tempo",L"contadores",L"inventario"};
@@ -584,7 +592,9 @@ Bitmap* load_png(const char* name)
 }
 
 /* ---------------------------------------------------------------- UI state */
-enum Page { P_INICIO, P_JOGO, P_CONTROLES, P_PATCHES, P_MODS, P_SRT, P_DESEMPENHO, P_AVANCADO, P_COUNT };
+enum Page { P_INICIO, P_JOGO, P_CONTROLES, P_PATCHES, P_MODS, P_SRT, P_INVENTARIO, P_DESEMPENHO, P_AVANCADO, P_COUNT };
+/* Each page's name in the side bar. */
+const int k_nav[P_COUNT] = { S_NAV_HOME, S_NAV_GAME, S_NAV_CONTROLS, S_NAV_PATCHES, S_NAV_MODS, S_NAV_SRT, S_NAV_ITEMS, S_NAV_PERF, S_NAV_ADVANCED };
 enum Capture { CAP_NONE, CAP_KEY, CAP_BTN };
 
 struct Hit { RectF r; int id; };
@@ -604,6 +614,8 @@ struct UI {
     std::wstring log_msg;   /* after Copy / Save on the Advanced page */
     uint32_t pad_prev[PAD_PHYS_MAX] = {};
     uint32_t test_combo_prev=0;
+    uint32_t items_combo_prev=0;   /* the F6 item menu chord, per controller */
+    uint32_t shot_combo_prev=0;    /* the F10 screenshot chord */
     std::vector<Hit> hits;
     std::wstring play_msg;
     int result = 0;              /* 1 = play */
@@ -634,6 +646,7 @@ enum {
     ID_TEST_ENABLE=2500, ID_TEST_OPEN,
     ID_FOCUS_PAUSE=2550, ID_SHOT_OPEN,
     ID_SRT_BORDER=2560,
+    ID_ITEMS_ENABLE=2570,
     ID_CACHE_CLEAR = 1100, ID_CACHE_OPEN,
     ID_KEY_CLEAR = 1200, ID_BTN_CLEAR = 1300,                      /* + action * slots + slot */
     ID_OVERLAY = 1400, ID_OVERLAY_ITEM = 1410,                     /* + item */
@@ -888,7 +901,7 @@ void draw_sidebar(Graphics& gr, const Font& title, const Font& title2, const Fon
         bool act = (int)g.page == i, hot = g.hover == ID_NAV + i;
         if (act || hot) { SolidBrush hb(act ? Color(255, 30, 22, 22) : C_HOVER); gr.FillRectangle(&hb, 0.0f, y, (float)SIDE, 44.0f); }
         if (act) { SolidBrush rb(C_RED); gr.FillRectangle(&rb, 0.0f, y, 3.0f, 44.0f); }
-        text(gr, T(S_NAV_HOME + i), 24, y, nav, act ? C_RED_HI : C_TEXT, StringAlignmentNear, SIDE - 30, 44);
+        text(gr, T(k_nav[i]), 24, y, nav, act ? C_RED_HI : C_TEXT, StringAlignmentNear, SIDE - 30, 44);
         hit(0, y, SIDE, 44, ID_NAV + i);
     }
     text(gr, T(S_CREDIT_KASTIEL), 22, H - 42.0f, footer_font, C_DIM,
@@ -1115,6 +1128,7 @@ void draw_patches(Graphics& gr, const Font& head, const Font& body, const Font& 
     y += 74;
     /* the port's own patches: two lines each, the credit beside the title */
     for (int i = 0; i < NPATCHES; i++) {
+        if (is_cheat(i)) continue;   /* on the Inventario page */
         patch_card(gr, x, y, w, 58, g.s.patch[i], true, ID_PATCH + i, T(k_patches[i].title), T(k_patches[i].desc),
                    T(k_patches[i].credit), false, body, fsm);
         y += 66;
@@ -1611,6 +1625,50 @@ void draw_srt(Graphics& gr,const Font& head,const Font& body,const Font& fsm)
     option_card(gr,x,716,col,58,g.s.srt_border,ID_SRT_BORDER,T(S_SRT_BORDER),L"",body,fsm);
 }
 
+/* The F6 item menu: the switch and how to use it (cv_item_menu.cpp). */
+void draw_inventario(Graphics& gr,const Font& head,const Font& body,const Font& fsm)
+{
+    const float x=SIDE+32.f,w=W-SIDE-64.f;
+    section(gr,T(S_ITEMS_TITLE),x,34,w,head);
+    text(gr,T(S_ITEMS_INTRO),x,70,fsm,C_DIM,StringAlignmentNear,w,24);
+    option_card(gr,x,104,w,84,g.s.items_menu,ID_ITEMS_ENABLE,T(S_ITEMS_ENABLE_T),T(S_ITEMS_ENABLE_D),body,fsm);
+    /* The shortcut, as a key cap, beside how to use the menu. */
+    const float y=214;
+    RectF card(x,y,w,198);GraphicsPath* cp=round_rect(card,6);
+    SolidBrush cb(C_PANEL);gr.FillPath(&cb,cp);Pen cbd(C_FIELD_BD,1);gr.DrawPath(&cbd,cp);delete cp;
+    RectF cap(x+20,y+22,74,58);GraphicsPath* kp=round_rect(cap,8);
+    SolidBrush kb(g.s.items_menu?C_RED:Color(255,60,52,52));gr.FillPath(&kb,kp);
+    Pen kbd(Color(255,255,200,200),1.5f);if(g.s.items_menu)gr.DrawPath(&kbd,kp);delete kp;
+    FontFamily serif(family(true,g_lang));Font fKey(&serif,26,FontStyleBold,UnitPixel);
+    text(gr,L"F6",cap.X,cap.Y+10,fKey,C_TEXT,StringAlignmentCenter,cap.Width,38);
+    text(gr,T(S_ITEMS_HOW_T),x+118,y+16,head,C_RED_HI,StringAlignmentNear,w-140,26);
+    {
+        const std::wstring t=g_lang==LANG_AR?L"\u202B"+std::wstring(T(S_ITEMS_HOW))+L"\u202C":T(S_ITEMS_HOW);
+        StringFormat sf;sf.SetAlignment(StringAlignmentNear);sf.SetLineAlignment(StringAlignmentNear);
+        SolidBrush tb(C_TEXT);gr.DrawString(t.c_str(),-1,&body,RectF(x+118,y+50,w-138,142),&sf,&tb);
+    }
+    /* The warnings, in the SRT's amber. */
+    RectF warn(x,y+216,w,84);GraphicsPath* wp=round_rect(warn,6);
+    SolidBrush wb(Color(255,38,30,22));gr.FillPath(&wb,wp);Pen wbd(Color(255,120,90,40),1);gr.DrawPath(&wbd,wp);delete wp;
+    SolidBrush bar(Color(255,226,172,82));gr.FillRectangle(&bar,warn.X,warn.Y,3.f,warn.Height);
+    {
+        const std::wstring t=g_lang==LANG_AR?L"\u202B"+std::wstring(T(S_ITEMS_WARN))+L"\u202C":T(S_ITEMS_WARN);
+        StringFormat sf;sf.SetAlignment(StringAlignmentNear);sf.SetLineAlignment(StringAlignmentCenter);
+        SolidBrush tb(Color(255,226,190,130));gr.DrawString(t.c_str(),-1,&fsm,RectF(warn.X+18,warn.Y+6,warn.Width-32,warn.Height-12),&sf,&tb);
+    }
+    /* Infinite health and ammunition (cv_cheats.cpp), moved here from Patches. */
+    float cy=warn.Y+warn.Height;
+    bool any=false;for(int i=0;i<NPATCHES;i++)any=any||is_cheat(i);
+    if(any){cy+=26;section(gr,T(S_ITEMS_CHEATS),x,cy,w,head);cy+=40;}
+    for(int i=0;i<NPATCHES;i++) {
+        if(!is_cheat(i))continue;
+        patch_card(gr,x,cy,w,58,g.s.patch[i],true,ID_PATCH+i,T(k_patches[i].title),T(k_patches[i].desc),
+                   T(k_patches[i].credit),false,body,fsm);
+        cy+=66;
+    }
+    g_page_end=std::max(g_page_end,cy);
+}
+
 void draw_desempenho(Graphics& gr, const Font& head, const Font& body, const Font& fsm)
 {
     float x = SIDE + 32.0f, y = 34;
@@ -1757,6 +1815,7 @@ void paint(HDC hdc)
     else if (g.page == P_DESEMPENHO) draw_desempenho(gr, fHead, fBody, fSmall);
     else if (g.page == P_MODS) draw_mods(gr, fHead, fBody, fSmall);
     else if (g.page == P_SRT) draw_srt(gr, fHead, fBody, fSmall);
+    else if (g.page == P_INVENTARIO) draw_inventario(gr, fHead, fBody, fSmall);
     else draw_avancado(gr, fHead, fBody, fSmall);
     gr.ResetTransform(); gr.ResetClip();
     g_in_page = false; g_page_dy = 0;
@@ -1921,6 +1980,7 @@ void finish_srt_drag();
 void apply_live(bool restore_menu = true)
 {
     cv_test_tools_enable(g.s.test_tools);
+    cv_item_menu_enable(g.s.items_menu);
     cv_focus_pause_enable(g.s.focus_pause);
     cv_focus_pause_label(T(S_PAUSED));
     if (!g.running) return;
@@ -1970,10 +2030,16 @@ void menu_hook() { PostMessageW(g.hwnd, WM_TOGGLE_MENU, 0, 0); }   /* game windo
 const UINT WM_TOGGLE_TEXTURES = WM_APP + 5;
 const UINT WM_TOGGLE_SRT = WM_APP + 6;
 const UINT WM_TEST_MAPS = WM_APP + 20;
+const UINT WM_ITEM_MENU = WM_APP + 21;
+/* F5..F10 in the game window: the options menu (Insert as well), the item
+ * menu, the maps, the SRT and the texture mods; F10 (a screenshot) is the
+ * game window's own. */
 void key_hook(unsigned vk) { if (vk == VK_F9) PostMessageW(g.hwnd, WM_TOGGLE_TEXTURES, 0, 0);
+    else if(vk==VK_F5)menu_hook();
+    else if(vk==VK_F6)PostMessageW(g.hwnd,WM_ITEM_MENU,0,0);
     else if(vk==VK_F8)PostMessageW(g.hwnd,WM_TOGGLE_SRT,0,0);
     else if(vk==VK_F7)PostMessageW(g.hwnd,WM_TEST_MAPS,0,0); }   /* game window thread */
-/* F9 in the game or R3+R2 on a controller: texture mods on or off at once,
+/* F9 in the game or R1+R2+L1+L2+square on a controller: texture mods on or off at once,
  * with a notice in the game's corner. The replacements stay loaded while
  * off, so going back and forth to compare is immediate. */
 void toggle_textures(const char* by)
@@ -2062,6 +2128,7 @@ void click(int id)
     else if(id==ID_TEST_ENABLE){g.s.test_tools=!g.s.test_tools;cv_test_tools_enable(g.s.test_tools);changed();}
     else if(id==ID_TEST_OPEN&&g.running)cv_test_tools_show(g.hwnd,g.s.game,g_lang);
     else if(id==ID_FOCUS_PAUSE){g.s.focus_pause=!g.s.focus_pause;changed();}
+    else if(id==ID_ITEMS_ENABLE){g.s.items_menu=!g.s.items_menu;cv_item_menu_enable(g.s.items_menu);changed();}
     else if(id==ID_SHOT_OPEN){const fs::path d=fs::path(ini_path()).parent_path()/L"screenshots";std::error_code ec;fs::create_directories(d,ec);open_in_explorer(d.wstring());}
     else if (id == ID_GAME_BROWSE) { auto p = pick(true, g.s.game, nullptr, nullptr); if (!p.empty()) { g.s.game = p; changed(); } }
     else if (id == ID_RAP_BROWSE) { auto p = pick(false, g.s.rap, T(S_RAP_FILTER), L"*.rap"); if (!p.empty()) { g.s.rap = p; changed(); } }
@@ -2260,7 +2327,7 @@ LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp)
         }
         if (g.cap == CAP_BTN && wp == VK_ESCAPE) { g.cap = CAP_NONE; InvalidateRect(h, NULL, FALSE); return 0; }
         if (wp == VK_ESCAPE && g.open_dd >= 0) { g.open_dd = -1; InvalidateRect(h, NULL, FALSE); return 0; }
-        if (g.running && (wp == VK_INSERT || wp == VK_ESCAPE)) { hide_menu(); return 0; }
+        if (g.running && (wp == VK_INSERT || wp == VK_F5 || wp == VK_ESCAPE)) { hide_menu(); return 0; }
         if (m == WM_SYSKEYDOWN) break;
         return 0;
     case WM_ACTIVATE:
@@ -2288,6 +2355,10 @@ LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp)
             for(int i=0;i<PAD_PHYS_MAX;i++){PadPhys p{};if(pad_phys_poll(i,&p)&&cv_launcher_controls::chord_active(p.buttons,cv_launcher_controls::test_chord))test_combo|=1u<<i;}
             if(test_combo&~g.test_combo_prev)PostMessageW(g.hwnd,WM_TEST_MAPS,0,0);
             g.test_combo_prev=test_combo;
+            uint32_t items_combo=0;   /* R1+R2+L1+L2+triangle: the F6 item menu, as the key (cv_launcher_controls.h) */
+            for(int i=0;i<PAD_PHYS_MAX;i++){PadPhys p{};if(pad_phys_poll(i,&p)&&cv_launcher_controls::chord_active(p.buttons,cv_launcher_controls::items_chord))items_combo|=1u<<i;}
+            if(items_combo&~g.items_combo_prev)PostMessageW(g.hwnd,WM_ITEM_MENU,0,0);
+            g.items_combo_prev=items_combo;
             uint32_t combo = 0;
             for (int i = 0; i < PAD_PHYS_MAX; i++) {
                 PadPhys p; if (!pad_phys_poll(i, &p)) continue;
@@ -2295,17 +2366,20 @@ LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp)
             }
             if (combo & ~g.combo_prev) toggle_menu();
             g.combo_prev = combo;
-            uint32_t tcombo = 0;   /* R3+R2: texture mods on or off */
+            uint32_t tcombo = 0;   /* R1+R2+L1+L2+square: texture mods on or off */
             for (int i = 0; i < PAD_PHYS_MAX; i++) {
                 PadPhys p; if (!pad_phys_poll(i, &p)) continue;
-                if ((p.buttons & (1u << PB_R3)) && (p.buttons & (1u << PB_R2))) tcombo |= 1u << i;
+                if (cv_launcher_controls::chord_active(p.buttons, cv_launcher_controls::tex_chord)) tcombo |= 1u << i;
             }
-            if (tcombo & ~g.tex_combo_prev) toggle_textures("R3+R2");
+            if (tcombo & ~g.tex_combo_prev) toggle_textures("R1+R2+L1+L2+square");
             g.tex_combo_prev = tcombo;
             uint32_t scombo=0;
             for(int i=0;i<PAD_PHYS_MAX;i++) {PadPhys p;if(!pad_phys_poll(i,&p))continue;
                 if(cv_launcher_controls::chord_active(p.buttons,cv_launcher_controls::srt_chord))scombo|=1u<<i;}
             if(scombo&~g.srt_combo_prev)toggle_srt();g.srt_combo_prev=scombo;
+            uint32_t shot=0;   /* R1+R2+L1+L2+R3: a screenshot, as F10 */
+            for(int i=0;i<PAD_PHYS_MAX;i++){PadPhys p{};if(pad_phys_poll(i,&p)&&cv_launcher_controls::chord_active(p.buttons,cv_launcher_controls::shot_chord))shot|=1u<<i;}
+            if(shot&~g.shot_combo_prev)rsx_d3d12_request_screenshot();g.shot_combo_prev=shot;
         }
         /* controller status + button capture */
         std::wstring st; int cnt = 0;
@@ -2345,6 +2419,7 @@ LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp)
     if (m == WM_TOGGLE_TEXTURES) { toggle_textures("F9"); return 0; }
     if(m==WM_TOGGLE_SRT) {toggle_srt();return 0;}
     if(m==WM_TEST_MAPS) {if(g.running)cv_test_tools_show(g.hwnd,g.s.game,g_lang);return 0;}
+    if(m==WM_ITEM_MENU) {if(g.running&&g.s.items_menu)cv_item_menu_toggle(g.s.game,g_lang);return 0;}   /* off: F6 does nothing */
     return DefWindowProcW(h, m, wp, lp);
 }
 
@@ -2547,6 +2622,7 @@ void start_game()
     for (int i = 0; i < NPATCHES; i++)
         if (s.patch[i]) pl += (pl.empty() ? "" : ",") + std::string(k_patches[i].id);
     set_env("PS3_PATCHES", pl);
+    cv_item_menu_enable(s.items_menu);
     cv_focus_pause_enable(s.focus_pause);   /* also when nothing changed before Jogar */
     cv_focus_pause_label(T(S_PAUSED));
     set_map_env();
@@ -2596,6 +2672,7 @@ DWORD WINAPI launcher_thread(void*)
     GdiplusStartup(&gtok, &gsi, NULL);
     g.s = load_settings();
     cv_test_tools_enable(g.s.test_tools);
+    cv_item_menu_enable(g.s.items_menu);   /* the saved choice, before any change */
     set_icon_env();   /* the button capture below reads the layout it implies */
     g.banner = load_png("BANNER");
 
@@ -2627,6 +2704,7 @@ DWORD WINAPI launcher_thread(void*)
     MSG msg;
     while (GetMessageW(&msg, NULL, 0, 0) > 0) { if(cv_test_tools_message(&msg))continue;TranslateMessage(&msg); DispatchMessageW(&msg); }
     cv_test_tools_close();
+    cv_item_menu_close();
     /* closed before Jogar: the main thread sees this thread end */
     delete g.banner; g.banner = nullptr;
     GdiplusShutdown(gtok);
