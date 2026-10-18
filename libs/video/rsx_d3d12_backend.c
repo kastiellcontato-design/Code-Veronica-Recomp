@@ -62,8 +62,13 @@ static int s_vsync = 0, s_tearing = 0;   /* present mode, see the swap chain set
  * -----------------------------------------------------------------------*/
 
 #define FRAME_COUNT         2   /* double buffering */
-#define MAX_VERTICES    393216  /* per-frame vertex buffer (dbgfont submits
-                                 * ~7.5k verts/frame; leave generous headroom) */
+#define MAX_VERTICES    786432  /* per-frame vertex buffer. Code Veronica's
+                                 * rm_1130 water draws two 138612-vertex
+                                 * meshes; with the lighter lit the frame hit
+                                 * the old 393216, and the draws past it --
+                                 * post-processing and the copy to the display
+                                 * -- were dropped, so the screen flashed
+                                 * black. The VP copy is 256 B x2 per vertex. */
 #define MAX_DRAWS        12288  /* per-frame draw records. Code Veronica's
                                  * gameplay frames run past 2048; the overflow
                                  * cut off post-processing and the copy to the
