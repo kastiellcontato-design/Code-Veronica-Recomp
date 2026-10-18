@@ -68,6 +68,7 @@ enum StrId {
     S_FPS_60_DIAG,
     S_VF_T, S_VF_D,
     S_ANISO,
+    S_SHARPNESS,
     S_COUNT
 };
 
@@ -239,6 +240,7 @@ static const wchar_t* const k_str_pt[] = {
     L"60 FPS (Experimental)",
     L"Vértices na GPU (experimental)", L"A placa de vídeo converte os vértices do jogo. Bem mais FPS nas salas pesadas. Vale ao abrir o jogo.",
     L"Filtro anisotrópico",
+    L"Nitidez (FSR 1 RCAS)",
 };
 static_assert(sizeof k_str_pt / sizeof k_str_pt[0] == S_COUNT, "k_str_pt: one text per StrId");
 
@@ -410,6 +412,7 @@ static const wchar_t* const k_str_en[] = {
     L"60 FPS (Experimental)",
     L"Vertices on the GPU (experimental)", L"The graphics card converts the game's vertices. Much higher FPS in heavy rooms. Applies when the game starts.",
     L"Anisotropic filtering",
+    L"Sharpness (FSR 1 RCAS)",
 };
 static_assert(sizeof k_str_en / sizeof k_str_en[0] == S_COUNT, "k_str_en: one text per StrId");
 
@@ -581,6 +584,7 @@ static const wchar_t* const k_str_es[] = {
     L"60 FPS (Experimental)",
     L"Vértices en la GPU (experimental)", L"La tarjeta gráfica convierte los vértices del juego. Muchos más FPS en las salas pesadas. Se aplica al iniciar el juego.",
     L"Filtrado anisotrópico",
+    L"Nitidez (FSR 1 RCAS)",
 };
 static_assert(sizeof k_str_es / sizeof k_str_es[0] == S_COUNT, "k_str_es: one text per StrId");
 
@@ -752,6 +756,7 @@ static const wchar_t* const k_str_ja[] = {
     L"60 FPS（実験的）",
     L"GPU で頂点処理（実験的）", L"ゲームの頂点変換をグラフィックカードで行います。重い部屋で FPS が大きく向上します。ゲーム起動時に適用されます。",
     L"異方性フィルタリング",
+    L"シャープネス (FSR 1 RCAS)",
 };
 static_assert(sizeof k_str_ja / sizeof k_str_ja[0] == S_COUNT, "k_str_ja: one text per StrId");
 
@@ -977,6 +982,7 @@ static const wchar_t* const k_str_fr[] = {
     L"60 FPS (expérimental)",
     L"Sommets sur le GPU (expérimental)", L"La carte graphique convertit les sommets du jeu. Bien plus d'images par seconde dans les salles lourdes. S'applique au lancement du jeu.",
     L"Filtrage anisotrope",
+    L"Netteté (FSR 1 RCAS)",
 };
 static_assert(sizeof k_str_fr / sizeof k_str_fr[0] == S_COUNT, "k_str_fr: one text per StrId");
 
@@ -1202,6 +1208,7 @@ static const wchar_t* const k_str_de[] = {
     L"60 FPS (Experimentell)",
     L"Vertices auf der GPU (experimentell)", L"Die Grafikkarte wandelt die Vertices des Spiels um. Deutlich mehr FPS in aufwendigen Räumen. Gilt ab dem Spielstart.",
     L"Anisotrope Filterung",
+    L"Schärfe (FSR 1 RCAS)",
 };
 static_assert(sizeof k_str_de / sizeof k_str_de[0] == S_COUNT, "k_str_de: one text per StrId");
 
@@ -1427,6 +1434,7 @@ static const wchar_t* const k_str_it[] = {
     L"60 FPS (sperimentale)",
     L"Vertici sulla GPU (sperimentale)", L"La scheda video converte i vertici del gioco. Molti più FPS nelle stanze pesanti. Si applica all'avvio del gioco.",
     L"Filtro anisotropico",
+    L"Nitidezza (FSR 1 RCAS)",
 };
 static_assert(sizeof k_str_it / sizeof k_str_it[0] == S_COUNT, "k_str_it: one text per StrId");
 
@@ -1652,6 +1660,7 @@ static const wchar_t* const k_str_pl[] = {
     L"60 FPS (eksperymentalne)",
     L"Wierzchołki na GPU (eksperymentalne)", L"Karta graficzna przetwarza wierzchołki gry. Znacznie więcej FPS w ciężkich pomieszczeniach. Działa od uruchomienia gry.",
     L"Filtrowanie anizotropowe",
+    L"Ostrość (FSR 1 RCAS)",
 };
 static_assert(sizeof k_str_pl / sizeof k_str_pl[0] == S_COUNT, "k_str_pl: one text per StrId");
 
@@ -1877,6 +1886,7 @@ static const wchar_t* const k_str_tr[] = {
     L"60 FPS (Deneysel)",
     L"Köşe noktaları GPU'da (deneysel)", L"Ekran kartı oyunun köşe noktalarını dönüştürür. Ağır odalarda çok daha yüksek FPS. Oyun başlatılırken uygulanır.",
     L"Anizotropik filtreleme",
+    L"Keskinlik (FSR 1 RCAS)",
 };
 static_assert(sizeof k_str_tr / sizeof k_str_tr[0] == S_COUNT, "k_str_tr: one text per StrId");
 
@@ -2102,6 +2112,7 @@ static const wchar_t* const k_str_ar[] = {
     L"60 FPS (تجريبي)",
     L"معالجة الرؤوس على GPU (تجريبي)", L"تحوّل بطاقة الرسومات رؤوس اللعبة. معدل إطارات أعلى بكثير في الغرف الثقيلة. يُطبَّق عند تشغيل اللعبة.",
     L"التصفية متباينة الخواص",
+    L"الحدّة (FSR 1 RCAS)",
 };
 static_assert(sizeof k_str_ar / sizeof k_str_ar[0] == S_COUNT, "k_str_ar: one text per StrId");
 
@@ -2327,6 +2338,7 @@ static const wchar_t* const k_str_zh[] = {
     L"60 FPS（实验性）",
     L"GPU 顶点处理（实验性）", L"由显卡转换游戏的顶点。在复杂房间中帧率大幅提升。启动游戏时生效。",
     L"各向异性过滤",
+    L"锐化 (FSR 1 RCAS)",
 };
 static_assert(sizeof k_str_zh / sizeof k_str_zh[0] == S_COUNT, "k_str_zh: one text per StrId");
 
@@ -2552,6 +2564,7 @@ static const wchar_t* const k_str_ko[] = {
     L"60 FPS (실험적)",
     L"GPU 정점 처리 (실험적)", L"그래픽 카드가 게임의 정점을 변환합니다. 무거운 방에서 FPS가 크게 오릅니다. 게임 시작 시 적용됩니다.",
     L"이방성 필터링",
+    L"선명도 (FSR 1 RCAS)",
 };
 static_assert(sizeof k_str_ko / sizeof k_str_ko[0] == S_COUNT, "k_str_ko: one text per StrId");
 
@@ -2777,6 +2790,7 @@ static const wchar_t* const k_str_ru[] = {
     L"60 FPS (эксперим.)",
     L"Вершины на GPU (эксперимент.)", L"Видеокарта преобразует вершины игры. Намного выше FPS в тяжёлых комнатах. Применяется при запуске игры.",
     L"Анизотропная фильтрация",
+    L"Резкость (FSR 1 RCAS)",
 };
 static_assert(sizeof k_str_ru / sizeof k_str_ru[0] == S_COUNT, "k_str_ru: one text per StrId");
 

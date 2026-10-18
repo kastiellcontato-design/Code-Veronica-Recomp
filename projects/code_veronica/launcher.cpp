@@ -61,6 +61,7 @@ void  rsx_d3d12_set_res_scale(float f);
 void  rsx_d3d12_set_aa(int mode);
 void  rsx_d3d12_set_color_adjust(int brightness, int contrast);
 void  rsx_d3d12_set_saturation(int saturation);
+void  rsx_d3d12_set_sharpness(int pct);
 void  rsx_d3d12_close(void);
 void* rsx_d3d12_window(void);
 extern void (*g_rsx_menu_hook)(void);
@@ -176,6 +177,7 @@ struct Settings {
     int brightness = 0;   /* -80..80, zero leaves the image unchanged */
     int contrast = 100;   /* 50..180 percent */
     int saturation = 100; /* 0..200 percent */
+    int sharpness = 0;    /* FSR 1 RCAS, 0..100 percent in steps of 10; 0 off */
     bool patch[8] = {};    /* k_patches on/off */
     int layout = 2;        /* button icons: 0 PlayStation, 1 Xbox, 2 automatic, 3 keyboard */
     bool overlay = false;  /* the performance overlay (rsx_perf_overlay.h) */
@@ -211,6 +213,7 @@ std::wstring mode_name(int i) { return T(S_MODE_WINDOW + i); }
 std::wstring aa_name(int i) { return T(S_AA_OFF + i); }
 std::wstring fps_name(int i) { return T(i ? S_FPS_60_DIAG : S_FPS_ORIG); }
 std::wstring aniso_name(int i) { return i ? std::to_wstring(1 << i) + L"x" : T(S_AA_OFF); }
+std::wstring sharp_name(int i) { return i ? std::to_wstring(i * 10) + L"%" : T(S_AA_OFF); }
 
 /* Game patches (projects/code_veronica/patches.json, lifted as switchable
  * sites): id = the runtime flag name. */
@@ -328,6 +331,7 @@ Settings load_settings()
     s.brightness = _wtoi(ini_get(L"tela", L"brilho", L"0").c_str());
     s.contrast = _wtoi(ini_get(L"tela", L"contraste", L"100").c_str());
     s.saturation = _wtoi(ini_get(L"tela", L"saturacao", L"100").c_str());
+    s.sharpness = std::clamp(_wtoi(ini_get(L"tela", L"nitidez", L"0").c_str()) / 10 * 10, 0, 100);
     s.layout = _wtoi(ini_get(L"controles", L"layout", L"2").c_str());
     { std::wstring l = ini_get(L"launcher", L"idioma", L"system");
       int pick = -1;
@@ -419,6 +423,7 @@ void save_settings(const Settings& s)
     ini_set(L"tela", L"brilho", std::to_wstring(s.brightness));
     ini_set(L"tela", L"contraste", std::to_wstring(s.contrast));
     ini_set(L"tela", L"saturacao", std::to_wstring(s.saturation));
+    ini_set(L"tela", L"nitidez", std::to_wstring(s.sharpness));
     ini_set(L"controles", L"layout", std::to_wstring(s.layout));
     ini_set(L"launcher", L"idioma", g_lang_pick < 0 ? std::wstring(L"system") : widen(k_lang_id[g_lang_pick]));
     for (int i = 0; i < NPATCHES; i++)
@@ -608,7 +613,7 @@ UI g;
 /* ids */
 enum {
     ID_NAV = 100,               /* + page */
-    ID_DD_MODE = 200, ID_DD_RES = 201, ID_DD_AA = 202, ID_DD_LANG = 203, ID_DD_FPS = 204, ID_DD_ANISO = 205, ID_DD_ITEM = 300,  /* + item index */
+    ID_DD_MODE = 200, ID_DD_RES = 201, ID_DD_AA = 202, ID_DD_LANG = 203, ID_DD_FPS = 204, ID_DD_ANISO = 205, ID_DD_SHARP = 206, ID_DD_ITEM = 300,  /* + item index */
     ID_DD_UP = 390, ID_DD_DOWN = 391,
     ID_PLAY = 400, ID_RESUME, ID_QUIT,
     ID_GAME_BROWSE = 500, ID_GAME_OPEN, ID_RAP_BROWSE, ID_RAP_OPEN, ID_SAVE_BROWSE, ID_SAVE_OPEN, ID_SAVE_DEFAULT,
@@ -932,6 +937,8 @@ void draw_inicio(Graphics& gr, const Font& head, const Font& body, const Font& c
     y += 44;   /* in the pipelines' samplers: chosen before the game starts */
     text(gr, T(S_ANISO), x, y, body, C_TEXT, StringAlignmentNear, 205, 30);
     dropdown(gr, RectF(x + 210, y, 200, 30), aniso_name(g.s.aniso), g.running ? -1 : ID_DD_ANISO, body, !g.running);
+    text(gr, T(S_SHARPNESS), x + 450, y, body, C_TEXT, StringAlignmentNear, 180, 30);   /* live */
+    dropdown(gr, RectF(x + 630, y, 180, 30), sharp_name(g.s.sharpness / 10), ID_DD_SHARP, body);
     y += 54;
     bool o1, o2;
     std::wstring m1 = check_game(g.s.game, &o1), m2 = check_rap(g.s.rap, &o2);
@@ -1687,6 +1694,7 @@ void paint(HDC hdc)
         else if (g.open_dd == ID_DD_AA) { for (int i = 0; i < 3; i++) items.push_back(aa_name(i)); sel = g.s.aa; }
         else if (g.open_dd == ID_DD_FPS) { for (int i = 0; i < 2; i++) items.push_back(fps_name(i)); sel = g.s.fps; }
         else if (g.open_dd == ID_DD_ANISO) { for (int i = 0; i < 5; i++) items.push_back(aniso_name(i)); sel = g.s.aniso; }
+        else if (g.open_dd == ID_DD_SHARP) { for (int i = 0; i <= 10; i++) items.push_back(sharp_name(i)); sel = g.s.sharpness / 10; }
         else if (g.open_dd == ID_DD_SRT_ENEMIES) { for(int i=0;i<=5;i++)items.push_back(srt_enemy_value(i));items.push_back(T(S_SRT_ALL));sel=g.s.srt_enemies==99?6:g.s.srt_enemies; }
         else if (g.open_dd == ID_DD_SRT_CORNER) {for(int i=0;i<4;i++)items.push_back(T(S_SRT_TL+i));sel=g.s.srt_corner;}
         else if (g.open_dd == ID_DD_SRT_INVPOS) { items = { T(S_SRT_INV_SIDE), T(S_SRT_INV_BELOW) }; sel = g.s.srt_inventory_below; }
@@ -1850,6 +1858,7 @@ void apply_live(bool restore_menu = true)
     }
     rsx_d3d12_set_color_adjust(g.s.brightness, g.s.contrast);
     rsx_d3d12_set_saturation(g.s.saturation);
+    rsx_d3d12_set_sharpness(g.s.sharpness);
     cellpad_set_map(&g.s.btn[0][0], &g.s.key[0][0]);
     set_map_env();
     for (int i = 0; i < NPATCHES; i++) ps3_patch_set(k_patches[i].id, g.s.patch[i]);
@@ -1938,6 +1947,7 @@ void click(int id)
             else if (g.open_dd == ID_DD_AA) g.s.aa = i;
             else if (g.open_dd == ID_DD_FPS) g.s.fps = i;
             else if (g.open_dd == ID_DD_ANISO) g.s.aniso = i;
+            else if (g.open_dd == ID_DD_SHARP) g.s.sharpness = i * 10;
             else if(g.open_dd==ID_DD_SRT_ENEMIES)g.s.srt_enemies=i==6?99:i;
             else if(g.open_dd==ID_DD_SRT_CORNER)g.s.srt_corner=i;
             else if(g.open_dd==ID_DD_SRT_LANGUAGE)g.s.srt_language=i;
@@ -1959,7 +1969,7 @@ void click(int id)
         if (g.page == P_MODS) g.tex_rep = -1;        /* count the textures again */
     }
     else if (id >= ID_PATCH && id < ID_PATCH + NPATCHES) { g.s.patch[id - ID_PATCH] ^= true; changed(); }
-    else if (id == ID_DD_MODE || id == ID_DD_RES || id == ID_DD_AA || id == ID_DD_FPS || id == ID_DD_ANISO || id == ID_DD_LANG || id==ID_DD_SRT_ENEMIES || id==ID_DD_SRT_CORNER || id==ID_DD_SRT_LANGUAGE || id == ID_DD_OV_CORNER || id == ID_DD_OV_LAYOUT || id == ID_DD_SRT_INVPOS || id == ID_DD_SRT_WINDOW || id == ID_DD_SRT_BOSSBAR) {
+    else if (id == ID_DD_MODE || id == ID_DD_RES || id == ID_DD_AA || id == ID_DD_FPS || id == ID_DD_ANISO || id == ID_DD_SHARP || id == ID_DD_LANG || id==ID_DD_SRT_ENEMIES || id==ID_DD_SRT_CORNER || id==ID_DD_SRT_LANGUAGE || id == ID_DD_OV_CORNER || id == ID_DD_OV_LAYOUT || id == ID_DD_SRT_INVPOS || id == ID_DD_SRT_WINDOW || id == ID_DD_SRT_BOSSBAR) {
         g.open_dd = id; g.dd_scroll = 0;
         if (id == ID_DD_LANG && g_lang_pick >= 0)   /* open with the chosen language in view */
             for (int i = 0; i < LANG_COUNT; i++)
@@ -2431,6 +2441,8 @@ void start_game()
     set_env("CV_SATURATION", std::to_string(s.saturation));
     rsx_d3d12_set_color_adjust(s.brightness, s.contrast);
     rsx_d3d12_set_saturation(s.saturation);
+    set_env("CV_SHARPNESS", std::to_string(s.sharpness));
+    rsx_d3d12_set_sharpness(s.sharpness);
     set_icon_env();
     std::string pl;
     for (int i = 0; i < NPATCHES; i++)

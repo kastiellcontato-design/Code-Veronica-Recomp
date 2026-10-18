@@ -8473,6 +8473,280 @@ static const char k_disp_hlsl[] =
     "V vs_up(uint id : SV_VertexID) { V o; fs_tri(id, o.p, o.uv); return o; }\n"
     "float4 ps_up(V i) : SV_Target { return float4(colorTex.SampleLevel(LinearSampler, i.uv, 0).rgb, 1); }\n";
 
+/* ---------------------------------------------------------------------------
+ * AMD FidelityFX Super Resolution 1.0: EASU (edge-adaptive upscale) and RCAS
+ * (robust contrast-adaptive sharpening), on the game image only -- after AA,
+ * before the port's overlays. Float32 port of ffx_fsr1.h (FsrEasuF, FsrRcasF
+ * with FSR_RCAS_DENOISE), from the FidelityFX SDK:
+ *
+ *   Copyright (c) 2021 Advanced Micro Devices, Inc. All rights reserved.
+ *
+ *   Permission is hereby granted, free of charge, to any person obtaining a
+ *   copy of this software and associated documentation files (the
+ *   "Software"), to deal in the Software without restriction, including
+ *   without limitation the rights to use, copy, modify, merge, publish,
+ *   distribute, sublicense, and/or sell copies of the Software, and to permit
+ *   persons to whom the Software is furnished to do so, subject to the
+ *   following conditions:
+ *
+ *   The above copyright notice and this permission notice shall be included
+ *   in all copies or substantial portions of the Software.
+ *
+ *   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+ *   OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+ *   MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN
+ *   NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+ *   DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
+ *   OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
+ *   USE OR OTHER DEALINGS IN THE SOFTWARE.
+ *
+ * CV_SHARPNESS=0..100 (rsx_d3d12_set_sharpness): RCAS strength, 0 = off (the
+ * image is exactly the plain path's), 100 = FSR's maximum (0 stops).
+ * CV_FSR1_UPSCALE=1 (rsx_d3d12_set_fsr1_upscale): EASU in place of the
+ * bilinear stretch when the render size is below the window's.
+ * CV_SHARPNESS_SPLIT=1: left half without FSR, to compare in one frame.
+ * Constants (the [AA] root signature's 12): EASU rt = con0, colorAdjust.xy =
+ * 1 / input size (con1..3 follow from it); RCAS colorExtra = (strength,
+ * last pixel x, last pixel y).
+ * -------------------------------------------------------------------------*/
+static volatile int s_sharp = -1;   /* -1: read CV_SHARPNESS once */
+static volatile int s_easu = -1;    /* -1: read CV_FSR1_UPSCALE once */
+void rsx_d3d12_set_sharpness(int pct) { s_sharp = pct < 0 ? 0 : pct > 100 ? 100 : pct; }
+void rsx_d3d12_set_fsr1_upscale(int on) { s_easu = on ? 1 : 0; }
+
+static const char k_fsr_hlsl[] =
+    "struct V { float4 p : SV_Position; float2 uv : TEXCOORD0; };\n"
+    "V vs_fsr(uint id : SV_VertexID) { V o; fs_tri(id, o.p, o.uv); return o; }\n"
+    "float LumA(float r, float g, float b) { return b * 0.5 + (r * 0.5 + g); }\n"
+    "float4 LumA4(float4 r, float4 g, float4 b) { return b * 0.5 + (r * 0.5 + g); }\n"
+    /* EASU */
+    "void EasuTap(inout float3 aC, inout float aW, float2 off, float2 dir, float2 len, float lob, float clp, float3 c) {\n"
+    "    float2 v = float2(off.x * dir.x + off.y * dir.y, off.x * -dir.y + off.y * dir.x) * len;\n"
+    "    float d2 = min(dot(v, v), clp);\n"
+    "    float wB = 0.4 * d2 - 1.0, wA = lob * d2 - 1.0;\n"
+    "    wB *= wB; wA *= wA;\n"
+    "    wB = 1.5625 * wB - 0.5625;\n"
+    "    float w = wB * wA; aC += c * w; aW += w; }\n"
+    "void EasuSet(inout float2 dir, inout float len, float w, float lA, float lB, float lC, float lD, float lE) {\n"
+    "    float lenX = rcp(max(max(abs(lD - lC), abs(lC - lB)), 1.0 / 65536.0));\n"
+    "    float dirX = lD - lB; dir.x += dirX * w;\n"
+    "    lenX = saturate(abs(dirX) * lenX); lenX *= lenX; len += lenX * w;\n"
+    "    float lenY = rcp(max(max(abs(lE - lC), abs(lC - lA)), 1.0 / 65536.0));\n"
+    "    float dirY = lE - lA; dir.y += dirY * w;\n"
+    "    lenY = saturate(abs(dirY) * lenY); lenY *= lenY; len += lenY * w; }\n"
+    "float4 ps_easu(V i) : SV_Target {\n"
+    "    float2 pp = floor(i.p.xy) * rt.xy + rt.zw;\n"
+    "    float2 fp = floor(pp); pp -= fp;\n"
+    /* 12 taps:  b c / e f g h / i j k l / n o, four gathers */
+    "    float2 ri = colorAdjust.xy;\n"
+    "    float2 p0 = (fp + float2(1, -1)) * ri;\n"
+    "    float2 p1 = p0 + float2(-1, 2) * ri, p2 = p0 + float2(1, 2) * ri, p3 = p0 + float2(0, 4) * ri;\n"
+    "    float4 bczzR = colorTex.GatherRed(LinearSampler, p0), bczzG = colorTex.GatherGreen(LinearSampler, p0), bczzB = colorTex.GatherBlue(LinearSampler, p0);\n"
+    "    float4 ijfeR = colorTex.GatherRed(LinearSampler, p1), ijfeG = colorTex.GatherGreen(LinearSampler, p1), ijfeB = colorTex.GatherBlue(LinearSampler, p1);\n"
+    "    float4 klhgR = colorTex.GatherRed(LinearSampler, p2), klhgG = colorTex.GatherGreen(LinearSampler, p2), klhgB = colorTex.GatherBlue(LinearSampler, p2);\n"
+    "    float4 zzonR = colorTex.GatherRed(LinearSampler, p3), zzonG = colorTex.GatherGreen(LinearSampler, p3), zzonB = colorTex.GatherBlue(LinearSampler, p3);\n"
+    "    float4 bczzL = LumA4(bczzR, bczzG, bczzB), ijfeL = LumA4(ijfeR, ijfeG, ijfeB);\n"
+    "    float4 klhgL = LumA4(klhgR, klhgG, klhgB), zzonL = LumA4(zzonR, zzonG, zzonB);\n"
+    "    float bL = bczzL.x, cL = bczzL.y, iL = ijfeL.x, jL = ijfeL.y, fL = ijfeL.z, eL = ijfeL.w;\n"
+    "    float kL = klhgL.x, lL = klhgL.y, hL = klhgL.z, gL = klhgL.w, oL = zzonL.z, nL = zzonL.w;\n"
+    "    float2 dir = 0; float len = 0;\n"
+    "    EasuSet(dir, len, (1.0 - pp.x) * (1.0 - pp.y), bL, eL, fL, gL, jL);\n"
+    "    EasuSet(dir, len, pp.x * (1.0 - pp.y), cL, fL, gL, hL, kL);\n"
+    "    EasuSet(dir, len, (1.0 - pp.x) * pp.y, fL, iL, jL, kL, nL);\n"
+    "    EasuSet(dir, len, pp.x * pp.y, gL, jL, kL, lL, oL);\n"
+    "    float dirR = dot(dir, dir); bool zro = dirR < 1.0 / 32768.0;\n"
+    "    dirR = zro ? 1.0 : rsqrt(max(dirR, 1.0 / 32768.0));\n"
+    "    dir.x = zro ? 1.0 : dir.x; dir *= dirR;\n"
+    "    len = len * 0.5; len *= len;\n"
+    "    float stretch = dot(dir, dir) * rcp(max(abs(dir.x), abs(dir.y)));\n"
+    "    float2 len2 = float2(1.0 + (stretch - 1.0) * len, 1.0 - 0.5 * len);\n"
+    "    float lob = 0.5 + ((1.0 / 4.0 - 0.04) - 0.5) * len;\n"
+    "    float clp = rcp(lob);\n"
+    "    float3 cf = float3(ijfeR.z, ijfeG.z, ijfeB.z), cg = float3(klhgR.w, klhgG.w, klhgB.w);\n"
+    "    float3 cj = float3(ijfeR.y, ijfeG.y, ijfeB.y), ck = float3(klhgR.x, klhgG.x, klhgB.x);\n"
+    "    float3 min4 = min(min(cf, cg), min(cj, ck)), max4 = max(max(cf, cg), max(cj, ck));\n"
+    "    float3 aC = 0; float aW = 0;\n"
+    "    EasuTap(aC, aW, float2( 0, -1) - pp, dir, len2, lob, clp, float3(bczzR.x, bczzG.x, bczzB.x));\n"
+    "    EasuTap(aC, aW, float2( 1, -1) - pp, dir, len2, lob, clp, float3(bczzR.y, bczzG.y, bczzB.y));\n"
+    "    EasuTap(aC, aW, float2(-1,  1) - pp, dir, len2, lob, clp, float3(ijfeR.x, ijfeG.x, ijfeB.x));\n"
+    "    EasuTap(aC, aW, float2( 0,  1) - pp, dir, len2, lob, clp, cj);\n"
+    "    EasuTap(aC, aW, float2( 0,  0) - pp, dir, len2, lob, clp, cf);\n"
+    "    EasuTap(aC, aW, float2(-1,  0) - pp, dir, len2, lob, clp, float3(ijfeR.w, ijfeG.w, ijfeB.w));\n"
+    "    EasuTap(aC, aW, float2( 1,  1) - pp, dir, len2, lob, clp, ck);\n"
+    "    EasuTap(aC, aW, float2( 2,  1) - pp, dir, len2, lob, clp, float3(klhgR.y, klhgG.y, klhgB.y));\n"
+    "    EasuTap(aC, aW, float2( 2,  0) - pp, dir, len2, lob, clp, float3(klhgR.z, klhgG.z, klhgB.z));\n"
+    "    EasuTap(aC, aW, float2( 1,  0) - pp, dir, len2, lob, clp, cg);\n"
+    "    EasuTap(aC, aW, float2( 1,  2) - pp, dir, len2, lob, clp, float3(zzonR.z, zzonG.z, zzonB.z));\n"
+    "    EasuTap(aC, aW, float2( 0,  2) - pp, dir, len2, lob, clp, float3(zzonR.w, zzonG.w, zzonB.w));\n"
+    "    return float4(min(max4, max(min4, aC * rcp(aW))), 1); }\n"
+    /* RCAS: a cross of 5 texels at the output's own resolution */
+    "float3 RcasLoad(int2 p) { return colorTex.Load(int3(clamp(p, int2(0, 0), int2(colorExtra.yz)), 0)).rgb; }\n"
+    "float4 ps_rcas(V i) : SV_Target {\n"
+    "    int2 ip = int2(i.p.xy);\n"
+    "    float3 b = RcasLoad(ip + int2(0, -1)), d = RcasLoad(ip + int2(-1, 0)), e = RcasLoad(ip);\n"
+    "    float3 f = RcasLoad(ip + int2(1, 0)), h = RcasLoad(ip + int2(0, 1));\n"
+    "    float bL = LumA(b.r, b.g, b.b), dL = LumA(d.r, d.g, d.b), eL = LumA(e.r, e.g, e.b);\n"
+    "    float fL = LumA(f.r, f.g, f.b), hL = LumA(h.r, h.g, h.b);\n"
+    "    float nz = 0.25 * bL + 0.25 * dL + 0.25 * fL + 0.25 * hL - eL;\n"
+    "    float rng = max(max(max(bL, dL), max(eL, fL)), hL) - min(min(min(bL, dL), min(eL, fL)), hL);\n"
+    "    nz = saturate(abs(nz) * rcp(max(rng, 1.0 / 65536.0)));\n"
+    "    nz = -0.5 * nz + 1.0;\n"
+    "    float3 mn4 = min(min(b, d), min(f, h)), mx4 = max(max(b, d), max(f, h));\n"
+    "    float3 hitMin = min(mn4, e) * rcp(max(4.0 * mx4, 1.0 / 65536.0));\n"
+    "    float3 hitMax = (1.0 - max(mx4, e)) * rcp(min(4.0 * mn4 - 4.0, -1.0 / 65536.0));\n"
+    "    float3 lobe3 = max(-hitMin, hitMax);\n"
+    "    float lobe = max(-(0.25 - 1.0 / 16.0), min(max(max(lobe3.r, lobe3.g), lobe3.b), 0.0)) * colorExtra.x;\n"
+    "    lobe *= nz;\n"
+    "    return float4((lobe * (b + d + h + f) + e) * rcp(4.0 * lobe + 1.0), 1); }\n";
+
+static ID3D12PipelineState *s_fsr_easu, *s_fsr_rcas;
+static int s_fsr_failed;
+static ID3D12DescriptorHeap* s_fsr_rtv;      /* the intermediate's RTV */
+static ID3D12Resource* s_fsr_tmp;            /* between EASU and RCAS; PIXEL_SHADER_RESOURCE at rest */
+static u32 s_fsr_w, s_fsr_h;
+
+static void fsr_load_env(void)
+{
+    if (s_sharp < 0) { const char* e = getenv("CV_SHARPNESS"); rsx_d3d12_set_sharpness(e ? atoi(e) : 0); }
+    if (s_easu < 0) { const char* e = getenv("CV_FSR1_UPSCALE"); s_easu = (e && *e == '1') ? 1 : 0; }
+}
+
+static int fsr_ready(void)
+{
+    if (s_fsr_rcas) return 1;
+    if (s_fsr_failed || !aa_init_rs()) return 0;
+    const size_t n = sizeof k_aa_common + sizeof k_fsr_hlsl;
+    char* src = (char*)malloc(n);
+    if (!src) return 0;
+    snprintf(src, n, "%s%s", k_aa_common, k_fsr_hlsl);
+    s_fsr_easu = aa_pso(src, strlen(src), "vs_fsr", "ps_easu");
+    s_fsr_rcas = aa_pso(src, strlen(src), "vs_fsr", "ps_rcas");
+    free(src);
+    D3D12_DESCRIPTOR_HEAP_DESC hd = {0};
+    hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV; hd.NumDescriptors = 1;
+    if (!s_fsr_easu || !s_fsr_rcas
+        || FAILED(s_d3d.device->lpVtbl->CreateDescriptorHeap(s_d3d.device, &hd, &IID_ID3D12DescriptorHeap,
+                                                            (void**)&s_fsr_rtv))) {
+        s_fsr_failed = 1; s_fsr_rcas = NULL;
+        printf("[FSR1] unavailable\n");
+        return 0;
+    }
+    printf("[FSR1] EASU + RCAS ready\n");
+    return 1;
+}
+
+/* The intermediate at w x h; its view also at AA_SRV_BASE + 5 (backbuffer path). */
+static int fsr_tmp(u32 w, u32 h)
+{
+    if (s_fsr_tmp && s_fsr_w == w && s_fsr_h == h) return 1;
+    defer_release(s_fsr_tmp);
+    s_fsr_tmp = aa_tex(w, h, DXGI_FORMAT_R8G8B8A8_UNORM, 1, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    if (!s_fsr_tmp) { s_fsr_w = s_fsr_h = 0; return 0; }
+    s_fsr_w = w; s_fsr_h = h;
+    D3D12_CPU_DESCRIPTOR_HANDLE h0;
+    s_fsr_rtv->lpVtbl->GetCPUDescriptorHandleForHeapStart(s_fsr_rtv, &h0);
+    s_d3d.device->lpVtbl->CreateRenderTargetView(s_d3d.device, s_fsr_tmp, NULL, h0);
+    srv_write(AA_SRV_BASE + 5, s_fsr_tmp, DXGI_FORMAT_R8G8B8A8_UNORM, D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING);
+    return 1;
+}
+
+static D3D12_CPU_DESCRIPTOR_HANDLE fsr_tmp_rtv(void)
+{
+    D3D12_CPU_DESCRIPTOR_HANDLE h0;
+    s_fsr_rtv->lpVtbl->GetCPUDescriptorHandleForHeapStart(s_fsr_rtv, &h0);
+    return h0;
+}
+
+/* One full-screen pass reading the view at srv_slot into rtv (w x h). */
+static void fsr_draw(ID3D12PipelineState* pso, u32 srv_slot, D3D12_CPU_DESCRIPTOR_HANDLE rtv,
+                     u32 w, u32 h, const float k[12], u32 x0)
+{
+    ID3D12GraphicsCommandList* cl = s_d3d.cmd_list;
+    cl->lpVtbl->SetDescriptorHeaps(cl, 1, &s_d3d.srv_heap);
+    cl->lpVtbl->SetGraphicsRootSignature(cl, s_aa_rs);
+    cl->lpVtbl->SetGraphicsRoot32BitConstants(cl, 0, 12, k, 0);
+    D3D12_GPU_DESCRIPTOR_HANDLE gh;
+    s_d3d.srv_heap->lpVtbl->GetGPUDescriptorHandleForHeapStart(s_d3d.srv_heap, &gh);
+    gh.ptr += (u64)srv_slot * s_d3d.srv_inc;
+    cl->lpVtbl->SetGraphicsRootDescriptorTable(cl, 1, gh);
+    D3D12_VIEWPORT vp = {0, 0, (float)w, (float)h, 0.0f, 1.0f};
+    D3D12_RECT sc = {(LONG)x0, 0, (LONG)w, (LONG)h};
+    cl->lpVtbl->RSSetViewports(cl, 1, &vp);
+    cl->lpVtbl->RSSetScissorRects(cl, 1, &sc);
+    cl->lpVtbl->IASetPrimitiveTopology(cl, D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    aa_draw(pso, rtv, 0);
+}
+
+static float fsr_strength(int pct) { return exp2f(-2.0f * (float)(100 - pct) / 100.0f); }
+
+/* Display path: the game image (a shader resource, its view at slot) into
+ * out_rtv (ow x oh) through EASU and/or RCAS; slot + 1 is free for the
+ * intermediate. Returns 0 to leave the plain bilinear scale to the caller. */
+static int fsr_display(u32 slot, D3D12_CPU_DESCRIPTOR_HANDLE out_rtv, u32 ow, u32 oh,
+                       ID3D12PipelineState* bilinear)
+{
+    fsr_load_env();
+    const int sharp = s_sharp;
+    const u32 gw = rs_dim(s_d3d.width, s_rs), gh = rs_dim(s_d3d.height, s_rs);
+    const int up = s_easu > 0 && gw <= ow && gh <= oh && (gw < ow || gh < oh);
+    if ((!sharp && !up) || !gw || !gh || !fsr_ready()) return 0;
+    const float con = fsr_strength(sharp);
+    /* CV_SHARPNESS_SPLIT=1: the plain scale on the left half, FSR on the right */
+    static int split = -1;
+    if (split < 0) split = getenv("CV_SHARPNESS_SPLIT") ? 1 : 0;
+    const u32 x0 = (split && bilinear) ? ow / 2 : 0;
+    const float kz[12] = {0};
+    if (x0) fsr_draw(bilinear, slot, out_rtv, ow, oh, kz, 0);
+    if (up) {
+        const float sx = (float)gw / (float)ow, sy = (float)gh / (float)oh;
+        const float ke[12] = { sx, sy, 0.5f * sx - 0.5f, 0.5f * sy - 0.5f,
+                               1.0f / (float)gw, 1.0f / (float)gh, (float)gw, (float)gh, 0, 0, 0, 0 };
+        if (!sharp) { fsr_draw(s_fsr_easu, slot, out_rtv, ow, oh, ke, x0); return 1; }
+        if (!fsr_tmp(ow, oh)) return 0;
+        aa_barrier(s_fsr_tmp, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET);
+        fsr_draw(s_fsr_easu, slot, fsr_tmp_rtv(), ow, oh, ke, 0);
+        aa_barrier(s_fsr_tmp, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        srv_write(slot + 1, s_fsr_tmp, DXGI_FORMAT_R8G8B8A8_UNORM, D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING);
+        const float kr[12] = { 0, 0, 0, 0, 0, 0, 0, 0, con, (float)(ow - 1), (float)(oh - 1), 0 };
+        fsr_draw(s_fsr_rcas, slot + 1, out_rtv, ow, oh, kr, x0);
+        return 1;
+    }
+    /* RCAS alone, at the window's size (where it was made to run): if the
+     * sizes differ, the usual bilinear scale goes first, into the intermediate */
+    const float kr[12] = { 0, 0, 0, 0, 0, 0, 0, 0, con, (float)(ow - 1), (float)(oh - 1), 0 };
+    if (gw == ow && gh == oh) { fsr_draw(s_fsr_rcas, slot, out_rtv, ow, oh, kr, x0); return 1; }
+    if (!bilinear || !fsr_tmp(ow, oh)) return 0;
+    aa_barrier(s_fsr_tmp, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET);
+    fsr_draw(bilinear, slot, fsr_tmp_rtv(), ow, oh, kz, 0);
+    aa_barrier(s_fsr_tmp, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    srv_write(slot + 1, s_fsr_tmp, DXGI_FORMAT_R8G8B8A8_UNORM, D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING);
+    fsr_draw(s_fsr_rcas, slot + 1, out_rtv, ow, oh, kr, x0);
+    return 1;
+}
+
+/* DISPLAY_SCALE=0: RCAS in place on fi's backbuffer (RENDER_TARGET on entry
+ * and on exit), after AA and before the overlays. */
+static void fsr_backbuffer(u32 fi)
+{
+    fsr_load_env();
+    const int sharp = s_sharp;
+    if (!sharp || !fsr_ready()) return;
+    const u32 w = rs_dim(s_d3d.width, s_rs), h = rs_dim(s_d3d.height, s_rs);
+    if (!w || !h || !fsr_tmp(w, h)) return;
+    ID3D12GraphicsCommandList* cl = s_d3d.cmd_list;
+    ID3D12Resource* bb = s_d3d.render_targets[fi];
+    aa_barrier(bb, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_COPY_SOURCE);
+    aa_barrier(s_fsr_tmp, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_DEST);
+    cl->lpVtbl->CopyResource(cl, s_fsr_tmp, bb);
+    aa_barrier(s_fsr_tmp, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    aa_barrier(bb, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET);
+    D3D12_CPU_DESCRIPTOR_HANDLE bb_rtv;
+    s_d3d.rtv_heap->lpVtbl->GetCPUDescriptorHandleForHeapStart(s_d3d.rtv_heap, &bb_rtv);
+    bb_rtv.ptr += (u64)fi * s_d3d.rtv_descriptor_size;
+    const float kr[12] = { 0, 0, 0, 0, 0, 0, 0, 0, fsr_strength(sharp), (float)(w - 1), (float)(h - 1), 0 };
+    fsr_draw(s_fsr_rcas, AA_SRV_BASE + 5, bb_rtv, w, h, kr, 0);
+}
+
 static void display_resize(u32 w, u32 h)
 {
     wait_for_gpu();
@@ -8525,7 +8799,7 @@ static void display_present(u32 fi)
         cl->lpVtbl->RSSetViewports(cl, 1, &vp);
         cl->lpVtbl->RSSetScissorRects(cl, 1, &sc);
         cl->lpVtbl->IASetPrimitiveTopology(cl, D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        aa_draw(s_disp_pso, rtv, 0);
+        if (!fsr_display(slot, rtv, w, h, s_disp_pso)) aa_draw(s_disp_pso, rtv, 0);
         aa_barrier(game, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_PRESENT);
     } else {   /* no shader: the game image in the corner, unscaled */
         const float z[4] = {0, 0, 0, 1};
@@ -10492,6 +10766,7 @@ skip_dump_consider: ;
     composite_present(fi);
     if (s_rb.present) ui_batch_draw(fi);
     if (s_rb.present) aa_apply(fi);   /* anti-aliasing on the finished frame */
+    if (s_rb.present && !s_display) fsr_backbuffer(fi);   /* FSR 1 RCAS, after AA */
     if (s_rb.present && !s_display) perf_overlay_draw(fi);
     int dumping = (s_d3d.dump_frames_left > 0 && s_d3d.readback_buf
                    && s_d3d.dump_skip_left == 0);
