@@ -468,7 +468,7 @@ std::wstring enemy(int id,Language lang) {
         case 1:return pt?L"Zumbi":L"Zombie";case 3:return pt?L"Aranha":L"Black Widow";
         case 4:return pt?L"Cão zumbi":L"Zombie Dog";case 6:return pt?L"Mariposa":L"Moth";
         case 7:return pt?L"Morcego":L"Bat";case 17:return pt?L"Steve mutante":L"Mutated Steve";
-        case 23:return pt?L"Aranha gigante":L"Giant Black Widow";case 26:return pt?L"Zumbi anatomista":L"Anatomist Zombie";
+        case 23:return L"Giant Black Widow";case 26:return pt?L"Zumbi anatomista":L"Anatomist Zombie";
         case 29:return pt?L"Tentáculo":L"Tentacle";
         }
     } else {
