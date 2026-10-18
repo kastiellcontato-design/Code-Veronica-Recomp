@@ -110,7 +110,8 @@ std::atomic<bool> enabled{false},ready{false};
 // Zero means no request; bit 31 is set on every published request, including rm_0000.
 std::atomic<uint32_t> request{0};
 std::atomic<int> result{0}; // 0 idle, 1 queued, 2 native request issued, 3 busy, 4 wrong state, 5 timeout
-std::atomic<uint32_t> room_now{0};
+std::atomic<uint32_t> room_now{0};   // area<<16 | room<<8 | variant, from state +95..+97
+std::atomic<bool> room_known{false};  // a live character: room_now is the room she is in
 // "Save here": the game's own save screen, opened as the typewriter opens it.
 std::atomic<bool> save_request{false},load_request{false};
 bool load_cancelled=false,load_visual_returned=false;
@@ -149,12 +150,15 @@ bool mapped(uint32_t address,size_t size) {
         uintptr_t next=reinterpret_cast<uintptr_t>(m.BaseAddress)+m.RegionSize;if(next<=at)return false;at=next;}
     return true;
 }
-bool active_game() {
+bool live_character() {
     if(!mapped(state_base,0x2ACA4)||!mapped(CV_SRT_HEALTH,4)||!mapped(CV_SRT_RDX,4))return false;
     // The room header identifies a live character; stale title/game-over data is insufficient.
     static constexpr uint32_t rdx[]={0x3D650,0x3C4FC,0x3A4D0,0x3E814};
     unsigned character=vm_read8(CV_SRT_CHARACTER);
-    if(character>=4||vm_read32(CV_SRT_RDX)!=rdx[character]||int32_t(vm_read32(CV_SRT_HEALTH))<=0)return false;   // 32-bit, as the SRT reads it
+    return character<4&&vm_read32(CV_SRT_RDX)==rdx[character]&&int32_t(vm_read32(CV_SRT_HEALTH))>0;   // 32-bit, as the SRT reads it
+}
+bool active_game() {
+    if(!live_character())return false;
     uint32_t tasks=vm_read32(state_base+0x64),blocked=vm_read32(state_base+0x68);
     return ((tasks&~blocked)&0x80)&&!((tasks&~blocked)&0x1803F)&&!(vm_read32(state_base+0x74)&7)&&!(vm_read32(state_base+0x70)&0x1C040008);
 }
@@ -222,13 +226,23 @@ void call_warp(ppu_context* caller,uint32_t packed) {
     std::printf("[CVTest] warp requested: rm_%u%02u%u entry=%u, on game thread\n",(packed>>24)&15,(packed>>16)&255,(packed>>8)&15,packed&255);std::fflush(stdout);
 }
 std::wstring lower(std::wstring s) {for(auto& c:s)c=wchar_t(towlower(c));return s;}
+// The list row of the room the character is in (its variant, else the same
+// area and room), or the first row.
+int current_row() {
+    if(!room_known)return 0;
+    const unsigned now=room_now.load();int same_room=-1;
+    for(size_t i=0;i<visible_rooms.size();i++) {const unsigned key=rooms[visible_rooms[i]].key();
+        if(key==now)return int(i);
+        if(same_room<0&&(key>>8)==(now>>8))same_room=int(i);}
+    return same_room<0?0:same_room;
+}
 void refresh_list() {
     wchar_t value[128]={};GetWindowTextW(filter,value,128);std::wstring query=lower(value);
     SendMessageW(list,WM_SETREDRAW,FALSE,0);SendMessageW(list,LB_RESETCONTENT,0,0);visible_rooms.clear();
     for(size_t i=0;i<rooms.size();i++) {auto label=rooms[i].code();
         if(!query.empty()&&lower(label).find(query)==std::wstring::npos)continue;
         SendMessageW(list,LB_ADDSTRING,0,reinterpret_cast<LPARAM>(label.c_str()));visible_rooms.push_back(i);}
-    if(!visible_rooms.empty())SendMessageW(list,LB_SETCURSEL,0,0);
+    if(!visible_rooms.empty())SendMessageW(list,LB_SETCURSEL,current_row(),0);
     SendMessageW(list,WM_SETREDRAW,TRUE,0);InvalidateRect(list,nullptr,TRUE);
 }
 void catalog(const std::wstring& game) {
@@ -246,12 +260,12 @@ void catalog(const std::wstring& game) {
 // ---- The window, in the launcher's colours -------------------------------
 // Everything but the two text fields and the list is painted here; the list
 // and the buttons are owner-drawn.
-constexpr int W=680,H=640,MARGIN=24;
+constexpr int W=680,MARGIN=24,DY=48,H=640+DY;   // DY: the current-room banner under the title
 constexpr COLORREF C_BG=RGB(21,17,17),C_FIELD=RGB(26,22,22),C_FIELD_BD=RGB(70,60,58),C_LINE=RGB(70,28,28),
     C_TEXT=RGB(225,218,210),C_DIM=RGB(150,140,132),C_RED=RGB(196,28,34),C_RED_HI=RGB(230,50,50),C_OK=RGB(120,190,110),C_HOVER=RGB(38,30,30);
 enum {ID_FILTER=10,ID_ENTRY,ID_LIST,ID_LOAD,ID_BACK,ID_SAVE,ID_LOAD_SAVE};
-const RECT filter_box{MARGIN,122,MARGIN+400,154},entry_box{MARGIN+424,122,W-MARGIN,154};
-const RECT list_box{MARGIN,234,W-MARGIN,438},status_box{MARGIN,496,W-MARGIN,520};
+const RECT filter_box{MARGIN,122+DY,MARGIN+400,154+DY},entry_box{MARGIN+424,122+DY,W-MARGIN,154+DY};
+const RECT list_box{MARGIN,234+DY,W-MARGIN,438+DY},status_box{MARGIN,496+DY,W-MARGIN,520+DY},here_box{MARGIN,80,W-MARGIN,80+36};
 HFONT title_font=nullptr,body_font=nullptr,small_font=nullptr,code_font=nullptr;
 HBRUSH field_brush=nullptr;
 std::wstring status_text;COLORREF status_color=C_DIM;
@@ -303,6 +317,26 @@ HWND child(HWND parent,const wchar_t* cls,const wchar_t* text,DWORD style,RECT r
 }
 // A text field sits inside a painted frame, vertically centred.
 RECT inside(RECT r) {return RECT{r.left+10,r.top+6,r.right-10,r.bottom-5};}
+// "You are in: rm_XXXX · area A · room NN", read from the game every frame.
+unsigned here_shown=~0u;   // what the banner last drew; ~0u: no live character
+void paint_here(HDC dc) {
+    fill(dc,here_box,C_FIELD);fill(dc,RECT{here_box.left,here_box.top,here_box.left+3,here_box.bottom},C_RED_HI);
+    RECT r{here_box.left+14,here_box.top,here_box.right-12,here_box.bottom};
+    SelectObject(dc,body_font);const std::wstring label=tx(cv_test_i18n::HERE);
+    SIZE size{};GetTextExtentPoint32W(dc,label.c_str(),int(label.size()),&size);
+    write(dc,label,r,body_font,C_DIM,DT_LEFT|DT_VCENTER|DT_SINGLELINE);
+    r.left+=size.cx+10;
+    if(here_shown==~0u) {write(dc,L"—",r,code_font,C_DIM,DT_LEFT|DT_VCENTER|DT_SINGLELINE);return;}
+    const cv_test::Room room{int(here_shown>>16),int((here_shown>>8)&255),int(here_shown&255)};
+    const std::wstring code=room.code();SelectObject(dc,code_font);
+    GetTextExtentPoint32W(dc,code.c_str(),int(code.size()),&size);
+    write(dc,code,r,code_font,C_TEXT,DT_LEFT|DT_VCENTER|DT_SINGLELINE);
+    r.left+=size.cx+12;
+    wchar_t where[128];int n=swprintf(where,128,L"· ");
+    n+=swprintf(where+n,128-n,tx(cv_test_i18n::WHERE),room.stage,room.number);
+    if(room.variant){n+=swprintf(where+n,128-n,L" · ");swprintf(where+n,128-n,tx(cv_test_i18n::EVENT),room.variant);}
+    write(dc,where,r,body_font,C_TEXT,DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS);
+}
 void paint(HWND h) {
     PAINTSTRUCT ps;HDC screen=BeginPaint(h,&ps);
     RECT all{0,0,W,H};HDC dc=CreateCompatibleDC(screen);HBITMAP bmp=CreateCompatibleBitmap(screen,W,H);HGDIOBJ old=SelectObject(dc,bmp);
@@ -311,14 +345,15 @@ void paint(HWND h) {
     write(dc,tx(cv_test_i18n::TITLE),RECT{MARGIN,20,W-MARGIN,56},title_font,C_RED_HI,DT_LEFT|DT_SINGLELINE);
     write(dc,tx(cv_test_i18n::SUBTITLE),RECT{MARGIN+138,34,W-MARGIN,56},small_font,C_DIM,DT_LEFT|DT_SINGLELINE);
     fill(dc,RECT{MARGIN,66,W-MARGIN,67},C_LINE);
-    write(dc,tx(cv_test_i18n::FILTER),RECT{MARGIN,94,MARGIN+400,118},body_font,C_TEXT,DT_LEFT|DT_SINGLELINE);
-    write(dc,tx(cv_test_i18n::ENTRY),RECT{entry_box.left,94,W-MARGIN,118},body_font,C_TEXT,DT_LEFT|DT_SINGLELINE);
+    paint_here(dc);
+    write(dc,tx(cv_test_i18n::FILTER),RECT{MARGIN,94+DY,MARGIN+400,118+DY},body_font,C_TEXT,DT_LEFT|DT_SINGLELINE);
+    write(dc,tx(cv_test_i18n::ENTRY),RECT{entry_box.left,94+DY,W-MARGIN,118+DY},body_font,C_TEXT,DT_LEFT|DT_SINGLELINE);
     for(RECT r:{filter_box,entry_box}) {fill(dc,r,C_FIELD);frame(dc,r,GetFocus()==(r.left==filter_box.left?filter:entry)?C_RED:C_FIELD_BD);}
     write(dc,tx(cv_test_i18n::ENTRY_HELP),
-          RECT{MARGIN,164,W-MARGIN,222},small_font,C_DIM);
+          RECT{MARGIN,164+DY,W-MARGIN,222+DY},small_font,C_DIM);
     frame(dc,RECT{list_box.left-1,list_box.top-1,list_box.right+1,list_box.bottom+1},C_FIELD_BD);
     write(dc,tx(cv_test_i18n::NOTE),
-          RECT{MARGIN,448,W-MARGIN,492},small_font,C_DIM);
+          RECT{MARGIN,448+DY,W-MARGIN,492+DY},small_font,C_DIM);
     write(dc,status_text,status_box,body_font,status_color,DT_LEFT|DT_SINGLELINE|DT_END_ELLIPSIS);
     BitBlt(screen,0,0,W,H,dc,0,0,SRCCOPY);
     SelectObject(dc,old);DeleteObject(bmp);DeleteDC(dc);EndPaint(h,&ps);
@@ -361,10 +396,10 @@ LRESULT CALLBACK proc(HWND h,UINT msg,WPARAM wp,LPARAM lp) {
         entry=child(h,L"EDIT",L"0",WS_TABSTOP|ES_NUMBER|ES_AUTOHSCROLL,inside(entry_box),ID_ENTRY,body_font);
         SendMessageW(entry,EM_LIMITTEXT,3,0);
         list=child(h,L"LISTBOX",L"",WS_TABSTOP|WS_VSCROLL|LBS_NOTIFY|LBS_NOINTEGRALHEIGHT|LBS_OWNERDRAWFIXED|LBS_HASSTRINGS,list_box,ID_LIST,body_font);
-        HWND load=child(h,L"BUTTON",L"",WS_TABSTOP|BS_OWNERDRAW,RECT{MARGIN,534,MARGIN+308,574},ID_LOAD,body_font);
-        save_button=child(h,L"BUTTON",L"",WS_TABSTOP|BS_OWNERDRAW,RECT{MARGIN+324,534,W-MARGIN,574},ID_SAVE,body_font);
-        load_save_button=child(h,L"BUTTON",L"",WS_TABSTOP|BS_OWNERDRAW,RECT{MARGIN,584,MARGIN+308,624},ID_LOAD_SAVE,body_font);
-        HWND back=child(h,L"BUTTON",L"",WS_TABSTOP|BS_OWNERDRAW,RECT{MARGIN+324,584,W-MARGIN,624},ID_BACK,body_font);
+        HWND load=child(h,L"BUTTON",L"",WS_TABSTOP|BS_OWNERDRAW,RECT{MARGIN,534+DY,MARGIN+308,574+DY},ID_LOAD,body_font);
+        save_button=child(h,L"BUTTON",L"",WS_TABSTOP|BS_OWNERDRAW,RECT{MARGIN+324,534+DY,W-MARGIN,574+DY},ID_SAVE,body_font);
+        load_save_button=child(h,L"BUTTON",L"",WS_TABSTOP|BS_OWNERDRAW,RECT{MARGIN,584+DY,MARGIN+308,624+DY},ID_LOAD_SAVE,body_font);
+        HWND back=child(h,L"BUTTON",L"",WS_TABSTOP|BS_OWNERDRAW,RECT{MARGIN+324,584+DY,W-MARGIN,624+DY},ID_BACK,body_font);
         travel=load;
         SetWindowTheme(list,L"DarkMode_Explorer",nullptr);   // a dark scroll bar
         for(HWND b:{load,save_button,load_save_button,back})SetWindowSubclass(b,button_proc,1,0);
@@ -388,9 +423,10 @@ LRESULT CALLBACK proc(HWND h,UINT msg,WPARAM wp,LPARAM lp) {
     case WM_TIMER: {
         if(!IsWindowVisible(h))return 0;
         int r=result.load();auto code=room_now.load();wchar_t line[256];
+        if(const unsigned here=room_known?code:~0u;here!=here_shown){here_shown=here;InvalidateRect(h,&here_box,FALSE);}
         if(r==7)set_status(tx(cv_test_i18n::LOADING),C_OK);
         else if(r==6)set_status(tx(cv_test_i18n::SAVING),C_OK);
-        else if(r==2) {swprintf(line,256,tx(cv_test_i18n::DONE),(code>>8)&255,code&255);set_status(line,C_OK);}
+        else if(r==2) {swprintf(line,256,tx(cv_test_i18n::DONE),(code>>16)&255,(code>>8)&255);set_status(line,C_OK);}
         else if(r==3||r==4)set_status(tx(cv_test_i18n::REFUSED),C_RED_HI);
         else if(ready.load()) {swprintf(line,256,tx(cv_test_i18n::READY),visible_rooms.size());set_status(line,C_OK);}
         else set_status(tx(cv_test_i18n::WAIT),C_DIM);
@@ -445,13 +481,15 @@ void cv_test_tools_show(HWND owner,const std::wstring& game,int lang) {
         BOOL dark=TRUE;DwmSetWindowAttribute(window,20,&dark,sizeof dark);
     }
     if(game_root!=game||rooms.empty()){game_root=game;catalog(game);}
+    here_shown=room_known?room_now.load():~0u;
     refresh_list();ShowWindow(window,SW_SHOW);SetForegroundWindow(window);SetFocus(list);g_pad_block=1;
     for(int i=0;i<PAD_PHYS_MAX;i++){PadPhys p{};pad_phys_poll(i,&p);previous_pad[i]=p.buttons;}
 }
 void TEST_FRAME(ppu_context* ctx) {
     if(enabled) {
         bool valid=active_game()&&!tool_load;ready=valid;
-        if(mapped(state_base+0x95,3))room_now=(vm_read8(state_base+0x95)<<8)|vm_read8(state_base+0x96);
+        room_known=live_character();
+        if(room_known)room_now=(vm_read8(state_base+0x95)<<16)|(vm_read8(state_base+0x96)<<8)|vm_read8(state_base+0x97);
         uint32_t pending=request.exchange(0);
         if(pending){if(valid){call_warp(ctx,pending);result=2;ready=false;valid=false;}else{result=4;std::printf("[CVTest] warp refused: no controllable live game\n");}}
         // The request the typewriter makes once its ribbon is accepted:

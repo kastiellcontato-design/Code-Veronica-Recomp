@@ -1,7 +1,7 @@
 // The maps window, in the launcher's 13 languages (same order as launcher_i18n.h).
 #pragma once
 namespace cv_test_i18n {
-enum Id {TITLE,SUBTITLE,FILTER,ENTRY,ENTRY_HELP,NOTE,LOAD,BACK,WHERE,EVENT,DONE,REFUSED,READY,WAIT,BAD_ENTRY,WINDOW,SAVE,SAVING,LOAD_SAVE,LOADING,COUNT};
+enum Id {TITLE,SUBTITLE,FILTER,ENTRY,ENTRY_HELP,NOTE,LOAD,BACK,WHERE,EVENT,DONE,REFUSED,READY,WAIT,BAD_ENTRY,WINDOW,SAVE,SAVING,LOAD_SAVE,LOADING,HERE,COUNT};
 inline const wchar_t* const k_text[13][COUNT]={
     { // pt
         L"MAPAS",
@@ -24,6 +24,7 @@ inline const wchar_t* const k_text[13][COUNT]={
         L"Tela de salvar aberta (sem gastar fita).",
         L"Carregar save",
         L"Selecione um dos 15 saves na tela do jogo.",
+        L"Você está em:",
     },
     { // en
         L"MAPS",
@@ -46,6 +47,7 @@ inline const wchar_t* const k_text[13][COUNT]={
         L"Save screen opened (no ink ribbon used).",
         L"Load save",
         L"Choose one of the 15 saves on the game screen.",
+        L"You are in:",
     },
     { // es
         L"MAPAS",
@@ -68,6 +70,7 @@ inline const wchar_t* const k_text[13][COUNT]={
         L"Pantalla de guardado abierta (sin gastar cinta).",
         L"Cargar partida",
         L"Elige una de las 15 partidas en la pantalla del juego.",
+        L"Estás en:",
     },
     { // ja
         L"マップ",
@@ -90,6 +93,7 @@ inline const wchar_t* const k_text[13][COUNT]={
         L"セーブ画面を開きました（インクリボンは消費しません）。",
         L"セーブをロード",
         L"ゲーム画面で15個のセーブから選んでください。",
+        L"現在地:",
     },
     { // fr
         L"CARTES",
@@ -112,6 +116,7 @@ inline const wchar_t* const k_text[13][COUNT]={
         L"Écran de sauvegarde ouvert (sans ruban encreur).",
         L"Charger une partie",
         L"Choisissez une des 15 sauvegardes dans le jeu.",
+        L"Vous êtes ici :",
     },
     { // de
         L"KARTEN",
@@ -134,6 +139,7 @@ inline const wchar_t* const k_text[13][COUNT]={
         L"Speicherbildschirm geöffnet (kein Farbband verbraucht).",
         L"Spielstand laden",
         L"Wähle im Spiel einen der 15 Spielstände.",
+        L"Du bist in:",
     },
     { // it
         L"MAPPE",
@@ -156,6 +162,7 @@ inline const wchar_t* const k_text[13][COUNT]={
         L"Schermata di salvataggio aperta (senza consumare nastro).",
         L"Carica salvataggio",
         L"Scegli uno dei 15 salvataggi nella schermata di gioco.",
+        L"Ti trovi in:",
     },
     { // pl
         L"MAPY",
@@ -178,6 +185,7 @@ inline const wchar_t* const k_text[13][COUNT]={
         L"Otwarto ekran zapisu (bez zużycia taśmy).",
         L"Wczytaj zapis",
         L"Wybierz jeden z 15 zapisów na ekranie gry.",
+        L"Jesteś w:",
     },
     { // tr
         L"HARİTALAR",
@@ -200,6 +208,7 @@ inline const wchar_t* const k_text[13][COUNT]={
         L"Kayıt ekranı açıldı (mürekkep şeridi harcanmaz).",
         L"Kayıt yükle",
         L"Oyun ekranında 15 kayıttan birini seçin.",
+        L"Buradasınız:",
     },
     { // ar
         L"الخرائط",
@@ -222,6 +231,7 @@ inline const wchar_t* const k_text[13][COUNT]={
         L"فُتحت شاشة الحفظ (دون استهلاك شريط حبر).",
         L"تحميل حفظ",
         L"اختر أحد ملفات الحفظ الـ15 من شاشة اللعبة.",
+        L"أنت في:",
     },
     { // zh
         L"地图",
@@ -244,6 +254,7 @@ inline const wchar_t* const k_text[13][COUNT]={
         L"已打开存档画面（不消耗色带）。",
         L"载入存档",
         L"请在游戏画面中选择15个存档之一。",
+        L"当前位置：",
     },
     { // ko
         L"맵",
@@ -266,6 +277,7 @@ inline const wchar_t* const k_text[13][COUNT]={
         L"저장 화면을 열었습니다(잉크 리본 소모 없음).",
         L"저장 불러오기",
         L"게임 화면에서 15개 저장 중 하나를 선택하세요.",
+        L"현재 위치:",
     },
     { // ru
         L"КАРТЫ",
@@ -288,6 +300,7 @@ inline const wchar_t* const k_text[13][COUNT]={
         L"Открыт экран сохранения (лента не тратится).",
         L"Загрузить сохранение",
         L"Выберите одно из 15 сохранений на экране игры.",
+        L"Вы здесь:",
     },
 };
 }
