@@ -30,6 +30,7 @@ extern "C" PPU_THREAD_LOCAL ppu_context* g_active_ctx;
 extern "C" uint8_t* vm_base;
 extern "C" int cv_pc_settings_read(void);
 extern "C" int cv_pc_settings_saturation_read(void);
+extern "C" int cv_pc_settings_effects_read(void);
 extern "C" void cv_pc_settings_change(int which, int value);
 extern "C" uint32_t cellGcm_flip_submit_count(void);
 
@@ -46,9 +47,9 @@ constexpr uint32_t kConfirm=0xC000, kCancel=0x2001;
 constexpr uint32_t kScreen=CV_MENU_CURSOR+4, kFade=CV_MENU_CURSOR+0x4C;
 bool pc_selected=false, pc_open=false, drawing_main=false;
 int pc_row=0;
-constexpr int kSettingCount=6, kResetColorsRow=kSettingCount;
+constexpr int kSettingCount=8, kResetColorsRow=kSettingCount;
 constexpr int kBackRow=kResetColorsRow+1, kPcRowCount=kBackRow+1;
-std::array<int,6> values={1,0,0,80,50,100}; // neutral brightness, contrast and saturation
+std::array<int,kSettingCount> values={1,0,0,80,50,100,0,0}; // neutral brightness, contrast and saturation
 int pc_adjust_direction=0;
 ULONGLONG pc_adjust_started=0;
 
@@ -91,17 +92,18 @@ void sound(const ppu_context* caller,int id) {
     invoke(&work,CV_FN_MENU_SOUND);
 }
 void read_settings() {
-    const int packed=cv_pc_settings_read();
-    values={ (packed>>4)&7, (packed>>8)&3, packed&3, (packed>>10)&255, (packed>>18)&255, cv_pc_settings_saturation_read() };
+    const int packed=cv_pc_settings_read(),effects=cv_pc_settings_effects_read();
+    values={ (packed>>4)&7, (packed>>8)&3, packed&3, (packed>>10)&255, (packed>>18)&255, cv_pc_settings_saturation_read(), effects&127, (effects>>8)&7 };
     values[0]=std::clamp(values[0],0,4); values[1]=std::clamp(values[1],0,2); values[2]=std::clamp(values[2],0,2);
     values[3]=std::clamp(values[3],0,160); values[4]=std::clamp(values[4],0,130); values[5]=std::clamp(values[5],0,200);
+    values[6]=std::clamp(values[6],0,100)/10*10;values[7]=std::clamp(values[7],0,4);
 }
 
 // Values use the same offsets as read_settings and the existing settings bridge.
 // Only color rows are written: display settings keep their current values.
 void reset_colors() {
     values[3]=80; values[4]=50; values[5]=100;
-    for(int row=3;row<kSettingCount;row++)cv_pc_settings_change(row,values[row]);
+    for(int row=3;row<=5;row++)cv_pc_settings_change(row,values[row]);
     pc_adjust_direction=0;pc_adjust_started=0;
 }
 
@@ -117,7 +119,7 @@ struct Font {
     HGDIOBJ old=nullptr;
     // 27 units to the em: capitals as tall as the menu's own (EXIT, DEFAULT),
     // measured on screen. The baseline sits 21 units below a row's y, which
-    // centres PC SETTINGS between DEFAULT and EXIT.
+    // centres RECOMP SETTINGS between DEFAULT and EXIT.
     const int ascent=21;
     std::map<unsigned,Glyph> glyphs;
     Font() { if(dc&&font) old=SelectObject(dc,font); }
@@ -189,7 +191,7 @@ uint32_t selected_color(bool selected) {
  * backend draws our batch over this same frame of the game's. */
 void draw_entry(const ppu_context* caller,uint32_t screen,uint32_t fade_bits) {
     if(screen!=0) { rsx_d3d12_set_ui_quads(nullptr,0); return; }
-    TextBatch batch; batch.text("PC SETTINGS",32,310,selected_color(pc_selected));
+    TextBatch batch; batch.text("RECOMP SETTINGS",32,310,selected_color(pc_selected));
     /* The black layer: the rows darken under it as it thickens. */
     float fade; std::memcpy(&fade,&fade_bits,4);
     const float shade=1.f-std::clamp(fade,0.f,1.f);
@@ -208,21 +210,24 @@ void draw_settings(const ppu_context* caller) {
     static const char* resolution[]={"480P","720P (NATIVE)","1080P","1440P","4K"};
     static const char* aa[]={"OFF","FXAA","SMAA"};
     static const char* mode[]={"WINDOWED","BORDERLESS","FULLSCREEN"};
+    static const char* aniso[]={"OFF","2X","4X","8X","16X"};
     TextBatch batch;
-    batch.text("PC SETTINGS",320,102,0xDFFFFFFF,1.35f,true);
-    const char* labels[]={"RESOLUTION","ANTI-ALIASING","DISPLAY MODE","BRIGHTNESS","CONTRAST","SATURATION","RESET COLORS","BACK"};
-    char brightness[24],contrast[24],saturation[24];
+    batch.text("RECOMP SETTINGS",320,102,0xDFFFFFFF,1.35f,true);
+    const char* labels[]={"RESOLUTION","ANTI-ALIASING","DISPLAY MODE","BRIGHTNESS","CONTRAST","SATURATION","SHARPNESS (FSR RCAS)","ANISOTROPIC FILTER","RESET COLORS","BACK"};
+    char brightness[24],contrast[24],saturation[24],sharpness[24];
     std::snprintf(brightness,sizeof brightness,"%+d%%",-80+values[3]);
     std::snprintf(contrast,sizeof contrast,"%d%%",50+values[4]);
     std::snprintf(saturation,sizeof saturation,"%d%%",values[5]);
-    const char* current[]={resolution[values[0]],aa[values[1]],mode[values[2]],brightness,contrast,saturation};
-    const float rows[]={142,172,202,232,262,292,322,352};
+    if(values[6])std::snprintf(sharpness,sizeof sharpness,"%d%%",values[6]);
+    else std::snprintf(sharpness,sizeof sharpness,"OFF");
+    const char* current[]={resolution[values[0]],aa[values[1]],mode[values[2]],brightness,contrast,saturation,sharpness,aniso[values[7]]};
     for(int row=0;row<kPcRowCount;row++) {
         const uint32_t color=selected_color(pc_row==row);
-        batch.text(labels[row],32,rows[row],color,.9f);
-        if(row<kSettingCount)batch.text(std::string("< ")+current[row]+" >",330,rows[row],color,.8f);
+        const float y=137.f+row*26.f;
+        batch.text(labels[row],32,y,color,.78f);
+        if(row<kSettingCount)batch.text(std::string("< ")+current[row]+" >",350,y,color,.76f);
     }
-    batch.text(pc_row==kResetColorsRow?"CONFIRM TO RESET COLORS":pc_row==kBackRow?"CONFIRM TO GO BACK":"LEFT / RIGHT TO CHANGE",
+    batch.text(pc_row==7?"ANISOTROPIC FILTER: APPLY AFTER GAME RESTART":pc_row==kResetColorsRow?"CONFIRM TO RESET COLORS":pc_row==kBackRow?"CONFIRM TO GO BACK":"LEFT / RIGHT TO CHANGE",
                320,410,0xBFCFCFCF,.6f,true);
     batch.submit(caller);
     auto work=call_context(caller);invoke(&work,CV_FN_MENU_FRAME);
@@ -266,10 +271,11 @@ void CV_FN_MENU_INPUT(ppu_context* ctx) {
             else if(repeat&kDown) {pc_row=(pc_row+1)%kPcRowCount;pc_adjust_direction=0;sound(ctx,2);}
             else if(pc_row==kResetColorsRow && (input&kConfirm)) { reset_colors();sound(ctx,3); }
             else if(pc_row<kSettingCount && ((repeat&(kLeft|kRight)) || (input&kConfirm))) {
-                if(pc_row<3) {
-                    const int limit=pc_row==0?5:3;
-                    const int step=(repeat&kLeft)?-1:1;
-                    values[pc_row]=(values[pc_row]+step+limit)%limit;
+                if(pc_row<3||pc_row>=6) {
+                    const int limit=pc_row==0||pc_row==7?5:pc_row==6?11:3;
+                    const int step=(repeat&kLeft)?-1:1,unit=pc_row==6?10:1;
+                    values[pc_row]=((values[pc_row]/unit+step+limit)%limit)*unit;
+                    pc_adjust_direction=0;pc_adjust_started=0;
                 } else {
                     const int direction=(repeat&kLeft)?-1:1;
                     const ULONGLONG now=GetTickCount64();
@@ -313,15 +319,15 @@ extern "C" int cv_native_pc_menu_selftest(void) {
     check(g_active_ctx==&original && g_trampoline_fn==context_test_tail,"caller context and pending tail restored");
     g_active_ctx=previous;g_trampoline_fn=previous_tail;
     uint32_t cursor=4;bool selected=false;
-    check(move_extra_row(cursor,selected,kDown)&&selected&&cursor==5,"DEFAULT -> PC SETTINGS");
-    check(move_extra_row(cursor,selected,kDown)&&!selected&&cursor==5,"PC SETTINGS -> EXIT");
-    check(move_extra_row(cursor,selected,kUp)&&selected&&cursor==5,"EXIT -> PC SETTINGS");
-    check(move_extra_row(cursor,selected,kUp)&&!selected&&cursor==4,"PC SETTINGS -> DEFAULT");
+    check(move_extra_row(cursor,selected,kDown)&&selected&&cursor==5,"DEFAULT -> RECOMP SETTINGS");
+    check(move_extra_row(cursor,selected,kDown)&&!selected&&cursor==5,"RECOMP SETTINGS -> EXIT");
+    check(move_extra_row(cursor,selected,kUp)&&selected&&cursor==5,"EXIT -> RECOMP SETTINGS");
+    check(move_extra_row(cursor,selected,kUp)&&!selected&&cursor==4,"RECOMP SETTINGS -> DEFAULT");
     cursor=1;selected=false;
     check(!move_extra_row(cursor,selected,kDown)&&cursor==1&&!selected,"existing rows keep native navigation");
     cursor=5;
     check(!move_extra_row(cursor,selected,kDown)&&cursor==5&&!selected,"EXIT wrap remains native");
-    TextBatch text;text.text("PC SETTINGS",32,310,0xFFFFFFFF);
+    TextBatch text;text.text("RECOMP SETTINGS",32,310,0xFFFFFFFF);
     check(!text.quads.empty(),"serif glyphs available");
     check(text.quads.size()<131072,"entry fits single GPU batch");
     for(const auto& q:text.quads) {

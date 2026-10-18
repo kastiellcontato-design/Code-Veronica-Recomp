@@ -4,7 +4,7 @@
 #include <utility>
 
 static std::array<unsigned char, 16 * 1024 * 1024> memory;
-static std::array<int,6> settings={4,2,1,160,0,0};
+static std::array<int,8> settings={4,2,1,160,0,0,70,4};
 static std::vector<std::pair<int,int>> changes;
 static unsigned largest_batch;
 extern "C" {
@@ -24,6 +24,7 @@ int cv_pc_settings_read() {
     return settings[2]|settings[0]<<4|settings[1]<<8|settings[3]<<10|settings[4]<<18;
 }
 int cv_pc_settings_saturation_read() { return settings[5]; }
+int cv_pc_settings_effects_read() { return settings[6]|settings[7]<<8; }
 void cv_pc_settings_change(int which,int value) { settings[which]=value;changes.emplace_back(which,value); }
 uint32_t cellGcm_flip_submit_count() { static uint32_t frame;return ++frame; }   // one frame per menu call
 void rsx_d3d12_set_ui_quads(const rsx_ui_quad* q,uint32_t count) {
@@ -54,12 +55,12 @@ int main() {
     };
     press(0,kDown);assert(pc_selected);
     press(0x4000,0);assert(pc_open&&pc_row==0);
-    for(int i=0;i<6;i++)press(0,kDown);
+    for(int i=0;i<kResetColorsRow;i++)press(0,kDown);
     assert(pc_row==kResetColorsRow&&changes.empty());
     press(0,kLeft);press(0,kRight);assert(changes.empty());
     press(0x4000,0);
     assert(pc_open&&pc_row==kResetColorsRow);
-    assert((settings==std::array<int,6>{4,2,1,80,50,100}));
+    assert((settings==std::array<int,8>{4,2,1,80,50,100,70,4}));
     assert((changes==std::vector<std::pair<int,int>>{{3,80},{4,50},{5,100}}));
     press(0,kDown);assert(pc_row==kBackRow);
     press(0x4000,0);assert(!pc_open&&pc_selected);
@@ -67,7 +68,7 @@ int main() {
     press(0,kUp);assert(pc_row==kBackRow);
     press(0x4000,0);assert(!pc_open);
     press(0x4000,0);
-    for(int i=0;i<6;i++)press(0,kDown);
+    for(int i=0;i<kResetColorsRow;i++)press(0,kDown);
     changes.clear();settings[3]=150;settings[4]=120;settings[5]=190;read_settings();
     press(kCancel|0x4000,0);
     assert(!pc_open&&changes.empty()&&settings[3]==150&&settings[4]==120&&settings[5]==190);
@@ -76,5 +77,19 @@ int main() {
     press(0,kLeft);
     assert(settings[3]==149&&settings[0]==4&&settings[1]==2&&settings[2]==1);
     assert(changes.size()==1&&changes[0].first==3);
-    std::printf("[pc-menu-test] PASS: confirm-only color reset, display unchanged, cancel/back/wrap, one-point adjustment; max batch=%u\n",largest_batch);
+    // RCAS changes use the same 10-percent steps as the launcher, with wrap.
+    for(int i=0;i<3;i++)press(0,kDown);
+    assert(pc_row==6&&values[6]==70);
+    press(0,kRight);assert(settings[6]==80&&changes.back()==std::make_pair(6,80));
+    values[6]=settings[6]=100;press(0,kRight);assert(settings[6]==0);
+    press(0,kLeft);assert(settings[6]==100);
+    // The native anisotropy row saves the same launcher indices (0/2/4/8/16x).
+    press(0,kDown);assert(pc_row==7&&values[7]==4);
+    press(0,kRight);assert(settings[7]==0&&changes.back()==std::make_pair(7,0));
+    press(0,kLeft);assert(settings[7]==4);
+    press(kCancel,0);assert(!pc_open);
+    press(0x4000,0);assert(values[6]==100&&values[7]==4);
+    press(0,kDown);assert(pc_row==1);
+    press(0,kRight);assert(settings[1]==0);press(0,kLeft);assert(settings[1]==2);
+    std::printf("[pc-menu-test] PASS: color reset preserves display/effects, native AA/RCAS/anisotropy changes and reopen, cancel/back/wrap, one-point adjustment; max batch=%u\n",largest_batch);
 }

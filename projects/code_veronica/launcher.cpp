@@ -2066,11 +2066,15 @@ const UINT WM_TOGGLE_MENU = WM_APP + 1;
 const UINT WM_PC_SETTINGS_READ = WM_APP + 2;
 const UINT WM_PC_SETTINGS_CHANGE = WM_APP + 3;
 const UINT WM_PC_SETTINGS_READ_SATURATION = WM_APP + 4;
+const UINT WM_PC_SETTINGS_READ_EFFECTS = WM_APP + 7;
 void menu_hook() { PostMessageW(g.hwnd, WM_TOGGLE_MENU, 0, 0); }   /* game window thread */
 const UINT WM_TOGGLE_TEXTURES = WM_APP + 5;
 const UINT WM_TOGGLE_SRT = WM_APP + 6;
 const UINT WM_TEST_MAPS = WM_APP + 20;
 const UINT WM_ITEM_MENU = WM_APP + 21;
+static_assert(WM_PC_SETTINGS_READ_EFFECTS!=WM_TOGGLE_TEXTURES && WM_PC_SETTINGS_READ_EFFECTS!=WM_TOGGLE_SRT &&
+              WM_PC_SETTINGS_READ_EFFECTS!=WM_TEST_MAPS && WM_PC_SETTINGS_READ_EFFECTS!=WM_ITEM_MENU,
+              "Native settings message must not consume launcher shortcuts");
 /* F5..F10 in the game window: the options menu (Insert as well), the item
  * menu, the maps, the SRT and the texture mods; F10 (a screenshot) is the
  * game window's own. */
@@ -2313,6 +2317,7 @@ LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp)
     switch (m) {
     case WM_PC_SETTINGS_READ: return g.s.mode | (g.s.res << 4) | (g.s.aa << 8) | ((g.s.brightness + 80) << 10) | ((g.s.contrast - 50) << 18);
     case WM_PC_SETTINGS_READ_SATURATION: return g.s.saturation;
+    case WM_PC_SETTINGS_READ_EFFECTS: return g.s.sharpness | (g.s.aniso << 8);
     case WM_PC_SETTINGS_CHANGE:
         if (wp == 0 && lp >= 0 && lp <= 4) g.s.res = int(lp);
         else if (wp == 1 && lp >= 0 && lp <= 2) g.s.aa = int(lp);
@@ -2320,6 +2325,8 @@ LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp)
         else if (wp == 3 && lp >= 0 && lp <= 160) g.s.brightness = -80 + int(lp);
         else if (wp == 4 && lp >= 0 && lp <= 130) g.s.contrast = 50 + int(lp);
         else if (wp == 5 && lp >= 0 && lp <= 200) g.s.saturation = int(lp);
+        else if (wp == 6 && lp >= 0 && lp <= 100 && lp % 10 == 0) g.s.sharpness = int(lp);
+        else if (wp == 7 && lp >= 0 && lp <= 4) g.s.aniso = int(lp);
         else return 0;
         save_settings(g.s); KillTimer(h, 2); apply_live(false);
         InvalidateRect(h, NULL, FALSE); return 1;
@@ -2822,9 +2829,27 @@ extern "C" int cv_pc_settings_saturation_read(void)
     }
     return cv_pc_fallback_saturation;
 }
+// Effects are separate from the original packed display/color settings.
+// Anisotropy is a saved preference; the renderer creates its samplers at startup.
+static int cv_pc_fallback_effects = -1;
+extern "C" int cv_pc_settings_effects_read(void)
+{
+    if (g.hwnd && IsWindow(g.hwnd)) return int(SendMessageW(g.hwnd, WM_PC_SETTINGS_READ_EFFECTS, 0, 0));
+    if (cv_pc_fallback_effects < 0) {
+        const char* sharp=getenv("CV_SHARPNESS");
+        const int sharpness=std::clamp(sharp?atoi(sharp):_wtoi(ini_get(L"tela",L"nitidez",L"0").c_str()),0,100)/10*10;
+        int aniso=std::clamp(_wtoi(ini_get(L"tela",L"anisotropico",L"0").c_str()),0,4);
+        if (const char* filter=getenv("RSX_ANISO")) {
+            const int factor=atoi(filter);aniso=factor>=16?4:factor>=8?3:factor>=4?2:factor>=2?1:0;
+        }
+        cv_pc_fallback_effects=sharpness|(aniso<<8);
+    }
+    return cv_pc_fallback_effects;
+}
 extern "C" void cv_pc_settings_change(int which,int value)
 {
-    if (which<0 || which>5 || value<0 || value>(which==0?4:which<=2?2:which==3?160:which==4?130:200)) return;
+    static const int maximum[]={4,2,2,160,130,200,100,4};
+    if (which<0 || which>=8 || value<0 || value>maximum[which] || (which==6 && value%10!=0)) return;
     if (g.hwnd && IsWindow(g.hwnd)) { SendMessageW(g.hwnd,WM_PC_SETTINGS_CHANGE,WPARAM(which),LPARAM(value)); return; }
     int packed=cv_pc_settings_read();
     if(which==0) {
@@ -2847,10 +2872,16 @@ extern "C" void cv_pc_settings_change(int which,int value)
         packed=(packed&~(255<<18))|(value<<18);
         ini_set(L"tela",L"contraste",std::to_wstring(contrast));
         rsx_d3d12_set_color_adjust(-80+((packed>>10)&255),contrast);
-    } else {
+    } else if(which==5) {
         ini_set(L"tela",L"saturacao",std::to_wstring(value));
         cv_pc_fallback_saturation=value;
         rsx_d3d12_set_saturation(value);
+    } else if(which==6) {
+        cv_pc_fallback_effects=(cv_pc_settings_effects_read()&~127)|value;
+        ini_set(L"tela",L"nitidez",std::to_wstring(value));rsx_d3d12_set_sharpness(value);
+    } else {
+        cv_pc_fallback_effects=(cv_pc_settings_effects_read()&~(7<<8))|(value<<8);
+        ini_set(L"tela",L"anisotropico",std::to_wstring(value));
     }
     cv_pc_fallback_settings=packed;
 }
