@@ -70,15 +70,14 @@ static int s_vsync = 0, s_tearing = 0;   /* present mode, see the swap chain set
                                  * post-processing and the copy to the display
                                  * -- were dropped, so the screen flashed
                                  * black. The VP copy is 256 B x2 per vertex. */
-#define MAX_DRAWS        12288  /* per-frame draw records. Code Veronica's
-                                 * gameplay frames run past 2048; the overflow
-                                 * cut off post-processing and the copy to the
-                                 * display, so every such frame was black.
-                                 * Its in-engine cutscenes (the lighter scene)
-                                 * then hit 6144 and dropped the frame's tail.
-                                 * The per-draw constant buffer is
-                                 * VP_CB_STRIDE * MAX_DRAWS * 2 bytes: ~207 MB
-                                 * of upload heap here; 16384 would be 276 MB. */
+#define MAX_DRAWS        24576  /* per-batch draw records. JP rm_2050 repeatedly
+                                 * reaches 12288 during Steve's gunfire; dropping
+                                 * the tail can omit post-processing/display
+                                 * copies while Present continues at 30 FPS.
+                                 * Keep headroom for this cutscene. All draw,
+                                 * CB and descriptor capacities derive from
+                                 * this limit; VP constants use ~396 MiB x2
+                                 * parity combined; FP constants use the same. */
 /* Per-draw VP constant-buffer slot: vp_c[512] + posscale + posoffset
  * (514 vec4 = 8224 B) rounded up to D3D12's 256-byte CBV alignment.
  * Constants are snapshotted at RECORD time -- wave's passes each set their
