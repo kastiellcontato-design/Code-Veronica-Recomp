@@ -172,6 +172,7 @@ struct Settings {
     int res = 1;           /* index into k_res */
     int aa = 0;            /* anti-aliasing: 0 off, 1 FXAA, 2 SMAA */
     int fps = 0;           /* 0 the original 30; 1 unlocked 60 to measure maps (runs fast) */
+    int aniso = 0;         /* anisotropic filtering: 0 off, 1-4 = 2x/4x/8x/16x */
     int brightness = 0;   /* -80..80, zero leaves the image unchanged */
     int contrast = 100;   /* 50..180 percent */
     int saturation = 100; /* 0..200 percent */
@@ -209,6 +210,7 @@ std::wstring res_name(int i) { return i == 1 ? T(S_RES_NATIVE) : k_res[i].name; 
 std::wstring mode_name(int i) { return T(S_MODE_WINDOW + i); }
 std::wstring aa_name(int i) { return T(S_AA_OFF + i); }
 std::wstring fps_name(int i) { return T(i ? S_FPS_60_DIAG : S_FPS_ORIG); }
+std::wstring aniso_name(int i) { return i ? std::to_wstring(1 << i) + L"x" : T(S_AA_OFF); }
 
 /* Game patches (projects/code_veronica/patches.json, lifted as switchable
  * sites): id = the runtime flag name. */
@@ -322,6 +324,7 @@ Settings load_settings()
     s.res    = _wtoi(ini_get(L"tela", L"resolucao", L"1").c_str());
     s.aa     = _wtoi(ini_get(L"tela", L"antialias", L"0").c_str());
     s.fps    = _wtoi(ini_get(L"tela", L"fps", L"0").c_str()) == 1;
+    s.aniso  = std::clamp(_wtoi(ini_get(L"tela", L"anisotropico", L"0").c_str()), 0, 4);
     s.brightness = _wtoi(ini_get(L"tela", L"brilho", L"0").c_str());
     s.contrast = _wtoi(ini_get(L"tela", L"contraste", L"100").c_str());
     s.saturation = _wtoi(ini_get(L"tela", L"saturacao", L"100").c_str());
@@ -412,6 +415,7 @@ void save_settings(const Settings& s)
     ini_set(L"tela", L"resolucao", std::to_wstring(s.res));
     ini_set(L"tela", L"antialias", std::to_wstring(s.aa));
     ini_set(L"tela", L"fps", std::to_wstring(s.fps));
+    ini_set(L"tela", L"anisotropico", std::to_wstring(s.aniso));
     ini_set(L"tela", L"brilho", std::to_wstring(s.brightness));
     ini_set(L"tela", L"contraste", std::to_wstring(s.contrast));
     ini_set(L"tela", L"saturacao", std::to_wstring(s.saturation));
@@ -604,7 +608,7 @@ UI g;
 /* ids */
 enum {
     ID_NAV = 100,               /* + page */
-    ID_DD_MODE = 200, ID_DD_RES = 201, ID_DD_AA = 202, ID_DD_LANG = 203, ID_DD_FPS = 204, ID_DD_ITEM = 300,  /* + item index */
+    ID_DD_MODE = 200, ID_DD_RES = 201, ID_DD_AA = 202, ID_DD_LANG = 203, ID_DD_FPS = 204, ID_DD_ANISO = 205, ID_DD_ITEM = 300,  /* + item index */
     ID_DD_UP = 390, ID_DD_DOWN = 391,
     ID_PLAY = 400, ID_RESUME, ID_QUIT,
     ID_GAME_BROWSE = 500, ID_GAME_OPEN, ID_RAP_BROWSE, ID_RAP_OPEN, ID_SAVE_BROWSE, ID_SAVE_OPEN, ID_SAVE_DEFAULT,
@@ -925,6 +929,9 @@ void draw_inicio(Graphics& gr, const Font& head, const Font& body, const Font& c
     dropdown(gr, RectF(x + 210, y, 200, 30), res_name(g.s.res), ID_DD_RES, body);
     text(gr, T(S_AA), x + 450, y, body, C_TEXT, StringAlignmentNear, 180, 30);
     dropdown(gr, RectF(x + 630, y, 180, 30), aa_name(g.s.aa), ID_DD_AA, body);
+    y += 44;   /* in the pipelines' samplers: chosen before the game starts */
+    text(gr, T(S_ANISO), x, y, body, C_TEXT, StringAlignmentNear, 205, 30);
+    dropdown(gr, RectF(x + 210, y, 200, 30), aniso_name(g.s.aniso), g.running ? -1 : ID_DD_ANISO, body, !g.running);
     y += 54;
     bool o1, o2;
     std::wstring m1 = check_game(g.s.game, &o1), m2 = check_rap(g.s.rap, &o2);
@@ -1679,6 +1686,7 @@ void paint(HDC hdc)
         else if (g.open_dd == ID_DD_RES) { for (int i = 0; i < 5; i++) items.push_back(res_name(i)); sel = g.s.res; }
         else if (g.open_dd == ID_DD_AA) { for (int i = 0; i < 3; i++) items.push_back(aa_name(i)); sel = g.s.aa; }
         else if (g.open_dd == ID_DD_FPS) { for (int i = 0; i < 2; i++) items.push_back(fps_name(i)); sel = g.s.fps; }
+        else if (g.open_dd == ID_DD_ANISO) { for (int i = 0; i < 5; i++) items.push_back(aniso_name(i)); sel = g.s.aniso; }
         else if (g.open_dd == ID_DD_SRT_ENEMIES) { for(int i=0;i<=5;i++)items.push_back(srt_enemy_value(i));items.push_back(T(S_SRT_ALL));sel=g.s.srt_enemies==99?6:g.s.srt_enemies; }
         else if (g.open_dd == ID_DD_SRT_CORNER) {for(int i=0;i<4;i++)items.push_back(T(S_SRT_TL+i));sel=g.s.srt_corner;}
         else if (g.open_dd == ID_DD_SRT_INVPOS) { items = { T(S_SRT_INV_SIDE), T(S_SRT_INV_BELOW) }; sel = g.s.srt_inventory_below; }
@@ -1929,6 +1937,7 @@ void click(int id)
             else if (g.open_dd == ID_DD_RES) g.s.res = i;
             else if (g.open_dd == ID_DD_AA) g.s.aa = i;
             else if (g.open_dd == ID_DD_FPS) g.s.fps = i;
+            else if (g.open_dd == ID_DD_ANISO) g.s.aniso = i;
             else if(g.open_dd==ID_DD_SRT_ENEMIES)g.s.srt_enemies=i==6?99:i;
             else if(g.open_dd==ID_DD_SRT_CORNER)g.s.srt_corner=i;
             else if(g.open_dd==ID_DD_SRT_LANGUAGE)g.s.srt_language=i;
@@ -1950,7 +1959,7 @@ void click(int id)
         if (g.page == P_MODS) g.tex_rep = -1;        /* count the textures again */
     }
     else if (id >= ID_PATCH && id < ID_PATCH + NPATCHES) { g.s.patch[id - ID_PATCH] ^= true; changed(); }
-    else if (id == ID_DD_MODE || id == ID_DD_RES || id == ID_DD_AA || id == ID_DD_FPS || id == ID_DD_LANG || id==ID_DD_SRT_ENEMIES || id==ID_DD_SRT_CORNER || id==ID_DD_SRT_LANGUAGE || id == ID_DD_OV_CORNER || id == ID_DD_OV_LAYOUT || id == ID_DD_SRT_INVPOS || id == ID_DD_SRT_WINDOW || id == ID_DD_SRT_BOSSBAR) {
+    else if (id == ID_DD_MODE || id == ID_DD_RES || id == ID_DD_AA || id == ID_DD_FPS || id == ID_DD_ANISO || id == ID_DD_LANG || id==ID_DD_SRT_ENEMIES || id==ID_DD_SRT_CORNER || id==ID_DD_SRT_LANGUAGE || id == ID_DD_OV_CORNER || id == ID_DD_OV_LAYOUT || id == ID_DD_SRT_INVPOS || id == ID_DD_SRT_WINDOW || id == ID_DD_SRT_BOSSBAR) {
         g.open_dd = id; g.dd_scroll = 0;
         if (id == ID_DD_LANG && g_lang_pick >= 0)   /* open with the chosen language in view */
             for (int i = 0; i < LANG_COUNT; i++)
@@ -2407,6 +2416,7 @@ void start_game()
     set_env("RES_SCALE", k_res[s.res].scale);
     set_env("WINDOW_MODE", k_mode_env[s.mode]);
     set_env("AA_MODE", std::to_string(s.aa));
+    set_env("RSX_ANISO", s.aniso ? std::to_string(1 << s.aniso) : "0");
     /* Unlocked 60 (cv_fps_experimental.cpp, raw benchmark): the game logic
      * still steps once per drawn frame, so it runs fast. Only this process
      * sees it; the ELF and the save stay as they are. 30 leaves the

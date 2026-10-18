@@ -485,6 +485,22 @@ static int vf_enabled(void)
     return on;
 }
 
+/* RSX_ANISO=2|4|8|16: anisotropic filtering on the guest's pixel texture
+ * units, sharper floors and walls seen at an angle. Screen-aligned quads (HUD,
+ * text, post passes) sample the same as before. 0/unset = trilinear, as the
+ * guest asked. */
+static UINT tex_aniso(void)
+{
+    static int n = -1;
+    if (n < 0) {
+        const char* e = getenv("RSX_ANISO");
+        const int v = e ? atoi(e) : 0;
+        n = v >= 16 ? 16 : v >= 8 ? 8 : v >= 4 ? 4 : v >= 2 ? 2 : 0;
+        if (n) fprintf(stderr, "[D3D12] anisotropic filtering %dx%c", n, 10);
+    }
+    return (UINT)n;
+}
+
 /* RES_SCALE=<f> (1 < f <= 4; 1.5 = 1080p): render at f times the guest
  * resolution. Everything the backend records stays in GUEST pixels; the
  * scale is applied where they meet D3D12 -- resource sizes, viewports,
@@ -1965,7 +1981,8 @@ static int init_d3d12(u32 width, u32 height)
 
         D3D12_STATIC_SAMPLER_DESC samp[FP_TEX_UNITS + 5] = {0};
         for (int _s = 0; _s < FP_TEX_UNITS; _s++) {
-            samp[_s].Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+            samp[_s].Filter = tex_aniso() ? D3D12_FILTER_ANISOTROPIC : D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+            samp[_s].MaxAnisotropy = tex_aniso();
             samp[_s].AddressU = samp[_s].AddressV = samp[_s].AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
             samp[_s].ShaderRegister = (UINT)_s;
             samp[_s].MaxLOD = D3D12_FLOAT32_MAX;
@@ -4077,6 +4094,9 @@ static HRESULT pso_create_cached(const D3D12_GRAPHICS_PIPELINE_STATE_DESC* pd, I
         PH(pd->RTVFormats, sizeof pd->RTVFormats);
         PH(&pd->DSVFormat, sizeof pd->DSVFormat);
         PH(&pd->InputLayout.NumElements, sizeof pd->InputLayout.NumElements);
+        /* The samplers live in the root signature, which the stored desc
+         * must match; off keeps the names already stored. */
+        { const UINT an = tex_aniso(); if (an) PH(&an, sizeof an); }
 #undef PH
         WCHAR name[40];
         swprintf(name, 40, L"fp_%016llX", h);
