@@ -3867,6 +3867,23 @@ static u32 rsx_depth_key(const rsx_state* st)
            (st->depth_mask ? 0x4000u : 0u) | (f << 16);
 }
 
+/* Guest alpha test, in the same PSO key word: bit20 = the draw tests alpha.
+ * Only the enable is keyed; func and ref reach the shader through
+ * rsx_alpha_k (vp_record_cb), so a title that animates the reference does
+ * not multiply pipelines. Keyed rather than tested in every program because
+ * a discard anywhere in a shader costs that pipeline its early depth test.
+ * Code Veronica's rm_1100 trees are opaque quads cut by the alpha test
+ * on their DXT5 alpha: untested, they wrote depth over the whole quad and the
+ * fog pass that reads depth drew dark green rectangles. NO_ALPHATEST=1 turns
+ * it off. */
+static u32 rsx_alpha_key(const rsx_state* st)
+{
+    static int off = -1;
+    if (off < 0) off = getenv("NO_ALPHATEST") ? 1 : 0;
+    if (!st || off || !st->alpha_test_enable) return 0;
+    return (st->alpha_func == 0x0207u) ? 0 : 0x100000u;   /* ALWAYS: nothing to test */
+}
+
 static u32 rsx_blend_key(const rsx_state* st, int enable)
 {
     { static int _bd = -1; if (_bd < 0) _bd = getenv("BLENDDBG") ? 1 : 0;
@@ -4525,6 +4542,32 @@ static int fp_build_pso(FpJob* j)
         hlsl_replace_all(hlsl, hlsl_cap, "return _out;", enc);
     }
 #undef RSX_SRGB_FN
+    /* Guest alpha test (cull bit 0x100000, rsx_alpha_key): D3D12 has no fixed
+     * one, so the program discards what fails rsx_alpha_k (x enable, y ref,
+     * z func - 0x200) on target 0's alpha, compared as RPCS3 does. The edit
+     * that used to do this lived in the decompiler this one replaced. */
+    if ((cull & 0x100000u) && strstr(hlsl, "float4 rsx_alpha_k;")) {
+        const int mrt = strstr(hlsl, "PSOutput main(PSInput input)") != NULL;
+        char* ret = NULL;
+        for (char* p = strstr(hlsl, "return "); p; p = strstr(p + 1, "return "))
+            if (!strncmp(p + 7, mrt ? "_out;" : "_o;", mrt ? 5 : 3) ||
+                (!mrt && !strncmp(p + 7, "(_o == _o)", 10)))
+                ret = p;
+        if (ret) {
+            char ins[600];
+            const int len = snprintf(ins, sizeof ins,
+                "{ float _ra = %s, _rr = rsx_alpha_k.y; uint _rf = (uint)rsx_alpha_k.z; "
+                "if (rsx_alpha_k.x != 0.0 && !(_rf == 7u || (_rf == 1u && _ra < _rr) || "
+                "(_rf == 2u && _ra == _rr) || (_rf == 3u && _ra <= _rr) || (_rf == 4u && _ra > _rr) || "
+                "(_rf == 5u && _ra != _rr) || (_rf == 6u && _ra >= _rr))) discard; } ",
+                mrt ? "_out.t0.a" : "((_o.a == _o.a) ? _o.a : 0.0)");
+            const size_t tail = strlen(ret) + 1;
+            if (len > 0 && (size_t)(ret - hlsl) + (size_t)len + tail <= hlsl_cap) {
+                memmove(ret + len, ret, tail);
+                memcpy(ret, ins, (size_t)len);
+            }
+        }
+    }
     if (getenv("CV_VIDEO_CAPTURE")) { char pn[100];snprintf(pn,sizeof pn,"ps_%08X_%08X.hlsl",fp_addr,uhash);FILE* f=fopen(pn,"w");if(f){fprintf(f,"/* vs_idx=%d exports32=%d */\n%s",vs_idx,exp32,hlsl);fclose(f);} }
     /* Explicit diagnostic only: isolate interpolation and RT sampling. */
     if (vs_idx == 3 && getenv("CV_COMPOSITE_PROBE")) {
@@ -12473,6 +12516,7 @@ static void d3d12_draw_arrays_impl(void* ud, u32 primitive, u32 first, u32 count
                 dr->cull = rsx_cull_key(s_d3d.current_rsx_state);
                 if (s_d3d.current_rsx_state && s_d3d.current_rsx_state->shader_packer && !getenv("NO_SRGB_OUT")) dr->cull |= 0x200u;
                 dr->cull |= rsx_depth_key(s_d3d.current_rsx_state);
+                dr->cull |= rsx_alpha_key(s_d3d.current_rsx_state);
         dr->begin_epoch = s_d3d.current_rsx_state ? s_d3d.current_rsx_state->begin_epoch : 0;
             dr->begin_epoch = s_d3d.current_rsx_state ? s_d3d.current_rsx_state->begin_epoch : 0;
                 dr->cmask = 0xF;
@@ -12649,6 +12693,7 @@ static void d3d12_draw_arrays_impl(void* ud, u32 primitive, u32 first, u32 count
             dr->cull = rsx_cull_key(s_d3d.current_rsx_state);
             if (s_d3d.current_rsx_state && s_d3d.current_rsx_state->shader_packer && !getenv("NO_SRGB_OUT")) dr->cull |= 0x200u;
             dr->cull |= rsx_depth_key(s_d3d.current_rsx_state);
+            dr->cull |= rsx_alpha_key(s_d3d.current_rsx_state);
         dr->begin_epoch = s_d3d.current_rsx_state ? s_d3d.current_rsx_state->begin_epoch : 0;
             dr->begin_epoch = s_d3d.current_rsx_state ? s_d3d.current_rsx_state->begin_epoch : 0;
             dr->cmask = 0xF;
@@ -12860,6 +12905,7 @@ static void d3d12_draw_indexed_impl(void* ud, u32 primitive, u32 first, u32 coun
         dr->cull = rsx_cull_key(s_d3d.current_rsx_state);
         if (s_d3d.current_rsx_state && s_d3d.current_rsx_state->shader_packer && !getenv("NO_SRGB_OUT")) dr->cull |= 0x200u;
         dr->cull |= rsx_depth_key(s_d3d.current_rsx_state);
+        dr->cull |= rsx_alpha_key(s_d3d.current_rsx_state);
         dr->begin_epoch = s_d3d.current_rsx_state ? s_d3d.current_rsx_state->begin_epoch : 0;
         dr->cmask = 0xF;
         if (s_d3d.current_rsx_state) {
