@@ -36,6 +36,11 @@ int texpack_replace_on(void);
 int texpack_dump_on(void);
 /* The switches were just changed: read them again now, not within half a second. */
 void texpack_flags_changed(void);
+/* Set the dump destination without restarting or initializing the mod index.
+ * Queued images retain their destination; changing it resets per-folder dedup. */
+int texpack_set_dump_directory(const wchar_t* directory);
+/* Changes only when the output folder changes: cached GPU textures re-dump. */
+uint32_t texpack_dump_generation(void);
 uint64_t texpack_hash(const void* p, size_t n, uint32_t w, uint32_t h, uint32_t fmt);
 
 /* -1: the folder is still being listed; 0: no replacement; 1: there is one. */

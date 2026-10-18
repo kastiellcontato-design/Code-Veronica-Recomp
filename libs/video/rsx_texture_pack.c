@@ -36,6 +36,11 @@ void texpack_flags_changed(void) { s_flags_at = 0; }
 int texpack_dump_on(void) { flags_refresh(); return s_dump_on; }
 
 static wchar_t s_dir[PATH_CAP], s_root[PATH_CAP], s_dump_dir[PATH_CAP];
+/* Replacement paths are immutable for one game session. The dump override
+ * can change live, protected by the same lock as the dump queue and hash set. */
+static wchar_t s_dump_override[PATH_CAP];
+static SRWLOCK s_dlock = SRWLOCK_INIT;
+static volatile LONG s_dump_generation = 1;
 static INIT_ONCE s_paths_once = INIT_ONCE_STATIC_INIT;
 static int is_dir(const wchar_t* p)
 {
@@ -182,8 +187,17 @@ static void idx_add(uint64_t h, const wchar_t* path)
     s_idx[i].hash = h; s_idx[i].path = _wcsdup(path);
     if (s_idx[i].path) s_idx_n++; else s_idx[i].hash = 0;
 }
+static int is_dump_directory(const wchar_t* directory)
+{
+    AcquireSRWLockShared(&s_dlock);
+    const int excluded = !_wcsicmp(directory, s_dump_dir) ||
+        (s_dump_override[0] && !_wcsicmp(directory, s_dump_override));
+    ReleaseSRWLockShared(&s_dlock);
+    return excluded;
+}
 static void scan_dir(const wchar_t* dir, int depth)
 {
+    if (is_dump_directory(dir)) return;
     wchar_t pat[PATH_CAP];
     if (depth > 16 || swprintf(pat, PATH_CAP, L"%ls\\*", dir) < 0) return;
     WIN32_FIND_DATAW fd;
@@ -195,7 +209,7 @@ static void scan_dir(const wchar_t* dir, int depth)
         wchar_t full[PATH_CAP];
         if (swprintf(full, PATH_CAP, L"%ls\\%ls", dir, n) < 0) continue;
         if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
-            if (_wcsicmp(n, L"dump") && _wcsicmp(full, s_dump_dir))   /* never the textures being dumped */
+            if (_wcsicmp(n, L"dump") && !is_dump_directory(full))   /* never the textures being dumped */
                 scan_dir(full, depth + 1);
         } else {
             uint64_t hh;
@@ -353,34 +367,57 @@ void texpack_free(texpack_image* img)
 }
 
 /* ---- dumping ----------------------------------------------------------------- */
-typedef struct DumpJob { struct DumpJob* next; uint64_t hash; uint32_t w, h; char name[8]; uint8_t* rgba; } DumpJob;
-static SRWLOCK s_dlock = SRWLOCK_INIT;
+typedef struct DumpJob { struct DumpJob* next; uint64_t hash; uint32_t w, h; char name[8]; uint8_t* rgba; wchar_t directory[PATH_CAP]; } DumpJob;
 static CONDITION_VARIABLE s_dcv = CONDITION_VARIABLE_INIT;
 static DumpJob *s_d_head, *s_d_tail;
 static volatile LONG64 s_d_bytes;
 static HashSet s_dumped;
 static int s_dumped_listed, s_dump_thread;
 
+int texpack_set_dump_directory(const wchar_t* directory)
+{
+    if (!directory || !*directory || wcslen(directory) >= PATH_CAP) return 0;
+    wchar_t normalized[PATH_CAP];
+    wcscpy(normalized, directory);
+    for(wchar_t* c=normalized;*c;c++)if(*c==L'/')*c=L'\\';
+    for (size_t n = wcslen(normalized); n > 3 && (normalized[n-1] == L'\\' || normalized[n-1] == L'/'); n--)
+        normalized[n-1] = 0;
+    AcquireSRWLockExclusive(&s_dlock);
+    if (_wcsicmp(s_dump_override, normalized)) {
+        wcscpy(s_dump_override, normalized);
+        free(s_dumped.k); memset(&s_dumped, 0, sizeof s_dumped);
+        s_dumped_listed = 0;
+        InterlockedIncrement(&s_dump_generation);
+    }
+    ReleaseSRWLockExclusive(&s_dlock);
+    /* Do not initialize replacement paths here: the launcher may still be
+     * selecting its game or mod folder before the renderer first uses it. */
+    return 1;
+}
+uint32_t texpack_dump_generation(void)
+{
+    return (uint32_t)InterlockedCompareExchange(&s_dump_generation, 0, 0);
+}
+
 static void png_write(void* ctx, void* data, int size) { fwrite(data, 1, (size_t)size, (FILE*)ctx); }
 static DWORD WINAPI dump_thread(LPVOID arg)
 {
     (void)arg;
-    int made = 0;
     for (;;) {
         AcquireSRWLockExclusive(&s_dlock);
         while (!s_d_head) SleepConditionVariableSRW(&s_dcv, &s_dlock, INFINITE, 0);
         DumpJob* j = s_d_head;
         s_d_head = j->next; if (!s_d_head) s_d_tail = NULL;
         ReleaseSRWLockExclusive(&s_dlock);
-        if (!made) { mkdirs(s_dump_dir); made = 1; }
+        mkdirs(j->directory);
         wchar_t path[PATH_CAP], tmp[PATH_CAP + 8];
-        swprintf(path, PATH_CAP, L"%ls\\%016llX_%ux%u_%hs.png", s_dump_dir, (unsigned long long)j->hash, j->w, j->h, j->name);
+        swprintf(path, PATH_CAP, L"%ls\\%016llX_%ux%u_%hs.png", j->directory, (unsigned long long)j->hash, j->w, j->h, j->name);
         swprintf(tmp, PATH_CAP + 8, L"%ls.tmp", path);
-        FILE* f = _wfopen(tmp, L"wb");
+        FILE* f = GetFileAttributesW(path) == INVALID_FILE_ATTRIBUTES ? _wfopen(tmp, L"wb") : NULL;
         if (f) {
             /* written under a temporary name: a game closed mid-write leaves no half PNG */
             const int ok = stbi_write_png_to_func(png_write, f, (int)j->w, (int)j->h, 4, j->rgba, (int)j->w * 4);
-            if (fclose(f) || !ok || !MoveFileExW(tmp, path, MOVEFILE_REPLACE_EXISTING)) DeleteFileW(tmp);
+            if (fclose(f) || !ok || !MoveFileExW(tmp, path, 0)) DeleteFileW(tmp);
         }
         InterlockedAdd64(&s_d_bytes, -(LONG64)((size_t)j->w * j->h * 4));
         free(j->rgba);
@@ -389,12 +426,12 @@ static DWORD WINAPI dump_thread(LPVOID arg)
 }
 int texpack_dump_wanted(uint64_t hash)
 {
+    paths();
     AcquireSRWLockExclusive(&s_dlock);
     if (!s_dumped_listed) {   /* what earlier sessions wrote is not written again */
         s_dumped_listed = 1;
-        paths();
         wchar_t pat[PATH_CAP];
-        swprintf(pat, PATH_CAP, L"%ls\\*.png", s_dump_dir);
+        swprintf(pat, PATH_CAP, L"%ls\\*.png", s_dump_override[0] ? s_dump_override : s_dump_dir);
         WIN32_FIND_DATAW fd;
         HANDLE h = FindFirstFileExW(pat, FindExInfoBasic, &fd, FindExSearchNameMatch, NULL, FIND_FIRST_EX_LARGE_FETCH);
         if (h != INVALID_HANDLE_VALUE) {
@@ -410,6 +447,7 @@ void texpack_dump(uint64_t hash, uint32_t w, uint32_t h, const char* fmt_name, u
 {
     const size_t bytes = (size_t)w * h * 4;
     if (!rgba) return;
+    paths();
     if (s_d_bytes + (LONG64)bytes > (LONG64)DUMP_CAP_BYTES) { free(rgba); return; }   /* the disk is behind: skip */
     DumpJob* j = (DumpJob*)calloc(1, sizeof *j);
     if (!j) { free(rgba); return; }
@@ -417,6 +455,7 @@ void texpack_dump(uint64_t hash, uint32_t w, uint32_t h, const char* fmt_name, u
     strncpy(j->name, fmt_name ? fmt_name : "RGBA", sizeof j->name - 1);
     InterlockedAdd64(&s_d_bytes, (LONG64)bytes);
     AcquireSRWLockExclusive(&s_dlock);
+    wcscpy(j->directory, s_dump_override[0] ? s_dump_override : s_dump_dir);
     if (!s_dump_thread) {
         s_dump_thread = 1;
         HANDLE th = CreateThread(NULL, 0, dump_thread, NULL, 0, NULL);

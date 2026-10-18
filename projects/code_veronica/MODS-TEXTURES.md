@@ -7,7 +7,7 @@ nao altera os arquivos originais, saves nem a navegacao entre mapas.
 
 O padrao do launcher agora e mods/textures ao lado do executavel. Cada versao
 usa sua subpasta NPEB00553, NPJB00135 ou NPUB30467; a saida padrao e
-mods/textures/<versao>/dump. Neste checkout o executavel fica em
+mods/texture-dumps/<versao>, independente da pasta de mods. Neste checkout o executavel fica em
 projects/code_veronica/build-release/bin. Os seletores de pasta continuam
 funcionando; caminhos personalizados ja salvos sao preservados. Nenhuma pasta
 antiga foi movida, apagada ou sobrescrita automaticamente. O padrao de outros
@@ -97,3 +97,18 @@ executaveis, pastas do jogo ou mods do usuario. Este documento acompanha o commi
 Aviso final pedido pelo usuario: o titulo da pagina Mods mostra Experimental,
 traduzido nos 13 idiomas. E somente um aviso visual; nao altera os modos.
 Alteracoes de FPS, SPU, sombras e cheats anteriores ficam fora deste commit.
+
+## Correção das pastas de entrada e saída (18/10/2026)
+
+- A primeira linha identifica somente a pasta dos PNGs do mod; o contador mostra apenas substituições.
+- A segunda linha se chama "Pasta das texturas extraídas" e é o destino de ambos os modos de extração.
+- O padrão de saída passa a ser `mods/texture-dumps/<versão>` ao lado do executável, independente de `mods/textures` e de mudanças da pasta do mod. Caminhos personalizados salvos continuam sendo respeitados.
+- A versão escolhida no launcher determina a pasta antes da partida; durante a partida usa-se a versão em execução. Abrir uma pasta de mod direta não cria uma subpasta vazia de outra região.
+- Alterar a saída durante a partida atualiza o escritor e a deduplicação; texturas já residentes podem ser extraídas para a nova pasta quando usadas novamente. Cada trabalho pendente conserva seu destino original.
+- A varredura de mods exclui a pasta das extraídas. Não é permitido escolher exatamente a mesma pasta como entrada e saída.
+- A saída não pode ser trocada enquanto a extração offline estiver em andamento. Trocar a pasta de entrada dos mods requer reiniciar a partida para reconstruir o índice, com aviso no painel.
+- Nenhuma extração antiga é movida nem apagada automaticamente. O escritor preserva PNGs existentes, inclusive modificações do usuário.
+- Rótulos, contadores e avisos corrigidos nos 13 idiomas; rótulos longos têm mais espaço.
+- Testes adicionados ao alvo existente de extração: padrões EU/JP/US, pastas personalizadas, troca de destino com arquivos pendentes, deduplicação por pasta, transparência, preservação de PNGs e exclusão da saída do índice de mods.
+
+Validação da correção: teste de gravação assíncrona com troca de diretórios e alpha aprovado; mapa EU real com 144 referências sem erros; executáveis EU/JP/US recompilados pelo script oficial. Teste interativo do launcher confirmado pelo usuário: pastas de carregamento e extração funcionando corretamente.

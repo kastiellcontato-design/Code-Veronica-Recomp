@@ -5,6 +5,9 @@
 #include <objidl.h>
 #include <gdiplus.h>
 #include "../cv_texture_export.h"
+#include "../cv_texture_paths.h"
+#include "../../../libs/codec/stb_image.h"
+#include <cstdlib>
 #include "../../../libs/video/rsx_texture_pack.h"
 #include <cassert>
 #include <fstream>
@@ -34,6 +37,69 @@ static std::vector<uint8_t> archive(const std::vector<std::vector<uint8_t>>& tex
     size_t off=8+textures.size()*80;
     for(size_t i=0;i<textures.size();++i){size_t e=8+i*80;snprintf((char*)b.data()+e,64,"test\\tex%zu",i);be(b,e+64,0x241f5deb);be(b,e+68,(uint32_t)textures[i].size());be(b,e+72,(uint32_t)textures[i].size()<<3);be(b,e+76,(uint32_t)off);memcpy(b.data()+off,textures[i].data(),textures[i].size());off+=textures[i].size();}return b;
 }
+
+static void check_texture_folders(const fs::path& root) {
+    using namespace cv_texture_paths;
+    const auto base=root/L"routing"/std::to_wstring(GetCurrentProcessId());fs::create_directories(base);
+    const auto exe=base/L"program",input=base/L"mod-input",old_input=base/L"old-mod-input";
+    for(const auto* code:{L"NPEB00553",L"NPJB00135",L"NPUB30467"}) {
+        assert(mod_folder(exe,L"")==exe/L"mods"/L"textures");
+        assert(dump_folder(exe,L"",code)==exe/L"mods"/L"texture-dumps"/code);
+        assert(dump_folder(exe,input.wstring(),code)==input);
+    }
+    assert(mod_folder(exe,input.wstring())==input);
+    fs::create_directories(input);
+    assert(replacement_folder(input,L"NPJB00135")==input);
+    assert(!fs::exists(input/L"NPJB00135")); // Opening/scanning a direct pack must not create an empty regional child.
+    const auto regional=input/L"NPJB00135";fs::create_directories(regional);
+    assert(replacement_folder(input,L"NPJB00135")==regional);
+    assert(same_folder(regional,regional/L"."));
+    const auto first=regional/L"saída-extraída",second=base/L"extraídas-B";
+    fs::create_directories(first);
+    constexpr uint64_t art=0x123456789abcdef0ULL,dumped_only=0x3456789abcdef012ULL,image=0x456789abcdef0123ULL;
+    auto file=[](uint64_t h){wchar_t leaf[100];swprintf(leaf,100,L"%016llX_1x1_RGBA.png",(unsigned long long)h);return fs::path(leaf);};
+    write(regional/file(art),{1});write(first/file(dumped_only),{2});
+    auto env=[](const char* key,const fs::path& value){const auto utf8=value.u8string();assert(!_putenv_s(key,reinterpret_cast<const char*>(utf8.c_str())));};
+    env("TEXTURE_DIR",old_input);assert(!_putenv_s("TEXTURE_GAME","NPJB00135"));
+    assert(texpack_set_dump_directory(first.c_str()));
+    // Changing output before launch must not freeze a stale replacement folder.
+    env("TEXTURE_DIR",input);env("TEXTURE_DUMP_DIR",first);
+    auto wait_file=[&](const fs::path& f){
+        const auto until=std::chrono::steady_clock::now()+std::chrono::seconds(5);
+        while(!fs::exists(f)){assert(std::chrono::steady_clock::now()<until);std::this_thread::sleep_for(std::chrono::milliseconds(10));}
+    };
+    auto queue=[](uint64_t hash,uint8_t r,uint8_t g,uint8_t b,uint8_t a){
+        auto* bytes=static_cast<uint8_t*>(std::malloc(4));assert(bytes);bytes[0]=r;bytes[1]=g;bytes[2]=b;bytes[3]=a;
+        texpack_dump(hash,1,1,"RGBA",bytes);
+    };
+    assert(texpack_dump_wanted(image));queue(image,255,0,0,255);
+    const auto generation=texpack_dump_generation();
+    assert(texpack_set_dump_directory(second.c_str())&&texpack_dump_generation()!=generation);
+    assert(texpack_dump_wanted(image));queue(image,0,0,255,128);
+    wait_file(first/file(image));wait_file(second/file(image));
+    auto pixel=[&](const fs::path& f,uint8_t red,uint8_t blue,uint8_t alpha){
+        const auto bytes=read(f);int w=0,h=0,c=0;auto* rgba=stbi_load_from_memory(bytes.data(),int(bytes.size()),&w,&h,&c,4);
+        assert(rgba&&w==1&&h==1&&rgba[0]==red&&rgba[1]==0&&rgba[2]==blue&&rgba[3]==alpha);stbi_image_free(rgba);
+    };
+    pixel(first/file(image),255,0,255);pixel(second/file(image),0,255,128);
+    assert(!fs::exists(input/file(image))&&!fs::exists(regional/file(image)));
+    assert(!texpack_dump_wanted(image));
+    const auto same_generation=texpack_dump_generation();
+    assert(texpack_set_dump_directory((second/L"").c_str())&&texpack_dump_generation()==same_generation);
+    assert(!texpack_set_dump_directory(nullptr)&&texpack_dump_generation()==same_generation);
+    assert(!texpack_set_dump_directory(std::wstring(1100,L'x').c_str()));
+    // Pending writes never replace edited or existing PNGs.
+    const std::vector<uint8_t> edit={7,8,9};write(second/file(image),edit);queue(image,0,255,0,255);
+    constexpr uint64_t sentinel=0x56789abcdef01234ULL;assert(texpack_dump_wanted(sentinel));queue(sentinel,1,2,3,255);
+    wait_file(second/file(sentinel));assert(read(second/file(image))==edit);
+    assert(texpack_set_dump_directory(first.c_str()));assert(!texpack_dump_wanted(image));
+    // The replacement index loads only mod input, excluding the extraction directory.
+    const auto until=std::chrono::steady_clock::now()+std::chrono::seconds(5);
+    int found=-1;while((found=texpack_lookup(art))<0){assert(std::chrono::steady_clock::now()<until);std::this_thread::sleep_for(std::chrono::milliseconds(10));}
+    assert(found==1&&texpack_lookup(dumped_only)==0&&texpack_lookup(image)==0);
+    std::puts("[TEXTURE PATHS TEST] PASS: independent defaults, EU/JP/US folders, direct packs, live destinations, queued path snapshots, per-folder dedup, preserved PNG/alpha, mod input exclusion.");
+}
+
 int main(int argc,char** argv){
     setvbuf(stdout,nullptr,_IONBF,0);assert(argc>=2);const auto root=fs::absolute(fs::u8path(argv[1]));fs::create_directories(root);
     const auto src=root/L"source",dst=root/L"png";fs::create_directories(src);fs::create_directories(dst);
@@ -66,6 +132,7 @@ int main(int argc,char** argv){
     auto bad=texture(0x14);be(bad,16,0xfffffff0);auto broken=archive({bad,texture(0xff)});write(root/L"bad.arc",broken);
     assert(cv_texture_export_start(root/L"bad.arc",root/L"bad-png"));result=wait();assert(result.errors==1&&result.unsupported==1);
     assert(cv_texture_export_start(src,root/L"cancel-png"));cv_texture_export_cancel();result=wait();assert(result.canceled);
+    check_texture_folders(root);
     if(argc>=3){
         const auto actual=fs::u8path(argv[2]);assert(cv_texture_export_start(actual,root/L"real"));result=wait();
         std::printf("[TEX EXPORT REAL] files=%u/%u PNG=%u existing=%u unsupported=%u errors=%u\n",result.files,result.total,result.written,result.existing,result.unsupported,result.errors);

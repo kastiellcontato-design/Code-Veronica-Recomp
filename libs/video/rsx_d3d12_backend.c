@@ -259,6 +259,7 @@ typedef struct {
     int thash_can;      /* a moddable format, not animating: thash can be taken */
     u32 thash_bytes;    /* the guest bytes it is taken over */
     int dump_seen;      /* texture dumping has looked at these contents */
+    uint32_t dump_generation; /* destination used when these contents were dumped */
     u64 upload_frame;   /* render frame its contents were last uploaded */
     ID3D12Resource* ui_res; /* optional title-owned HD artwork, same logical UVs */
     u64 ui_id;
@@ -5942,8 +5943,10 @@ static void tex_dump_image(u64 hash, const u8* map0, u32 pitch, u32 w, u32 h, u3
 static void texdump_for_slot(int ts)
 {
     VPTexSlot* t = &s_d3d.vp_tex[ts];
-    if (t->dump_seen || !t->thash_can || !t->up || !texpack_dump_on()) return;
-    t->dump_seen = 1;
+    if (!t->thash_can || !t->up || !texpack_dump_on()) return;
+    const uint32_t generation = texpack_dump_generation();
+    if (t->dump_seen && t->dump_generation == generation) return;
+    t->dump_seen = 1; t->dump_generation = generation;
     if (!t->thash_ok) {
         extern uint8_t* vm_base;
         if (!vm_base) return;

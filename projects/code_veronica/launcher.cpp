@@ -44,6 +44,7 @@
 #include "cv_item_menu.h"
 #include "cv_keycap_style.h"
 #include "cv_texture_export.h"
+#include "cv_texture_paths.h"
 #include "../../libs/video/rsx_texture_pack.h"
 
 /* button_icons.cpp: the keycaps' short labels and font, shared with the game. */
@@ -1002,17 +1003,17 @@ void draw_inicio(Graphics& gr, const Font& head, const Font& body, const Font& c
 }
 
 void path_row(Graphics& gr, float x, float y, const std::wstring& label, const std::wstring& value,
-              const std::wstring& note, bool ok, int id_browse, int id_open, const Font& body, const Font& fsm)
+              const std::wstring& note, bool ok, int id_browse, int id_open, const Font& body, const Font& fsm, float label_width = 170)
 {
-    text(gr, label, x, y, body, C_TEXT, StringAlignmentNear, 170, 32);
-    RectF fr(x + 175, y, 470, 32);
+    text(gr, label, x, y, body, C_TEXT, StringAlignmentNear, label_width, 32);
+    RectF fr(x + label_width + 5, y, 640 - label_width, 32);
     field(gr, fr, false, false);
     text(gr, value.empty() ? std::wstring(T(S_NOT_SET)) : value, fr.X + 8, fr.Y, body, value.empty() ? C_DIM : C_TEXT,
          StringAlignmentNear, fr.Width - 14, fr.Height);
-    button(gr, RectF(x + 655, y, 110, 32), T(S_BROWSE), id_browse, body);
+    button(gr, RectF(x + 655, y, 110, 32), T(S_BROWSE), id_browse, body, false, id_browse >= 0);
     button(gr, RectF(x + 773, y, 80, 32), T(S_OPEN), id_open, body, false, !value.empty());
-    text(gr, (ok ? L"✔  " : L"✖  ") + note, x + 175, y + 36, fsm, ok ? C_OK : C_RED_HI,
-         StringAlignmentNear, 680, 20);
+    text(gr, (ok ? L"✔  " : L"✖  ") + note, x + label_width + 5, y + 36, fsm, ok ? C_OK : C_RED_HI,
+         StringAlignmentNear, 850 - label_width, 20);
 }
 
 
@@ -1708,20 +1709,29 @@ void draw_desempenho(Graphics& gr, const Font& head, const Font& body, const Fon
     }
 }
 
-/* The texture mods folder (rsx_texture_pack.h): chosen, or "textures" beside
- * the exe, under mods/textures. Replacements are read from its subfolder named after the version
- * when there is one, dumps go to <folder>\<version>\dump. */
-fs::path tex_folder()
-{
-    if (!g.s.tex_dir.empty()) return fs::path(g.s.tex_dir);
-    wchar_t exe[MAX_PATH]; GetModuleFileNameW(NULL, exe, MAX_PATH);
-    return fs::path(exe).parent_path() / L"mods" / L"textures";
+/* Mod input and extraction output are independent, using the selected region. */
+fs::path texture_executable_directory() {
+    wchar_t exe[MAX_PATH];GetModuleFileNameW(nullptr,exe,MAX_PATH);
+    return fs::path(exe).parent_path();
 }
-fs::path tex_dump_folder()
-{
-    return g.s.tex_dump_dir.empty() ? tex_folder() / GAME_CODE / L"dump" : fs::path(g.s.tex_dump_dir);
+std::wstring texture_game_code() {
+    if(g.running)return GAME_CODE;
+    const auto selected=folder_code();return version_of(selected)?selected:GAME_CODE;
 }
-int count_png(const fs::path& dir, bool recurse)
+fs::path tex_folder() {
+    return cv_texture_paths::mod_folder(texture_executable_directory(),g.s.tex_dir);
+}
+fs::path tex_dump_folder() {
+    return cv_texture_paths::dump_folder(texture_executable_directory(),g.s.tex_dump_dir,texture_game_code());
+}
+fs::path tex_replacement_folder() {
+    return cv_texture_paths::replacement_folder(tex_folder(),texture_game_code());
+}
+bool texture_folders_distinct(const fs::path& input,const fs::path& output) {
+    if(!cv_texture_paths::same_folder(input,output))return true;
+    MessageBoxW(g.hwnd,T(S_TEX_PATH_CONFLICT),L"Code: Veronica",MB_OK|MB_ICONINFORMATION);return false;
+}
+int count_png(const fs::path& dir, bool recurse, const fs::path& excluded = {})
 {
     int n = 0; std::error_code ec;
     if (!recurse) {
@@ -1730,7 +1740,7 @@ int count_png(const fs::path& dir, bool recurse)
         return n;
     }
     for (auto it = fs::recursive_directory_iterator(dir, ec); !ec && it != fs::recursive_directory_iterator(); it.increment(ec)) {
-        if (it->is_directory(ec)) { if (_wcsicmp(it->path().filename().c_str(), L"dump") == 0) it.disable_recursion_pending(); continue; }
+        if (it->is_directory(ec)) { if (_wcsicmp(it->path().filename().c_str(), L"dump") == 0 || (!excluded.empty() && cv_texture_paths::same_folder(it->path(),excluded))) it.disable_recursion_pending(); continue; }
         if (_wcsicmp(it->path().extension().c_str(), L".png") == 0) n++;
     }
     return n;
@@ -1738,10 +1748,9 @@ int count_png(const fs::path& dir, bool recurse)
 void scan_tex_dir()
 {
     std::error_code ec;
-    fs::path root = tex_folder() / GAME_CODE;
-    if (!fs::is_directory(root, ec)) root = tex_folder();
-    g.tex_root_name = root.filename().wstring();
-    g.tex_rep = count_png(root, true);
+    const auto root = tex_replacement_folder();
+    g.tex_root_name = texture_game_code();
+    g.tex_rep = count_png(root, true, tex_dump_folder());
     g.tex_dumped = count_png(tex_dump_folder(), false);
 }
 
@@ -1752,19 +1761,20 @@ void draw_mods(Graphics& gr, const Font& head, const Font& body, const Font& fsm
     section(gr, T(S_MODS_TITLE), x, y, w, head);
     text(gr, T(S_MODS_HINT), x, y + 32, fsm, C_DIM, StringAlignmentNear, w, 20);
     y += 74;
-    if (g.tex_rep < 0) scan_tex_dir();
+    const auto extraction=cv_texture_export_status();
+    if (g.tex_rep < 0 || g.tex_root_name != texture_game_code()) scan_tex_dir();
     wchar_t note[512];
-    swprintf(note, 512, T(S_TEX_COUNT_FMT), g.tex_rep, g.tex_dumped, g.tex_root_name.c_str());
-    path_row(gr, x, y, T(S_TEX_FOLDER), tex_folder().wstring(), note, true, ID_TEX_BROWSE, ID_TEX_OPEN, body, fsm);
-    y += 66;
+    swprintf(note, 512, T(S_TEX_COUNT_FMT), g.tex_rep, g.tex_root_name.c_str());
+    path_row(gr, x, y, T(S_TEX_FOLDER), tex_folder().wstring(), note, true, ID_TEX_BROWSE, ID_TEX_OPEN, body, fsm, 220);
+    if(g.running)text(gr,T(S_TEX_MOD_RESTART),x+225,y+57,fsm,C_DIM,StringAlignmentNear,w-225,20);
+    y += g.running?88:66;
     swprintf(note, 512, T(S_TEX_DUMP_COUNT_FMT), g.tex_dumped);
-    path_row(gr, x, y, T(S_TEX_DUMP_FOLDER), tex_dump_folder().wstring(), note, true, ID_TEX_DUMP_BROWSE, ID_TEX_DUMP_OPEN, body, fsm);
+    path_row(gr, x, y, T(S_TEX_DUMP_FOLDER), tex_dump_folder().wstring(), note, true, extraction.running?-1:ID_TEX_DUMP_BROWSE, ID_TEX_DUMP_OPEN, body, fsm, 220);
     y += 70;
     option_card(gr, x, y, w, 92, g.s.tex_replace, ID_TEX_REPLACE, T(S_TEX_REPLACE_T), T(S_TEX_REPLACE_D), body, fsm);
     y += 104;
     option_card(gr, x, y, w, 92, g.s.tex_dump, ID_TEX_DUMP, T(S_TEX_DUMP_T), T(S_TEX_DUMP_D), body, fsm);
     y += 104;
-    const auto extraction=cv_texture_export_status();
     option_card(gr, x, y, w, 108, g.s.tex_dump_all, ID_TEX_ALL, T(S_TEX_ALL_T), T(S_TEX_ALL_D), body, fsm);
     y += 120;
     button(gr, RectF(x, y, 260, 34), T(extraction.running?S_TEX_ALL_CANCEL:S_TEX_ALL_START), ID_TEX_ALL_RUN,
@@ -2225,17 +2235,18 @@ void click(int id)
     }
     else if (id == ID_TEX_BROWSE) {
         auto p = pick(true, tex_folder().wstring(), nullptr, nullptr);
-        if (!p.empty()) { g.s.tex_dir = p; g.tex_rep = -1; set_texture_env(); changed(); }
+        if (!p.empty() && texture_folders_distinct(cv_texture_paths::replacement_folder(p,texture_game_code()),tex_dump_folder())) { g.s.tex_dir = p; g.tex_rep = -1; set_texture_env(); changed(); }
     }
-    else if (id == ID_TEX_OPEN) {   /* made on first use, with this version's subfolder */
+    else if (id == ID_TEX_OPEN) {
         std::error_code ec;
-        fs::create_directories(tex_folder() / GAME_CODE, ec);
-        open_in_explorer((tex_folder() / GAME_CODE).wstring());
+        const auto root=tex_replacement_folder();
+        fs::create_directories(root, ec);
+        open_in_explorer(root.wstring());
         g.tex_rep = -1;
     }
-    else if (id == ID_TEX_DUMP_BROWSE) {
+    else if (id == ID_TEX_DUMP_BROWSE && !cv_texture_export_status().running) {
         auto p = pick(true, tex_dump_folder().wstring(), nullptr, nullptr);
-        if (!p.empty()) { g.s.tex_dump_dir = p; g.tex_rep = -1; set_texture_env(); changed(); }
+        if (!p.empty() && texture_folders_distinct(tex_replacement_folder(),p)) { g.s.tex_dump_dir = p; g.tex_rep = -1; set_texture_env(); changed(); }
     }
     else if (id == ID_TEX_DUMP_OPEN) {
         std::error_code ec;
@@ -2464,6 +2475,13 @@ LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp)
             st = kind == PAD_KIND_XINPUT ? L"Xbox" : kind == PAD_KIND_DS4 ? L"DualShock 4" : kind ? L"DualSense" : L"";
         }
         bool redraw = st != g.pad_status || cnt != g.pad_count || kind != g.pad_kind;
+        if(g.page==P_MODS && IsWindowVisible(h) && g.s.tex_dump) {
+            static ULONGLONG last_dump_scan=0;const auto now=GetTickCount64();
+            if(now-last_dump_scan>=1000) {
+                last_dump_scan=now;const int count=count_png(tex_dump_folder(),false);
+                if(count!=g.tex_dumped){g.tex_dumped=count;redraw=true;}
+            }
+        }
         {
             static uint64_t previous=~uint64_t(0);static bool was_exporting=false;
             const auto e=cv_texture_export_status();
@@ -2548,11 +2566,12 @@ void set_srt_env()
 void set_texture_env()
 {
     if(g.s.tex_dir.empty()){
-        std::error_code ec;fs::create_directories(tex_folder()/GAME_CODE,ec);
+        std::error_code ec;fs::create_directories(tex_folder()/texture_game_code(),ec);
     }
     set_env("TEXTURE_DIR", save_utf8(tex_folder()));
-    set_env("TEXTURE_GAME", CV_TITLE_ID);
+    set_env("TEXTURE_GAME", save_utf8(fs::path(texture_game_code())));
     set_env("TEXTURE_DUMP_DIR", save_utf8(tex_dump_folder()));
+    texpack_set_dump_directory(tex_dump_folder().c_str());
     set_env("TEXTURE_REPLACE", g.s.tex_replace ? "1" : "0");
     set_env("TEXTURE_DUMP", g.s.tex_dump && !g.s.tex_dump_all ? "1" : "0");
     texpack_flags_changed();
