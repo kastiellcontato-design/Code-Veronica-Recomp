@@ -10,7 +10,7 @@
  * version; one is drawn from the user's own files (see "the map screen").
  *
  * Keyboard. No version exists in the game: keycaps are drawn here, light
- * grey-blue with a dark border and a condensed label, showing the key the
+ * neutral silver with a soft bevel and an open label, showing the key the
  * launcher maps to that PS3 button (PAD_KEYMAP), so they follow the player's
  * own key setup. The How to Play pages are redrawn the same way (see "How to
  * Play in keyboard mode").
@@ -70,7 +70,9 @@
 #include "../../libs/input/pad_phys.h"
 #include "../../libs/input/pad_map.h"
 #include "cv_version.h"
+#include "cv_keycap_style.h"
 #include "../../libs/video/rsx_tex_hook.h"
+#include "../../libs/video/rsx_texture_pack.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -408,8 +410,7 @@ std::vector<unsigned char> dxt5_reencode(const std::vector<unsigned char>& dxt, 
 }
 
 /* ---- keycaps --------------------------------------------------------------
- * Drawn with GDI+: a light grey-blue cap, a dark border, a condensed label
- * (Bahnschrift Condensed where Windows has it). */
+ * Shared silver keycaps, optically centered labels and 4x antialiasing. */
 void gdiplus_once()
 {
     static std::once_flag once;
@@ -420,20 +421,7 @@ void gdiplus_once()
     });
 }
 
-const wchar_t* key_font()
-{
-    static const wchar_t* chosen = nullptr;
-    if (!chosen) {
-        static const wchar_t* const names[] = { L"Bahnschrift Condensed", L"Bahnschrift SemiCondensed",
-                                                L"Arial Narrow", L"Segoe UI" };
-        chosen = L"Arial";
-        for (const wchar_t* n : names) {
-            Gdiplus::FontFamily f(n);
-            if (f.GetLastStatus() == Gdiplus::Ok && f.IsAvailable()) { chosen = n; break; }
-        }
-    }
-    return chosen;
-}
+const wchar_t* key_font() { return cv_keycap::font(); }
 
 /* The label of a Windows virtual key, short enough for a 28-px cap. */
 std::wstring key_label(int vk)
@@ -564,20 +552,8 @@ template <class F> std::vector<Rgba> render_ss(int w, int h, F draw)
 /* A keycap of cw x ch centred in a w x h image. */
 std::vector<Rgba> keycap(const std::wstring& label, int w, int h, float cw, float ch)
 {
-    return render(w, h, [&](Gdiplus::Graphics& g) {
-        const float x = (w - cw) / 2, y = (h - ch) / 2, r = 3.0f;
-        Gdiplus::GraphicsPath p;
-        p.AddArc(x, y, 2 * r, 2 * r, 180, 90);
-        p.AddArc(x + cw - 2 * r, y, 2 * r, 2 * r, 270, 90);
-        p.AddArc(x + cw - 2 * r, y + ch - 2 * r, 2 * r, 2 * r, 0, 90);
-        p.AddArc(x, y + ch - 2 * r, 2 * r, 2 * r, 90, 90);
-        p.CloseFigure();
-        Gdiplus::SolidBrush fill(Gdiplus::Color(255, 205, 211, 223));
-        g.FillPath(&fill, &p);
-        Gdiplus::Pen border(Gdiplus::Color(255, 26, 28, 36), 1.6f);
-        g.DrawPath(&border, &p);
-        draw_fit(g, label, Gdiplus::RectF(x + 2, y + 1, cw - 4, ch - 2), Gdiplus::Color(255, 20, 22, 28),
-                 ch * 0.66f, false, Gdiplus::StringAlignmentCenter);
+    return render_ss(w, h, [&](Gdiplus::Graphics& g) {
+        cv_keycap::paint(g, label, (w-cw)/2, (h-ch)/2, cw, ch, ch*0.60f);
     });
 }
 
@@ -870,23 +846,7 @@ void round_rect(Gdiplus::GraphicsPath& p, float x, float y, float w, float h, fl
 void draw_key3d(Gdiplus::Graphics& g, const std::wstring& label, float x, float y, float cw, float ch,
                 float px, bool lit)
 {
-    const float r = std::max(2.5f, std::min(cw, ch) * 0.16f);
-    {
-        Gdiplus::GraphicsPath sh; round_rect(sh, x + 0.5f, y + 2.0f, cw, ch, r);
-        Gdiplus::SolidBrush sb(Gdiplus::Color(130, 0, 0, 0)); g.FillPath(&sb, &sh);
-    }
-    Gdiplus::GraphicsPath base; round_rect(base, x, y, cw, ch, r);
-    Gdiplus::SolidBrush bb(Gdiplus::Color(255, 112, 116, 126)); g.FillPath(&bb, &base);
-    const float in = std::max(1.5f, ch * 0.07f);
-    const float fx = x + in, fy = y + in * 0.6f, fw = cw - 2 * in, fh = ch - in * 2.4f;
-    Gdiplus::GraphicsPath face; round_rect(face, fx, fy, fw, fh, r * 0.8f);
-    Gdiplus::LinearGradientBrush fb(Gdiplus::PointF(0, fy - 1), Gdiplus::PointF(0, fy + fh + 1),
-                                    Gdiplus::Color(255, 250, 251, 253), Gdiplus::Color(255, 192, 197, 206));
-    g.FillPath(&fb, &face);
-    Gdiplus::Pen rim(lit ? Gdiplus::Color(255, 240, 172, 40) : Gdiplus::Color(255, 20, 22, 28), lit ? 2.2f : 1.2f);
-    g.DrawPath(&rim, &base);
-    draw_fit(g, label, Gdiplus::RectF(fx + 1, fy, fw - 2, fh), Gdiplus::Color(255, 18, 20, 26), px, true,
-             Gdiplus::StringAlignmentCenter, LABEL_FONT);
+    cv_keycap::paint(g, label, x, y, cw, ch, px, lit);
 }
 
 /* The width of `t` drawn at px. */
@@ -909,9 +869,15 @@ float key_width(int vk, float ch, float max_w)
     return std::clamp(text_width(key_label(vk), ch * 0.6f) + ch * 0.6f, ch, std::max(ch, max_w));
 }
 
+struct HdKey { int vk; float x,y,w,h; };
+struct HdKeyboard { float x=0,y=0,w=0,h=0; std::set<int> lit; };
+static thread_local std::vector<HdKey>* s_hd_keys;
+static thread_local HdKeyboard* s_hd_keyboard;
+
 /* A key of cw x ch centred on (cx, cy). */
 void put_keycap(std::vector<Rgba>& img, int vk, float cx, float cy, float cw, float ch)
 {
+    if (s_hd_keys) s_hd_keys->push_back({vk,cx-cw/2,cy-ch/2-1,cw,ch});
     const int w = (int)std::ceil(cw) + 6, h = (int)std::ceil(ch) + 6;
     blend(img, render_ss(w, h, [&](Gdiplus::Graphics& g) {
               draw_key3d(g, key_label(vk), (w - cw) / 2, (h - ch) / 2 - 1, cw, ch, ch * 0.6f, false); }),
@@ -1076,9 +1042,18 @@ const int FX0 = 28, FX1 = 1251, FY0 = 124, FY1 = 651;   /* the new frame, border
 const int LX = 52, RX = 1229;                            /* the columns' outer edges */
 
 void main_page_layout(std::vector<Rgba>& img, const std::vector<Rgba>& orig, const std::vector<Item>& items,
-                      std::vector<int>& src)
+                      std::vector<int>& src, bool japanese = false)
 {
-    const int NP = (int)(sizeof k_panels / sizeof k_panels[0]);
+    std::vector<Panel> panels(std::begin(::k_panels),std::end(::k_panels));
+    if(japanese){
+        const int rects[][4]={{200,130,527,169},{200,262,479,341},{200,199,479,238},{200,366,447,606},
+            {752,126,1079,165},{752,170,1079,209},{752,214,1079,253},{832,276,1079,315},
+            {832,343,1079,422},{832,448,1079,487},{832,493,1079,532},{704,564,1079,603}};
+        for(size_t i=0;i<panels.size();++i){panels[i].x0=rects[i][0];panels[i].y0=rects[i][1];panels[i].x1=rects[i][2];panels[i].y1=rects[i][3];}
+        panels[11].y=560; // leave the JP vibration note readable below the legend
+    }
+    const auto& k_panels=panels;
+    const int NP = (int)k_panels.size();
     auto in_panel = [](const Panel& p, float x, float y) { return x >= p.x0 && x <= p.x1 && y >= p.y0 && y <= p.y1; };
     auto light = [&](int x, int y) { const Rgba& c = orig[(size_t)y * MAN_W + x]; return (c.r + c.g + c.b) / 3 > 150 && sat(c) < 60; };
 
@@ -1169,6 +1144,7 @@ void main_page_layout(std::vector<Rgba>& img, const std::vector<Rgba>& orig, con
             for (int x = std::max(0, x0); x <= std::min(MAN_W - 1, x1); x++) fg[(size_t)y * MAN_W + x] = 1;
     };
     for (const Panel& p : k_panels) mark(p.x0 - 3, p.y0 - 3, p.x1 + 3, p.y1 + 3);
+    if(japanese)mark(360,616,930,644);
     mark(444, 250, 840, 592);                           /* the controller */
     for (int y = 126; y < 650; y++)                      /* the orange leader lines */
         for (int x = 166; x < 1114; x++) {
@@ -1192,6 +1168,9 @@ void main_page_layout(std::vector<Rgba>& img, const std::vector<Rgba>& orig, con
             img[(size_t)(FY0 + y) * MAN_W + FX0 + x] = border ? Rgba{ 50, 49, 49, 255 } : bg[(size_t)y * bw + x];
         }
 
+    if(japanese)for(int y=616;y<=644;++y)for(int x=360;x<=930;++x)
+        img[(size_t)y*MAN_W+x]=orig[(size_t)y*MAN_W+x];
+
     /* The panels and their keys. */
     for (int i = 0; i < NP; i++) {
         const Panel& p = k_panels[i];
@@ -1212,9 +1191,10 @@ void main_page_layout(std::vector<Rgba>& img, const std::vector<Rgba>& orig, con
     {
         const Panel& m = k_panels[3];
         const int ox = new_x(3) - m.x0, oy = m.y - m.y0;
-        const float CX = 325.5f, CY = 535.0f;
+        const int dy = japanese ? -28 : 0;
+        const float CX = 325.5f, CY = 535.0f + dy;
         std::vector<unsigned char> arrow((size_t)MAN_W * MAN_H, 0);
-        for (int y = 503; y <= 568; y++)
+        for (int y = 503 + dy; y <= 568 + dy; y++)
             for (int x = 292; x <= 359; x++) {
                 const Rgba& c = orig[(size_t)y * MAN_W + x];
                 const float l = (c.r + c.g + c.b) / 3, dx = x - CX, dy = y - CY;
@@ -1235,7 +1215,7 @@ void main_page_layout(std::vector<Rgba>& img, const std::vector<Rgba>& orig, con
         for (bool any = true; any; ) {   /* fill from the unmasked neighbours, edge in */
             any = false;
             std::vector<std::pair<size_t, Rgba>> next;
-            for (int y = 500; y <= 571; y++)
+            for (int y = 500 + dy; y <= 571 + dy; y++)
                 for (int x = 289; x <= 362; x++) {
                     const size_t i = (size_t)y * MAN_W + x;
                     if (!arrow[i]) continue;
@@ -1257,10 +1237,10 @@ void main_page_layout(std::vector<Rgba>& img, const std::vector<Rgba>& orig, con
             }
         }
         const float K = 20, G = 21;
-        put_keycap(img, key_for(PA_UP), CX + ox, 523 + oy, K, K);
-        put_keycap(img, key_for(PA_LEFT), CX - G + ox, 546 + oy, K, K);
-        put_keycap(img, key_for(PA_DOWN), CX + ox, 546 + oy, K, K);
-        put_keycap(img, key_for(PA_RIGHT), CX + G + ox, 546 + oy, K, K);
+        put_keycap(img, key_for(PA_UP), CX + ox, 523 + dy + oy, K, K);
+        put_keycap(img, key_for(PA_LEFT), CX - G + ox, 546 + dy + oy, K, K);
+        put_keycap(img, key_for(PA_DOWN), CX + ox, 546 + dy + oy, K, K);
+        put_keycap(img, key_for(PA_RIGHT), CX + G + ox, 546 + dy + oy, K, K);
     }
 
     /* The keyboard between the columns, lit with the mapped keys. */
@@ -1276,21 +1256,18 @@ void main_page_layout(std::vector<Rgba>& img, const std::vector<Rgba>& orig, con
     for (int a : { PA_CROSS, PA_CIRCLE, PA_SQUARE, PA_TRIANGLE, PA_L1, PA_R1, PA_SELECT, PA_START,
                    PA_UP, PA_DOWN, PA_LEFT, PA_RIGHT })
         for (int vk : keys_for(a)) lit.insert(vk);   /* every key that does something here */
+    if (s_hd_keyboard) *s_hd_keyboard = {(float)KX,(float)KY,(float)KW,(float)KHT,lit};
     blend(img, render_ss(KW, KHT, [&](Gdiplus::Graphics& g) { draw_keyboard(g, 0, 0, (float)KW, lit); }), KW, KHT, KX, KY);
 }
 
+std::vector<unsigned char> japanese_keyboard_manual(const std::vector<unsigned char>& ps_dxt, int page);
+
 /* The keyboard version of a How to Play page, or empty. `main`: page 1. */
 std::vector<unsigned char> keyboard_manual_page(const std::vector<unsigned char>& ps_dxt,
-                                                const std::vector<unsigned char>& xb_dxt, bool main)
+                                                const std::vector<unsigned char>& xb_dxt, bool main, bool japanese = false, int page = -1)
 {
     if (ps_dxt.size() != (size_t)MAN_W * MAN_H / 2 || xb_dxt.size() != ps_dxt.size()) return {};
-#if defined(CV_REGION_JP)
-    /* The Japanese pages' PlayStation and 360 versions differ in their text
-     * as well as their icons, so the comparison below picks up lettering and
-     * redraws the wrong parts. The PlayStation page is shown instead. */
-    (void)main;
-    return {};
-#endif
+    if(japanese)return japanese_keyboard_manual(ps_dxt,page);
     std::vector<Rgba> img = dxt1_decode(ps_dxt.data(), MAN_W, MAN_H);
     const std::vector<Rgba> orig = img, xb = dxt1_decode(xb_dxt.data(), MAN_W, MAN_H);
     const size_t N = (size_t)MAN_W * MAN_H;
@@ -1375,7 +1352,11 @@ std::vector<unsigned char> keyboard_manual_page(const std::vector<unsigned char>
 /* ---- live switching ------------------------------------------------------ */
 struct Pair {
     std::vector<unsigned char> img[3];   /* SET_PS, SET_XBOX, SET_KB (may be empty) */
-    int kb = KB_NONE, action = -1;
+    int kb = KB_NONE, action = -1, manual_page = -1;
+    bool jp_manual = false;
+    uint64_t hd_revision = 1;
+    std::vector<HdKey> hd_keys;
+    HdKeyboard hd_keyboard;
     int box[4] = { 0, 0, 0, 0 };         /* KB_SCREEN_TEXT: the icon's box in the image */
     /* KB_MANUAL: the keyboard pages of earlier key maps. The game keeps each
      * page in its own memory, so one drawn with old keys can come back to
@@ -1401,12 +1382,17 @@ int target(const Pair& p, int want)
 /* Build (or rebuild, for a new key map) a pair's keyboard image. */
 void make_keyboard(Pair& p)
 {
+    ++p.hd_revision; p.hd_keys.clear(); p.hd_keyboard = {};
+    struct Recording {
+        Recording(Pair& p) { s_hd_keys=&p.hd_keys; s_hd_keyboard=&p.hd_keyboard; }
+        ~Recording() { s_hd_keys=nullptr; s_hd_keyboard=nullptr; }
+    } recording(p);
     if (p.kb == KB_ICON32) {
         p.img[SET_KB] = dxt5_reencode({}, {}, keycap(key_label(key_for(p.action)), 32, 32, 28, 28), 32, 32);
     } else if (p.kb == KB_MAP) {
         p.img[SET_KB] = keyboard_map_atlas(p.img[SET_PS]);
     } else if (p.kb == KB_MANUAL) {
-        p.img[SET_KB] = keyboard_manual_page(p.img[SET_PS], p.img[SET_XBOX], p.action == 1);
+        p.img[SET_KB] = keyboard_manual_page(p.img[SET_PS], p.img[SET_XBOX], p.action == 1, p.jp_manual, p.manual_page);
     } else if (p.kb == KB_SCREEN_TEXT) {
         /* 648 x 128 ARGB text ("Use [icon] to return to default."): the icon's
          * box gets a keycap, the rest of the text stays. */
@@ -1458,6 +1444,8 @@ void load_pairs(const std::string& path, const std::string& key)
         p.img[SET_XBOX] = tex_bytes(s, sw.xbox);
         if (p.img[SET_PS].empty() || p.img[SET_PS].size() != p.img[SET_XBOX].size() || p.img[SET_PS] == p.img[SET_XBOX]) continue;
         p.kb = sw.kb; p.action = sw.action;
+        p.jp_manual = key.find("/jpn/") != std::string::npos;
+        if (p.kb==KB_MANUAL) p.manual_page = strstr(sw.ps,"Manual00") ? 0 : strstr(sw.ps,"Manual01") ? 1 : 4;
         if (p.kb == KB_SCREEN_TEXT) find_icon_box(p);
         if (p.kb != KB_MANUAL) make_keyboard(p);   /* pages: when first wanted (watcher) */
         std::lock_guard<std::mutex> l(s_mu);
@@ -1518,6 +1506,298 @@ long fix_image(unsigned char* data, uint32_t nbytes, int want, bool* wrote = nul
     return -1;
 }
 
+
+/* Production sprite sheet, embedded in every regional executable. Its native
+ * circles are ~344px across, sufficient for 32px prompts through 4K and beyond. */
+Gdiplus::Bitmap* hd_pad_sheet() {
+    static std::unique_ptr<Gdiplus::Bitmap> sheet;
+    static IStream* stream=nullptr;
+    static std::once_flag once;
+    std::call_once(once, [] {
+        gdiplus_once();
+        HRSRC r=FindResourceW(nullptr,L"CONTROLLER_BUTTONS_HD",MAKEINTRESOURCEW(10));
+        if(!r)return;
+        HGLOBAL data=LoadResource(nullptr,r); const DWORD n=SizeofResource(nullptr,r);
+        HGLOBAL copy=GlobalAlloc(GMEM_MOVEABLE,n);
+        if(!copy || !data) { if(copy)GlobalFree(copy); return; }
+        void* bytes=GlobalLock(copy);
+        if(!bytes) {GlobalFree(copy);return;}
+        memcpy(bytes,LockResource(data),n); GlobalUnlock(copy);
+        if(CreateStreamOnHGlobal(copy,TRUE,&stream)!=S_OK){GlobalFree(copy);return;}
+        sheet.reset(Gdiplus::Bitmap::FromStream(stream));
+        if(!sheet || sheet->GetLastStatus()!=Gdiplus::Ok)sheet.reset();
+    });
+    return sheet.get();
+}
+void hd_pad(Gdiplus::Graphics& g,int set,int action,float x,float y,float w,float h) {
+    auto* sheet=hd_pad_sheet(); if(!sheet)return;
+    int col=action==PA_CROSS?0:action==PA_CIRCLE?1:action==PA_SQUARE?2:3;
+    // Tight artwork rectangles, excluding the sheet's transparent margins.
+    static const int rect[8][4]={{53,69,349,345},{492,71,349,345},{930,70,350,346},{1370,69,350,346},
+        {49,464,347,349},{489,464,352,350},{925,464,354,350},{1375,464,350,350}};
+    const int i=(set==SET_XBOX?4:0)+col; const auto& r=rect[i];
+    auto state=g.Save(); g.SetInterpolationMode(Gdiplus::InterpolationModeHighQualityBicubic);
+    Gdiplus::ImageAttributes attr; attr.SetWrapMode(Gdiplus::WrapModeTileFlipXY);
+    g.DrawImage(sheet,Gdiplus::RectF(x,y,w,h),(float)r[0],(float)r[1],(float)r[2],(float)r[3],Gdiplus::UnitPixel,&attr);
+    g.Restore(state);
+}
+
+
+struct ManualIcon { float cx,cy,side; int action; bool white; };
+static bool manual_badge_area(const Pair& p,float x,float y) {
+    if(p.manual_page==0)return !(x>430&&x<835&&y>260&&y<575) && y>125&&y<640;
+    if(p.manual_page==1)return x>240&&x<850&&y>520&&y<660;
+    if(p.manual_page==4)return x>240&&x<1050&&y>150&&y<280;
+    return false;
+}
+static int white_manual_symbol(const std::vector<Rgba>& image,int W,float cx,float cy,float side) {
+    int action=-1;float best=0;
+    const int actions[]={PA_CROSS,PA_CIRCLE,PA_SQUARE,PA_TRIANGLE};
+    auto segment=[](float x,float y,float ax,float ay,float bx,float by){
+        float dx=bx-ax,dy=by-ay,t=std::clamp(((x-ax)*dx+(y-ay)*dy)/(dx*dx+dy*dy),0.0f,1.0f);
+        return std::hypot(x-ax-t*dx,y-ay-t*dy);
+    };
+    for(int a:actions)for(float radius:{.20f,.22f,.24f,.26f,.28f,.30f})for(float stroke:{.025f,.04f,.055f,.07f}){
+        int intersection=0,uni=0;
+        for(int yy=-11;yy<=11;++yy)for(int xx=-11;xx<=11;++xx){
+            if(xx*xx+yy*yy>132.25f)continue;
+            const float x=xx/30.0f,y=yy/30.0f;
+            const auto& c=image[(size_t)std::lround(cy+yy*side/30)*W+(size_t)std::lround(cx+xx*side/30)];
+            bool dark=(c.r+c.g+c.b)/3<110,pred=false;
+            if(a==PA_CROSS)pred=std::min(std::fabs(x-y),std::fabs(x+y))*.70710678f<stroke&&std::max(std::fabs(x),std::fabs(y))<radius+stroke;
+            else if(a==PA_CIRCLE)pred=std::fabs(std::hypot(x,y)-radius)<stroke;
+            else if(a==PA_SQUARE)pred=std::fabs(std::max(std::fabs(x),std::fabs(y))-radius)<stroke;
+            else pred=std::min({segment(x,y,0,-radius,radius,radius),segment(x,y,radius,radius,-radius,radius),segment(x,y,-radius,radius,0,-radius)})<stroke;
+            intersection+=dark&&pred;uni+=dark||pred;
+        }
+        const float score=uni?(float)intersection/uni:0;
+        if(score>best){best=score;action=a;}
+    }
+    return best>.42f?action:-1;
+}
+/* Locate badges in THIS page. No coordinates or button identities are borrowed
+ * from the other console's manual: JP has extra Circle badges and shifted rows. */
+static std::vector<ManualIcon> manual_icons(const Pair& p,int set,const std::vector<Rgba>& image,int W,int H) {
+    std::vector<ManualIcon> out;std::vector<unsigned char> mask((size_t)W*H);
+    auto add=[&](float cx,float cy,float side,int action,bool white){
+        if(action<0||!manual_badge_area(p,cx,cy))return;
+        for(const auto& old:out)if(std::fabs(old.cx-cx)<14&&std::fabs(old.cy-cy)<14)return;
+        out.push_back({cx,cy,side,action,white});
+    };
+    if(set==SET_PS){
+        for(size_t i=0;i<mask.size();++i)mask[i]=(image[i].r+image[i].g+image[i].b)/3>150&&sat(image[i])<60;
+        for(const Comp& c:components(mask,W,H)){
+            int w=c.x1-c.x0+1,h=c.y1-c.y0+1;
+            if(w<22||w>36||h<22||h>36||std::abs(w-h)>6||c.n<150)continue;
+            const float cx=(c.x0+c.x1)*.5f,cy=(c.y0+c.y1)*.5f,side=(float)std::max(w,h);
+            if(!manual_badge_area(p,cx,cy))continue;
+            int ring=0;
+            for(int j=0;j<32;++j){float a=j*6.28318530718f/32;
+                const auto& q=image[(size_t)std::lround(cy+std::sin(a)*side*.39f)*W+(size_t)std::lround(cx+std::cos(a)*side*.39f)];
+                ring+=(q.r+q.g+q.b)/3>145&&sat(q)<70;}
+            if(ring<24)continue;
+            add(cx,cy,side+2,white_manual_symbol(image,W,cx,cy,side),true);
+        }
+    }
+    for(size_t i=0;i<mask.size();++i)mask[i]=sat(image[i])>90&&std::max({image[i].r,image[i].g,image[i].b})>95;
+    for(const Comp& c:components(mask,W,H)){
+        const int w=c.x1-c.x0+1,h=c.y1-c.y0+1;
+        if(set==SET_XBOX){if(w<18||w>36||h<18||h>36||std::abs(w-h)>6||c.n<150)continue;}
+        else if(w<6||w>26||h<6||h>26||std::abs(w-h)>8||c.n<15)continue;
+        const float cx=(c.x0+c.x1)*.5f,cy=(c.y0+c.y1)*.5f;
+        if(!manual_badge_area(p,cx,cy))continue;
+        float r=0,g=0,b=0;int count=0;
+        for(int y=c.y0;y<=c.y1;++y)for(int x=c.x0;x<=c.x1;++x){const auto& q=image[(size_t)y*W+x];if(sat(q)<60)continue;r+=q.r;g+=q.g;b+=q.b;++count;}
+        if(!count)continue;r/=count;g/=count;b/=count;
+        int action=-1;
+        if(set==SET_XBOX)action=g>r+12&&g>b+25?PA_CROSS:r>g+45&&r>b+30?PA_CIRCLE:b>r+25&&b>g+8?PA_SQUARE:r>b+40&&g>b+40?PA_TRIANGLE:-1;
+        else action=r>g+40&&b>g+40?PA_SQUARE:b>r+25&&b>g+8?PA_CROSS:g>r+25&&g>b+25?PA_TRIANGLE:r>g+40&&r>b+30?PA_CIRCLE:-1;
+        add(cx,cy,32,action,false);
+    }
+    return out;
+}
+/* Restore the panel behind the entire old badge, including its antialiased rim.
+ * Median samples of nearby low-luminance panel pixels reject neighbouring text.
+ * Changes stay inside the original circular footprint. */
+static void clear_manual_icons(std::vector<Rgba>& image,int W,int H,const std::vector<ManualIcon>& marks) {
+    const auto original=image;
+    for(const auto& m:marks){
+        const float radius=m.side*.5f+1.0f;
+        int x0=std::max(0,(int)std::floor(m.cx-radius)),x1=std::min(W-1,(int)std::ceil(m.cx+radius));
+        int y0=std::max(0,(int)std::floor(m.cy-radius)),y1=std::min(H-1,(int)std::ceil(m.cy+radius));
+        for(int y=y0;y<=y1;++y){
+            std::vector<float> red,green,blue,alpha;
+            for(int side:{-1,1})for(int d:{19,20,21,22,23}){
+                int x=(int)std::lround(m.cx)+side*d;if(x<0||x>=W)continue;
+                const auto& c=original[(size_t)y*W+x];if((c.r+c.g+c.b)/3>135)continue;
+                red.push_back(c.r);green.push_back(c.g);blue.push_back(c.b);alpha.push_back(c.a);
+            }
+            if(red.empty())continue;
+            auto median=[](std::vector<float>& a){std::sort(a.begin(),a.end());return a[a.size()/2];};
+            const Rgba background={median(red),median(green),median(blue),median(alpha)};
+            for(int x=x0;x<=x1;++x)if((x-m.cx)*(x-m.cx)+(y-m.cy)*(y-m.cy)<=radius*radius)image[(size_t)y*W+x]=background;
+        }
+    }
+}
+
+/* Japanese manual controls measured in the original 1280x720 pages. Rectangles
+ * include the old antialiased edge. No coordinates are shared between consoles. */
+struct ManualControl { float x,y,w,h; int action; };
+static std::vector<ManualControl> jp_manual_controls(const Pair& p,int set) {
+    if(!p.jp_manual||p.manual_page!=0)return {};
+    if(set==SET_XBOX)return {
+        {275,152,32,32,PA_L1},{353,152,32,32,PA_R1},
+        {766,148,32,32,PA_R1},{766,192,32,32,PA_R1},
+        {846,148,26,32,PA_UP},{908,148,26,32,PA_DOWN},
+        {843,479,26,32,PA_UP},{843,524,26,32,PA_DOWN}};
+    return {{232,135,58,30,PA_L1},{329,135,58,30,PA_R1},
+        {763,131,58,30,PA_R1},{763,175,58,30,PA_R1},
+        {866,130,26,32,PA_UP},{928,130,26,32,PA_DOWN},
+        {843,451,26,32,PA_UP},{843,496,26,32,PA_DOWN}};
+}
+static void clear_manual_rects(std::vector<Rgba>& image,int W,int H,const std::vector<ManualControl>& controls) {
+    const auto orig=image;
+    for(const auto& c:controls){
+        const int x0=std::max(0,(int)c.x),x1=std::min(W-1,(int)(c.x+c.w-1));
+        for(int y=std::max(0,(int)c.y);y<std::min(H,(int)(c.y+c.h));++y){
+            const auto left=orig[(size_t)y*W+std::max(0,x0-2)],right=orig[(size_t)y*W+std::min(W-1,x1+2)];
+            for(int x=x0;x<=x1;++x){float t=(float)(x-x0)/(x1-x0);
+                image[(size_t)y*W+x]={left.r+(right.r-left.r)*t,left.g+(right.g-left.g)*t,left.b+(right.b-left.b)*t,255};}
+        }
+    }
+}
+static void manual_arrow(Gdiplus::Graphics& g,float x,float y,float w,float h,int action) {
+    using namespace Gdiplus;
+    PointF pts[]={{w*.5f,0},{w,h*.45f},{w*.71f,h*.45f},{w*.71f,h},{w*.29f,h},{w*.29f,h*.45f},{0,h*.45f}};
+    auto state=g.Save();g.TranslateTransform(x+w*.5f,y+h*.5f);
+    if(action==PA_DOWN)g.RotateTransform(180);else if(action==PA_LEFT)g.RotateTransform(-90);else if(action==PA_RIGHT)g.RotateTransform(90);
+    g.TranslateTransform(-w*.5f,-h*.5f);
+    SolidBrush shadow(Color(170,0,0,0));PointF sh[7];for(int i=0;i<7;++i)sh[i]={pts[i].X+1,pts[i].Y+1};g.FillPolygon(&shadow,sh,7);
+    SolidBrush face(Color(255,239,242,238));Pen edge(Color(255,75,82,77),.8f);
+    g.FillPolygon(&face,pts,7);g.DrawPolygon(&edge,pts,7);g.Restore(state);
+}
+static void manual_shoulder(Gdiplus::Graphics& g,int set,int action,float x,float y,float w,float h) {
+    using namespace Gdiplus;GraphicsPath path;cv_keycap::rounded(path,x+.6f,y+.6f,w-1.2f,h-1.2f,3.2f);
+    LinearGradientBrush face(PointF(x,y),PointF(x,y+h),Color(255,250,251,248),Color(255,192,199,190));
+    Pen edge(Color(255,70,81,70),1.0f);g.FillPath(&face,&path);g.DrawPath(&edge,&path);
+    const wchar_t* label=action==PA_L1?(set==SET_PS?L"L1":L"LT"):(set==SET_PS?L"R1":L"RT");
+    FontFamily ff(L"Segoe UI");GraphicsPath glyph;StringFormat fmt(StringFormat::GenericTypographic());
+    glyph.AddString(label,-1,&ff,FontStyleBold,h*.70f,PointF(0,0),&fmt);RectF b;glyph.GetBounds(&b);
+    Matrix m;m.Translate(x+(w-b.Width)*.5f-b.X,y+(h-b.Height)*.5f-b.Y);glyph.Transform(&m);
+    SolidBrush ink(Color(255,35,41,36));g.FillPath(&ink,&glyph);
+}
+std::vector<unsigned char> japanese_keyboard_manual(const std::vector<unsigned char>& ps_dxt,int page_number) {
+    const bool main=page_number==0;
+    Pair page;page.jp_manual=true;page.manual_page=page_number;
+    auto orig=dxt1_decode(ps_dxt.data(),MAN_W,MAN_H),img=orig;
+    auto marks=manual_icons(page,SET_PS,orig,MAN_W,MAN_H);
+    std::vector<Item> items;
+    for(const auto& m:marks)items.push_back({key_for(m.action),m.cx,m.cy,m.side,m.side});
+    const auto controls=jp_manual_controls(page,SET_PS);
+    for(const auto& c:controls)items.push_back({key_for(c.action),c.x+c.w*.5f,c.y+c.h*.5f,c.w,c.h});
+    if(main){std::vector<int> src((size_t)MAN_W*MAN_H,-1);main_page_layout(img,orig,items,src,true);}
+    else {clear_manual_icons(img,MAN_W,MAN_H,marks);for(const auto& it:items)
+        put_keycap(img,it.vk,it.cx,it.cy,30,30);}
+    return dxt1_reencode(ps_dxt,orig,img,MAN_W,MAN_H);
+}
+
+/* Native-size source pages remain the authority for layout and translations.
+ * Only the button overlays are rerasterized at the render resolution. */
+std::vector<Rgba> hd_image(const Pair& p,int set,int scale,int W,int H) {
+    std::vector<Rgba> base;
+    if(p.kb==KB_SCREEN_TEXT) {
+        base.resize((size_t)W*H);
+        const auto& b=p.img[set];
+        for(size_t i=0;i<base.size();++i)base[i]={(float)b[i*4+1],(float)b[i*4+2],(float)b[i*4+3],(float)b[i*4]};
+    } else if(p.kb==KB_MANUAL)base=dxt1_decode(p.img[set].data(),W,H);
+    else base=dxt5_decode(p.img[set].data(),W,H);
+    std::vector<ManualIcon> manual;
+    std::vector<ManualControl> controls;
+    if(p.kb==KB_MANUAL && set!=SET_KB){controls=jp_manual_controls(p,set);clear_manual_rects(base,W,H,controls);}
+    if(p.kb==KB_MANUAL && set!=SET_KB){manual=manual_icons(p,set,base,W,H);clear_manual_icons(base,W,H,manual);}
+    // GDI+ straight alpha input; DrawImage performs the scale in premultiplied space.
+    Gdiplus::Bitmap original(W,H,PixelFormat32bppARGB);
+    Gdiplus::BitmapData bits; Gdiplus::Rect rect(0,0,W,H);
+    if(original.LockBits(&rect,Gdiplus::ImageLockModeWrite,PixelFormat32bppARGB,&bits)!=Gdiplus::Ok)return {};
+    for(int y=0;y<H;++y)for(int x=0;x<W;++x){
+        auto* d=(unsigned char*)bits.Scan0+(ptrdiff_t)y*bits.Stride+x*4;const Rgba& c=base[(size_t)y*W+x];
+        d[0]=(unsigned char)c.b;d[1]=(unsigned char)c.g;d[2]=(unsigned char)c.r;d[3]=(unsigned char)c.a;
+    }
+    original.UnlockBits(&bits);
+    return render(W*scale,H*scale,[&](Gdiplus::Graphics& g){
+        g.ScaleTransform((float)scale,(float)scale);
+        g.SetInterpolationMode(Gdiplus::InterpolationModeHighQualityBicubic);
+        Gdiplus::ImageAttributes attrs;attrs.SetWrapMode(Gdiplus::WrapModeTileFlipXY);
+        g.DrawImage(&original,Gdiplus::RectF(0,0,(float)W,(float)H),0,0,(float)W,(float)H,Gdiplus::UnitPixel,&attrs);
+        auto button=[&](int a,float x,float y,float w,float h){
+            if(set==SET_KB)cv_keycap::paint(g,key_label(key_for(a)),x,y,w,h,h*0.60f);
+            else hd_pad(g,set,a,x,y,w,h);
+        };
+        auto erase=[&](float x,float y,float w,float h){
+            auto state=g.Save();g.SetCompositingMode(Gdiplus::CompositingModeSourceCopy);
+            Gdiplus::SolidBrush clear(Gdiplus::Color(0,0,0,0));g.FillRectangle(&clear,x,y,w,h);g.Restore(state);
+        };
+        if(p.kb==KB_ICON32) {erase(0,0,32,32);button(p.action,2,2,28,28);}
+        else if(p.kb==KB_SCREEN_TEXT){
+            float x=(float)p.box[0],y=(float)p.box[1],w=(float)(p.box[2]-p.box[0]+1),h=(float)(p.box[3]-p.box[1]+1);
+            erase(x,y,w,h);const float side=std::min(w,h)-1;button(p.action,x+(w-side)/2,y+(h-side)/2,side,side);
+        }else if(p.kb==KB_MAP){
+            for(auto a:{PA_CIRCLE,PA_SQUARE,PA_CROSS}){
+                const int Y=a==PA_CIRCLE?CIRCLE_Y:a==PA_SQUARE?SQUARE_Y:CROSS_Y;
+                erase(CIRCLE_X-1.0f,Y-1.0f,34,34);button(a,CIRCLE_X+2.0f,Y+2.0f,28,28);
+            }
+        }else if(p.kb==KB_MANUAL && set==SET_KB){
+            for(const HdKey& k:p.hd_keys)cv_keycap::paint(g,key_label(k.vk),k.x,k.y,k.w,k.h,k.h*0.60f);
+            if(p.hd_keyboard.w>0)draw_keyboard(g,p.hd_keyboard.x,p.hd_keyboard.y,p.hd_keyboard.w,p.hd_keyboard.lit);
+        }else if(p.kb==KB_MANUAL){
+            for(const auto& c:controls){
+                if(c.action==PA_L1||c.action==PA_R1)manual_shoulder(g,set,c.action,c.x,c.y,c.w,c.h);
+                else manual_arrow(g,c.x,c.y,c.w,c.h,c.action);
+            }
+            for(const ManualIcon& m:manual){
+                const float cx=m.cx,cy=m.cy,side=m.side;const int a=m.action;
+                if(set==SET_PS&&m.white){
+                    Gdiplus::SolidBrush face(Gdiplus::Color(255,211,213,210));
+                    Gdiplus::Pen ink(Gdiplus::Color(255,35,36,37),1.8f);
+                    g.FillEllipse(&face,cx-side/2,cy-side/2,side,side);g.DrawEllipse(&ink,cx-side/2,cy-side/2,side,side);
+                    const float r=side*.24f;
+                    if(a==PA_CROSS){g.DrawLine(&ink,cx-r,cy-r,cx+r,cy+r);g.DrawLine(&ink,cx-r,cy+r,cx+r,cy-r);}
+                    else if(a==PA_CIRCLE)g.DrawEllipse(&ink,cx-r,cy-r,2*r,2*r);
+                    else if(a==PA_SQUARE)g.DrawRectangle(&ink,cx-r,cy-r,2*r,2*r);
+                    else {Gdiplus::PointF pts[]={{cx,cy-r},{cx+r,cy+r},{cx-r,cy+r},{cx,cy-r}};g.DrawLines(&ink,pts,4);}
+                }else button(a,cx-side/2,cy-side/2,side,side);
+            }
+        }
+    });
+}
+
+uint64_t on_hd_image(const uint8_t* data,uint32_t nbytes,uint32_t W,uint32_t H,
+                     float render_scale,uint64_t previous,texpack_image** image) {
+    *image=nullptr;
+    if(const char* off=getenv("CV_HD_BUTTONS");off&&off[0]=='0')return 0;
+    // Reject world textures before taking a lock or comparing their contents.
+    if(!((W==32&&H==32)||(W==MAP_W&&H==MAP_H)||(W==648&&H==128)||(W==MAN_W&&H==MAN_H)))return 0;
+    std::lock_guard<std::mutex> lock(s_mu);
+    for(size_t i=0;i<s_pairs.size();++i){
+        const Pair& p=s_pairs[i];const int set=target(p,s_shown<0?wanted_set():s_shown);
+        if(p.img[set].size()!=nbytes || memcmp(data,p.img[set].data(),nbytes))continue;
+        if((p.kb==KB_ICON32&&(W!=32||H!=32))||(p.kb==KB_MAP&&(W!=MAP_W||H!=MAP_H))||
+           (p.kb==KB_SCREEN_TEXT&&(W!=648||H!=128))||(p.kb==KB_MANUAL&&(W!=MAN_W||H!=MAN_H)))continue;
+        const int scale=std::clamp((int)std::ceil(render_scale),p.kb==KB_ICON32?2:1,4);
+        const uint64_t id=((uint64_t)(i+1)<<40)|(p.hd_revision<<8)|(uint64_t)(set*8+scale);
+        if(id==previous)return id;
+        const auto rgba=hd_image(p,set,scale,(int)W,(int)H);
+        if(rgba.size()!=(size_t)W*H*scale*scale)return 0;
+        auto* out=(texpack_image*)calloc(1,sizeof(texpack_image));if(!out)return 0;
+        out->w=W*scale;out->h=H*scale;out->levels=1;out->bytes=rgba.size()*4;
+        out->data=(uint8_t*)malloc(out->bytes);if(!out->data){free(out);return 0;}
+        for(size_t j=0;j<rgba.size();++j){out->data[j*4]=(uint8_t)rgba[j].r;out->data[j*4+1]=(uint8_t)rgba[j].g;
+            out->data[j*4+2]=(uint8_t)rgba[j].b;out->data[j*4+3]=(uint8_t)rgba[j].a;}
+        *image=out;return id;
+    }
+    return 0;
+}
+
 void on_upload(uint8_t* data, uint32_t nbytes, uint32_t off)
 {
     std::lock_guard<std::mutex> l(s_mu);
@@ -1541,12 +1821,15 @@ void build_keyboard_pages()
             if (i >= s_pairs.size()) return;
             work.img[SET_PS] = s_pairs[i].img[SET_PS];
             work.img[SET_XBOX] = s_pairs[i].img[SET_XBOX];
-            work.kb = KB_MANUAL; work.action = s_pairs[i].action;
+            work.kb = KB_MANUAL; work.action = s_pairs[i].action; work.manual_page = s_pairs[i].manual_page; work.jp_manual = s_pairs[i].jp_manual;
         }
         make_keyboard(work);
         if (work.img[SET_KB].empty()) work.img[SET_KB] = work.img[SET_PS];   /* not a page we can redo: keep PS */
         std::lock_guard<std::mutex> l(s_mu);
         s_pairs[i].img[SET_KB] = std::move(work.img[SET_KB]);
+        s_pairs[i].hd_keys = std::move(work.hd_keys);
+        s_pairs[i].hd_keyboard = std::move(work.hd_keyboard);
+        ++s_pairs[i].hd_revision;
         for (const Seen& v : s_seen)   /* a page already on screen gets it now */
             if (v.pair == i && vm_base && s_shown == SET_KB) {
                 bool wrote = false;   /* a small edit can slip past the GPU's change check */
@@ -1644,6 +1927,7 @@ extern "C" void cv_button_icons_init(void)
 {
     vfs_overlay_set(overlay);
     g_rsx_tex_source_hook = on_upload;
+    g_rsx_tex_ui_hook = on_hd_image;
     std::thread(watcher).detach();
     /* CV_ICONS_TEST_MAP=<a map .arc> builds its atlases at once (with
      * CV_ICONS_DUMP=<file> to write the Xbox and keyboard ones out), and

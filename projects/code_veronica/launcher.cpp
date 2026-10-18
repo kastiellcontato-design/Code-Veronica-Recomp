@@ -41,6 +41,7 @@
 #include "cv_launcher_controls.h"
 #include "log_viewer.h"
 #include "cv_test_tools.h"
+#include "cv_keycap_style.h"
 
 /* button_icons.cpp: the keycaps' short labels and font, shared with the game. */
 std::wstring cv_key_cap_label(int vk);
@@ -692,30 +693,7 @@ void g_label(Graphics& gr, const wchar_t* t, RectF r, float px, const Color& c)
  * light grey-blue, dark border, the key's short label. */
 void key_glyph(Graphics& gr, int vk, float x, float y, float s)
 {
-    const float r = 3.0f, in = 1.5f, w = s - 2 * in, h = s - 2 * in;
-    GraphicsPath p;
-    p.AddArc(x + in, y + in, 2 * r, 2 * r, 180, 90);
-    p.AddArc(x + in + w - 2 * r, y + in, 2 * r, 2 * r, 270, 90);
-    p.AddArc(x + in + w - 2 * r, y + in + h - 2 * r, 2 * r, 2 * r, 0, 90);
-    p.AddArc(x + in, y + in + h - 2 * r, 2 * r, 2 * r, 90, 90);
-    p.CloseFigure();
-    SolidBrush fill(Color(255, 205, 211, 223)); gr.FillPath(&fill, &p);
-    Pen border(Color(255, 90, 94, 104), 1.2f); gr.DrawPath(&border, &p);
-    if (vk <= 0) return;
-    const std::wstring t = cv_key_cap_label(vk);
-    FontFamily ff(cv_key_cap_font());
-    StringFormat sf(StringFormat::GenericTypographic());
-    sf.SetAlignment(StringAlignmentCenter); sf.SetLineAlignment(StringAlignmentCenter);
-    sf.SetFormatFlags(StringFormatFlagsNoWrap | StringFormatFlagsNoClip);
-    for (float px = s * 0.6f; ; px -= 0.5f) {
-        Font f(&ff, px, FontStyleRegular, UnitPixel);
-        RectF m; gr.MeasureString(t.c_str(), -1, &f, PointF(0, 0), &sf, &m);
-        if (m.Width <= w - 3 || px <= 6) {
-            SolidBrush ink(Color(255, 20, 22, 28));
-            gr.DrawString(t.c_str(), -1, &f, RectF(x + in, y + in, w, h), &sf, &ink);
-            return;
-        }
-    }
+    cv_keycap::draw(gr, vk > 0 ? cv_key_cap_label(vk) : L"", x, y, s, s);
 }
 
 void btn_glyph(Graphics& gr, int layout, int pb, float x, float y, float s = 30.0f)

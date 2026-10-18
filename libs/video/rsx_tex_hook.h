@@ -21,6 +21,17 @@ typedef void (*rsx_tex_source_fn)(uint8_t* data, uint32_t nbytes, uint32_t off);
 
 extern rsx_tex_source_fn g_rsx_tex_source_hook;
 
+/* Optional native UI artwork. Called only on a texture upload, after the
+ * source hook. Return a stable nonzero identity; when it differs from previous,
+ * fill *image with a malloc-owned RGBA8 texpack_image (one mip). Backend frees
+ * it. Return 0 for unrelated textures. Guest dimensions/UVs are unchanged.
+ * A repeated identity may leave *image NULL to reuse its uploaded resource. */
+struct texpack_image;
+typedef uint64_t (*rsx_tex_ui_fn)(const uint8_t* data, uint32_t nbytes,
+    uint32_t w, uint32_t h, float scale, uint64_t previous, struct texpack_image** image);
+extern rsx_tex_ui_fn g_rsx_tex_ui_hook;
+
+
 /* The backend notices a changed texture by a sparse checksum, which can miss a
  * small edit (one icon in a large page). A title that rewrites a texture's
  * bytes outside the hook calls this with its guest offset (as the hook was

@@ -488,3 +488,17 @@ if(WIN32)
         set_target_properties(code_veronica_map_tests PROPERTIES OUTPUT_NAME "code_veronica_map_tests_us")
     endif()
 endif()
+
+# Visual contact sheet using the exact keyboard renderer shipped by the game.
+if(WIN32)
+    add_executable(code_veronica_keycap_preview EXCLUDE_FROM_ALL tests/preview_keyboard_icons.cpp)
+    target_link_libraries(code_veronica_keycap_preview PRIVATE gdiplus)
+endif()
+
+if(WIN32)
+    add_executable(code_veronica_hd_button_tests EXCLUDE_FROM_ALL tests/test_hd_buttons.cpp
+        "${CMAKE_CURRENT_BINARY_DIR}/launcher_art.rc"
+        "${PS3RECOMP_DIR}/libs/filesystem/edat.c")
+    target_compile_options(code_veronica_hd_button_tests PRIVATE /UNDEBUG)
+    target_link_libraries(code_veronica_hd_button_tests PRIVATE gdiplus ole32 user32 gdi32)
+endif()

@@ -5,6 +5,22 @@ rem leaves the guest at ~98%% of frame time and makes FMV playback stutter.
 setlocal
 cd /d "%~dp0"
 call "C:\Program Files\Microsoft Visual Studio\18\Insiders\VC\Auxiliary\Build\vcvars64.bat" >nul || exit /b 1
+rem Generate only the keyboard contact sheet when reviewing artwork.
+if "%CV_KEYCAP_PREVIEW_ONLY%"=="1" (
+ cmake --build build-release --target code_veronica_keycap_preview -j 6 || exit /b 1
+ build-release\bin\code_veronica_keycap_preview.exe "%~dp0build-release\keyboard-icons-preview.png" || exit /b 1
+ exit /b 0
+)
+rem Focused offline checks/exports, using the actual native HD icon compositor.
+if "%CV_HD_BUTTON_TESTS_ONLY%"=="1" (
+ cmake --build build-release --target code_veronica_hd_button_tests -j 6 || exit /b 1
+ build-release\bin\code_veronica_hd_button_tests.exe "D:/ps3recomp/JOGO/NPEB00553/USRDIR/BHCV/nativePS3/biocv_disc/eng" "%~dp0build-release/hd-button-check" || exit /b 1
+ for %%L in (fra ger ita spa) do (
+  build-release\bin\code_veronica_hd_button_tests.exe "D:/ps3recomp/JOGO/NPEB00553/USRDIR/BHCV/nativePS3/biocv_disc/%%L" "%~dp0build-release/hd-button-check-%%L" || exit /b 1
+ )
+ build-release\bin\code_veronica_hd_button_tests.exe "D:/Jogos/rpcs3-v0.0.33-17018-0a57c459_win64/dev_hdd0/game/NPJB00135/USRDIR/BHCV/nativePS3/biocv_disc/jpn" "%~dp0build-release/hd-button-check-jp" || exit /b 1
+ exit /b 0
+)
 if not exist build-release\CMakeCache.txt (
  cmake -S . -B build-release -G Ninja ^
   -DCMAKE_BUILD_TYPE=Release ^
@@ -107,4 +123,10 @@ if "%CV_MAP_TESTS%"=="1" (
   cmake --build build-release-us --target code_veronica_map_tests -j 6 || exit /b 1
   build-release\bin\code_veronica_map_tests_us.exe || exit /b 1
  )
+)
+
+rem Optional visual preview of the shared keyboard icon artwork.
+if "%CV_KEYCAP_PREVIEW%"=="1" (
+ cmake --build build-release --target code_veronica_keycap_preview -j 6 || exit /b 1
+ build-release\bin\code_veronica_keycap_preview.exe "%~dp0build-release\keyboard-icons-preview.png" || exit /b 1
 )

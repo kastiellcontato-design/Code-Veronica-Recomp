@@ -3,6 +3,7 @@
 #include <windows.h>
 
 rsx_tex_source_fn g_rsx_tex_source_hook;
+rsx_tex_ui_fn g_rsx_tex_ui_hook;
 
 /* A few offsets waiting for their next bind; 0 = a free entry. */
 #define DIRTY_N 32

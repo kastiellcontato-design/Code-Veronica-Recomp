@@ -260,6 +260,9 @@ typedef struct {
     u32 thash_bytes;    /* the guest bytes it is taken over */
     int dump_seen;      /* texture dumping has looked at these contents */
     u64 upload_frame;   /* render frame its contents were last uploaded */
+    ID3D12Resource* ui_res; /* optional title-owned HD artwork, same logical UVs */
+    u64 ui_id;
+    float ui_scale;
     int nlev;           /* mip levels in the resource (1 unless RSX_TEX_MIPS) */
 } VPTexSlot;
 static u64 s_tex_frame = 1;   /* render frames, for VPTexSlot.stamp */
@@ -5965,6 +5968,7 @@ static int vp_upload_tex_slot_impl(u32 off, u32 w, u32 h, u32 fmt, int cube, u32
             && c->cube == cube) {
             s_tex_hint[hk] = (short)(i + 1);
             if (c->used) return i;                /* already bound this frame */
+            if (c->ui_res && c->ui_scale != s_rs) { slot = i; break; }
             c->stamp = s_tex_frame;
             { static int nocache = -1;            /* TEX_NOCACHE=1: always re-upload */
               if (nocache < 0) { const char* e = getenv("TEX_NOCACHE");
@@ -6646,6 +6650,32 @@ static int vp_upload_tex_slot_impl(u32 off, u32 w, u32 h, u32 fmt, int cube, u32
     t->off = off; t->key = key_off; t->w = w; t->h = h; t->fmt = fmt;
     t->cube = cube; t->used = 1; t->stamp = s_tex_frame; t->upload_frame = s_tex_frame;
     t->nlev = nlev;
+    /* Native UI replacement is independent of user texture packs. Keep the
+     * guest texture and its key/dimensions intact; only its sampled resource
+     * changes. Query once per upload, never once per draw. */
+    {
+        texpack_image* image = NULL;
+        u64 id = 0;
+        if (!cube && g_rsx_tex_ui_hook)
+            id = g_rsx_tex_ui_hook(vm_base + off, t->thash_bytes, w, h,
+                s_rs, t->ui_id, &image);
+        if (id != t->ui_id || (!id && t->ui_res)) {
+            if (t->ui_res) defer_release(t->ui_res);
+            t->ui_res = NULL; t->ui_id = 0;
+            if (id && image && image->data && image->levels == 1 &&
+                image->w > 0 && image->h > 0 && image->w <= 8192 && image->h <= 8192 &&
+                image->bytes == (size_t)image->w * image->h * 4u && image->bytes <= (64u << 20)) {
+                t->ui_res = rep_upload(image);
+                if (t->ui_res) {
+                    t->ui_id = id;
+                    fprintf(stderr, "[UI-HD] %ux%u -> %ux%u, render scale %.2f, source 0x%08X%c",
+                        w,h,image->w,image->h,s_rs,off,10);
+                }
+            }
+        }
+        if (image) texpack_free(image);
+        t->ui_scale = s_rs;
+    }
     s_tex_hint[hk] = (short)(t - s_d3d.vp_tex + 1);
     { u32 nb = dxt ? (blkrow * blkrows) : (w * h * bpp);
       t->csum = TEX_CSUM(vm_base + off, nb); }
@@ -9426,7 +9456,8 @@ static void prepass_range(u32 from, u32 to)
                         /* A texture mod's image, once loaded: RGBA8 with the
                          * same channels, so the guest's remap still applies. */
                         texdump_for_slot(ts);
-                        ID3D12Resource* _tr = texrep_for_slot(ts);
+                        ID3D12Resource* _tr = s_d3d.vp_tex[ts].ui_res;
+                        if (!_tr) _tr = texrep_for_slot(ts);
                         if (_tr) sf = DXGI_FORMAT_R8G8B8A8_UNORM;
                         else _tr = s_d3d.vp_tex[ts].res;
                         { static int nb = 0; const char* e = getenv("TEX_DUMP");
