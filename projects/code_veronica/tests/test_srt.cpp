@@ -131,7 +131,7 @@ int main(int argc,char** argv) {
     for(const wchar_t* name:{L"SRT_CLAIRE",L"SRT_CHRIS",L"SRT_STEVE",L"SRT_WESKER",
         L"SRT_BOSSBAR_FILL",L"SRT_BOSSBAR_EMPTY",L"SRT_BOSSBAR_SMALL_FILL",L"SRT_BOSSBAR_SMALL_EMPTY",
         L"SRT_BOSS_TYRANT",L"SRT_BOSS_NOSFERATU",L"SRT_BOSS_STEVE",L"SRT_BOSS_ALBINOID",L"SRT_BOSS_GIANT_SPIDER",L"SRT_BOSS_GULP_WORM",
-        L"SRT_BOSS_ALEXIA_1",L"SRT_BOSS_ALEXIA_2",L"SRT_BOSS_ALEXIA_3",L"SRT_ENEMY_ZOMBIE",L"SRT_ENEMY_DOG",L"SRT_ENEMY_SPIDER",
+        L"SRT_BOSS_ALEXIA_1",L"SRT_BOSS_ALEXIA_2",L"SRT_BOSS_ALEXIA_3",L"SRT_BOSS_ANATOMIST",L"SRT_ENEMY_ZOMBIE",L"SRT_ENEMY_DOG",L"SRT_ENEMY_SPIDER",
         L"SRT_ENEMY_HUNTER",L"SRT_ENEMY_MOTH",L"SRT_ENEMY_BAT",L"SRT_ENEMY_BANDERSNATCH",L"SRT_ENEMY_ALBINOID",
         L"SRT_ENEMY_TENTACLE",L"SRT_ENEMY_ALEXIA_BABY"}) {
         const auto resource=FindResourceW(GetModuleHandleW(nullptr),name,MAKEINTRESOURCEW(10));
@@ -336,7 +336,7 @@ int main(int argc,char** argv) {
             const auto* bosses=cv_srt_design(&state,1600,900,&count);assert(bosses);assert(count<131072);peak=std::max(peak,count);
             if(argc>1) {char file[1024];std::snprintf(file,sizeof file,"%s/srt-%s-bosses-%s.png",argv[1],CV_TITLE_ID,lang);export_png(file,bosses,count,1600,900,false,true);}
         }
-        for(int b:{2,12,14,15,17,22,23}) {state.enemy_count=1;state.enemies[0]={b,10,100,0};assert(cv_srt_design(&state,3840,2160,&count)&&count<131072);peak=std::max(peak,count);}
+        for(int b:{2,12,14,15,17,22,23,26}) {state.enemy_count=1;state.enemies[0]={b,10,100,0};assert(cv_srt_design(&state,3840,2160,&count)&&count<131072);peak=std::max(peak,count);}
         // The drawn bar: under the panel's quads and the life's glow, the frame last.
         {
             state.enemy_count=2;state.enemies[0]={19,504,700,0};state.enemies[1]={1,72,72,0};
@@ -367,6 +367,13 @@ int main(int argc,char** argv) {
                 _putenv_s("SRT_LANGUAGE",lang);cv_srt_configure_env();
                 const auto* c=cv_srt_design(&state,1600,900,&count);assert(c&&count<131072);
                 if(argc>1) {char file[1024];std::snprintf(file,sizeof file,"%s/srt-%s-boss-bar-alexia-%s.png",argv[1],CV_TITLE_ID,lang);export_png(file,c,count,1600,900,true,false);}
+            }
+            // The Anatomist zombie, a sub-boss: the bar in the middle as the bosses.
+            state.enemies[0]={26,150,200,0};_putenv_s("SRT_BOSS_BAR","top");cv_srt_configure_env();
+            {
+                const auto* c=cv_srt_design(&state,1600,900,&count);assert(c&&count<131072);
+                sp=cv_srt_sprites(&ns,&rgba,&aw,&ah,&gen);assert(sp&&ns==3&&std::fabs(sp[1].w-sp[0].w*150/200.f)<=1.f);
+                if(argc>1) {char file[1024];std::snprintf(file,sizeof file,"%s/srt-%s-boss-bar-anatomist.png",argv[1],CV_TITLE_ID);export_png(file,c,count,1600,900,true,false);}
             }
             _putenv_s("SRT_BOSS_BAR","panel");_putenv_s("SRT_LANGUAGE","pt-BR");
         }

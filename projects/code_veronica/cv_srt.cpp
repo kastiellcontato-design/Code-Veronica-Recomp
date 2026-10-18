@@ -104,12 +104,13 @@ Bitmap* portrait(int character) {
     return character>=0&&character<4?art(names[character]):nullptr;
 }
 // Bosses, by enemy type: their photo (launcher_art/srt_boss_<name>.png) and,
-// for Alexia, the phase. 21 is the small Albinoid, 22 the boss.
+// for Alexia, the phase. 21 is the small Albinoid, 22 the boss. The Anatomist
+// zombie (26, 200 HP) is a sub-boss, shown and configured as the bosses.
 struct Boss {int type;const wchar_t* photo;int phase;};
 const Boss* boss(int type) {
     static const Boss bosses[]={{2,L"SRT_BOSS_GULP_WORM",0},{12,L"SRT_BOSS_ALEXIA",1},{13,L"SRT_BOSS_ALEXIA",2},
         {14,L"SRT_BOSS_ALEXIA",3},{15,L"SRT_BOSS_NOSFERATU",0},{17,L"SRT_BOSS_STEVE",0},{19,L"SRT_BOSS_TYRANT",0},
-        {22,L"SRT_BOSS_ALBINOID",0},{23,L"SRT_BOSS_GIANT_SPIDER",0}};
+        {22,L"SRT_BOSS_ALBINOID",0},{23,L"SRT_BOSS_GIANT_SPIDER",0},{26,L"SRT_BOSS_ANATOMIST",0}};
     for(const auto& b:bosses)if(b.type==type)return &b;
     return nullptr;
 }
@@ -118,7 +119,7 @@ Bitmap* enemy_photo(int type) {
     switch(type) {
     case 1:return art(L"SRT_ENEMY_ZOMBIE");case 3:return art(L"SRT_ENEMY_SPIDER");case 4:return art(L"SRT_ENEMY_DOG");
     case 5:return art(L"SRT_ENEMY_HUNTER");case 6:return art(L"SRT_ENEMY_MOTH");case 7:return art(L"SRT_ENEMY_BAT");
-    case 9:return art(L"SRT_ENEMY_BANDERSNATCH");case 21:return art(L"SRT_ENEMY_ALBINOID");case 26:return art(L"SRT_ENEMY_ANATOMIST");
+    case 9:return art(L"SRT_ENEMY_BANDERSNATCH");case 21:return art(L"SRT_ENEMY_ALBINOID");
     case 29:return art(L"SRT_ENEMY_TENTACLE");case 30:return art(L"SRT_ENEMY_ALEXIA_BABY");default:return nullptr;
     }
 }
