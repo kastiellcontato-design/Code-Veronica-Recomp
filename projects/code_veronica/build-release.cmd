@@ -11,6 +11,15 @@ if "%CV_KEYCAP_PREVIEW_ONLY%"=="1" (
  build-release\bin\code_veronica_keycap_preview.exe "%~dp0build-release\keyboard-icons-preview.png" || exit /b 1
  exit /b 0
 )
+rem Offline archive extraction and real map compatibility checks.
+if "%CV_TEXTURE_EXPORT_TESTS_ONLY%"=="1" (
+ cmake --build build-release --target code_veronica_texture_export_tests -j 6 || exit /b 1
+ build-release\bin\code_veronica_texture_export_tests.exe "%~dp0build-release/texture-export-check" "D:/ps3recomp/JOGO/NPEB00553/USRDIR/BHCV/nativePS3/biocv_disc/eng/rdx_lnk/rm_0030.arc" || exit /b 1
+ if defined CV_TEXTURE_EXPORT_SOURCE (
+  build-release\bin\code_veronica_texture_export_tests.exe "%~dp0build-release/texture-export-check-full" "%CV_TEXTURE_EXPORT_SOURCE%" || exit /b 1
+ )
+ exit /b 0
+)
 rem Focused offline checks/exports, using the actual native HD icon compositor.
 if "%CV_HD_BUTTON_TESTS_ONLY%"=="1" (
  cmake --build build-release --target code_veronica_hd_button_tests -j 6 || exit /b 1

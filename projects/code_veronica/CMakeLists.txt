@@ -223,6 +223,7 @@ endif()
 add_executable(${PROJECT_NAME}
     main.cpp
     launcher.cpp
+    cv_texture_export.cpp
     cv_srt.cpp
     cv_srt_data.cpp
     cv_srt_icons.cpp
@@ -528,4 +529,16 @@ if(WIN32)
         "${PS3RECOMP_DIR}/libs/filesystem/edat.c")
     target_compile_options(code_veronica_hd_button_tests PRIVATE /UNDEBUG)
     target_link_libraries(code_veronica_hd_button_tests PRIVATE gdiplus ole32 user32 gdi32)
+endif()
+
+# Offline archive extraction tests: no renderer, game process or inputs.
+if(WIN32)
+    add_executable(code_veronica_texture_export_tests EXCLUDE_FROM_ALL
+        tests/test_texture_export.cpp tests/texture_export_stb.c cv_texture_export.cpp
+        "${PS3RECOMP_DIR}/libs/filesystem/edat.c"
+        "${PS3RECOMP_DIR}/libs/video/rsx_texture_pack.c"
+        "${PS3RECOMP_DIR}/libs/video/rsx_texture_layout.c")
+    target_include_directories(code_veronica_texture_export_tests PRIVATE "${PS3RECOMP_DIR}/include")
+    target_compile_options(code_veronica_texture_export_tests PRIVATE /UNDEBUG)
+    target_link_libraries(code_veronica_texture_export_tests PRIVATE gdiplus ole32)
 endif()

@@ -43,6 +43,8 @@
 #include "cv_test_tools.h"
 #include "cv_item_menu.h"
 #include "cv_keycap_style.h"
+#include "cv_texture_export.h"
+#include "../../libs/video/rsx_texture_pack.h"
 
 /* button_icons.cpp: the keycaps' short labels and font, shared with the game. */
 std::wstring cv_key_cap_label(int vk);
@@ -189,9 +191,9 @@ struct Settings {
     int overlay_items = 3; /* bits of k_overlay_items: FPS and frame time */
     int overlay_corner = 1, overlay_layout = 0;   /* 0 tl, 1 tr, 2 bl, 3 br; 0 a row, 1 a column */
     bool shader_opt[6] = { true, true, true, true, true, true };   /* k_shader_opts, Desempenho page */
-    std::wstring tex_dir;              /* texture mods (Mods page); empty: "textures" beside the exe */
+    std::wstring tex_dir;              /* texture mods (Mods page); empty: "mods/textures" beside the exe */
     std::wstring tex_dump_dir;         /* where dumps go; empty: <tex_dir>\<version>\dump */
-    bool tex_replace = false, tex_dump = false;
+    bool tex_replace = false, tex_dump = false, tex_dump_all = false;
     bool test_tools=false; // optional experimental map window, off by default
     bool focus_pause=true; // pause while the game window is out of focus (cv_focus_pause.cpp)
     bool items_menu=false; // F6 item menu in the game (cv_item_menu.cpp), off by default
@@ -391,6 +393,8 @@ Settings load_settings()
     s.tex_dump_dir = ini_get(L"texturas", L"pasta_extraidas", L"");
     s.tex_replace = _wtoi(ini_get(L"texturas", L"substituir", L"0").c_str()) != 0;
     s.tex_dump = _wtoi(ini_get(L"texturas", L"extrair", L"0").c_str()) != 0;
+    s.tex_dump_all = _wtoi(ini_get(L"texturas", L"extrair_todos", L"0").c_str()) != 0;
+    if(s.tex_dump_all)s.tex_dump=false;
     s.overlay_items = _wtoi(ini_get(L"overlay", L"itens", L"3").c_str()) & ((1 << NOVERLAY) - 1);
     s.overlay_corner = std::clamp(_wtoi(ini_get(L"overlay", L"posicao", L"1").c_str()), 0, 3);
     s.overlay_layout = std::clamp(_wtoi(ini_get(L"overlay", L"disposicao", L"0").c_str()), 0, 1);
@@ -467,6 +471,7 @@ void save_settings(const Settings& s)
     ini_set(L"texturas", L"pasta_extraidas", s.tex_dump_dir);
     ini_set(L"texturas", L"substituir", s.tex_replace ? L"1" : L"0");
     ini_set(L"texturas", L"extrair", s.tex_dump ? L"1" : L"0");
+    ini_set(L"texturas", L"extrair_todos", s.tex_dump_all ? L"1" : L"0");
     ini_set(L"pastas", L"patches", s.patch_dir);
     {
         std::wstring on;
@@ -650,12 +655,12 @@ enum {
     ID_CACHE_CLEAR = 1100, ID_CACHE_OPEN,
     ID_KEY_CLEAR = 1200, ID_BTN_CLEAR = 1300,                      /* + action * slots + slot */
     ID_OVERLAY = 1400, ID_OVERLAY_ITEM = 1410,                     /* + item */
-    ID_PATCH_DIR_BROWSE = 1500, ID_PATCH_DIR_OPEN, ID_FPATCH = 1600,  /* + file patch index */
+    ID_PATCH_DIR_BROWSE = 1500, ID_PATCH_DIR_OPEN, ID_PATCH_DIR_CLEAR, ID_FPATCH = 1600,  /* + file patch index */
     ID_LOG_VIEW = 2100, ID_LOG_COPY, ID_LOG_SAVE, ID_LOG_FOLDER,
     ID_SHADER_OPT = 2200,                                          /* + k_shader_opts index */
     ID_SRT=2400, ID_SRT_PART=2410, ID_DD_SRT_ENEMIES=2420, ID_DD_SRT_CORNER, ID_DD_SRT_LANGUAGE, ID_SRT_SCALE, ID_SRT_OPACITY,
     ID_DD_OV_CORNER = 2450, ID_DD_OV_LAYOUT, ID_DD_SRT_INVPOS, ID_DD_SRT_WINDOW, ID_DD_SRT_BOSSBAR,
-    ID_TEX_BROWSE = 2300, ID_TEX_OPEN, ID_TEX_REPLACE, ID_TEX_DUMP, ID_TEX_DUMP_BROWSE, ID_TEX_DUMP_OPEN,
+    ID_TEX_BROWSE = 2300, ID_TEX_OPEN, ID_TEX_REPLACE, ID_TEX_DUMP, ID_TEX_DUMP_BROWSE, ID_TEX_DUMP_OPEN, ID_TEX_ALL, ID_TEX_ALL_RUN,
     ID_PAGE_THUMB = 2600, ID_PAGE_TRACK,
 };
 
@@ -1128,7 +1133,7 @@ void draw_patches(Graphics& gr, const Font& head, const Font& body, const Font& 
     y += 74;
     /* the port's own patches: two lines each, the credit beside the title */
     for (int i = 0; i < NPATCHES; i++) {
-        if (is_cheat(i)) continue;   /* on the Inventario page */
+        if (is_cheat(i)) continue;   /* on the Cheats page */
         patch_card(gr, x, y, w, 58, g.s.patch[i], true, ID_PATCH + i, T(k_patches[i].title), T(k_patches[i].desc),
                    T(k_patches[i].credit), false, body, fsm);
         y += 66;
@@ -1149,7 +1154,11 @@ void draw_patches(Graphics& gr, const Font& head, const Font& body, const Font& 
     }
     path_row(gr, x, y, T(S_PATCH_FOLDER), g.s.patch_dir, g.s.patch_dir.empty() ? std::wstring(T(S_PATCH_FOLDER_HINT)) : note,
              !g.fpatches.empty() || g.s.patch_dir.empty(), ID_PATCH_DIR_BROWSE, ID_PATCH_DIR_OPEN, body, fsm);
-    y += 66;
+    button(gr, RectF(x + 175, y + 62, 230, 32), T(S_PATCH_CLEAR_PATH), ID_PATCH_DIR_CLEAR,
+           body, false, !g.s.patch_dir.empty());
+    text(gr, T(S_PATCH_CLEAR_PATH_HINT), x + 419, y + 62, fsm, C_DIM,
+         StringAlignmentNear, w - 419, 36);
+    y += 108;
     /* its patches, in a list that scrolls with the wheel */
     const float top = y, bottom = H - 96.0f, ch = 76, gap = 8;
     g.patch_scroll_max = std::max(0.0f, g.fpatches.size() * (ch + gap) - (bottom - top));
@@ -1685,13 +1694,13 @@ void draw_desempenho(Graphics& gr, const Font& head, const Font& body, const Fon
 }
 
 /* The texture mods folder (rsx_texture_pack.h): chosen, or "textures" beside
- * the exe. Replacements are read from its subfolder named after the version
+ * the exe, under mods/textures. Replacements are read from its subfolder named after the version
  * when there is one, dumps go to <folder>\<version>\dump. */
 fs::path tex_folder()
 {
     if (!g.s.tex_dir.empty()) return fs::path(g.s.tex_dir);
     wchar_t exe[MAX_PATH]; GetModuleFileNameW(NULL, exe, MAX_PATH);
-    return fs::path(exe).parent_path() / L"textures";
+    return fs::path(exe).parent_path() / L"mods" / L"textures";
 }
 fs::path tex_dump_folder()
 {
@@ -1739,13 +1748,28 @@ void draw_mods(Graphics& gr, const Font& head, const Font& body, const Font& fsm
     option_card(gr, x, y, w, 92, g.s.tex_replace, ID_TEX_REPLACE, T(S_TEX_REPLACE_T), T(S_TEX_REPLACE_D), body, fsm);
     y += 104;
     option_card(gr, x, y, w, 92, g.s.tex_dump, ID_TEX_DUMP, T(S_TEX_DUMP_T), T(S_TEX_DUMP_D), body, fsm);
-    y += 108;
+    y += 104;
+    const auto extraction=cv_texture_export_status();
+    option_card(gr, x, y, w, 108, g.s.tex_dump_all, ID_TEX_ALL, T(S_TEX_ALL_T), T(S_TEX_ALL_D), body, fsm);
+    y += 120;
+    button(gr, RectF(x, y, 260, 34), T(extraction.running?S_TEX_ALL_CANCEL:S_TEX_ALL_START), ID_TEX_ALL_RUN,
+           body, false, extraction.running||g.s.tex_dump_all);
+    if(extraction.running||extraction.finished){
+        wchar_t progress[300];swprintf(progress,300,T(S_TEX_ALL_PROGRESS),extraction.files,extraction.total,
+            extraction.written,extraction.existing,extraction.unsupported,extraction.errors);
+        text(gr,progress,x+276,y,fsm,C_DIM,StringAlignmentNear,w-276,36);
+        y+=42;
+        if(extraction.finished)text(gr,T(extraction.failed?S_TEX_ALL_FAILED:extraction.canceled?S_TEX_ALL_CANCELED:S_TEX_ALL_DONE),x,y,fsm,
+            extraction.failed||extraction.errors?C_RED_HI:C_OK,StringAlignmentNear,w,40);
+    }
+    y += 52;
     text(gr, T(S_TEX_HOTKEY), x, y, fsm, C_TEXT, StringAlignmentNear, w, 20);
     y += 26;
     const std::wstring howto = g_lang == LANG_AR ? L"\u202B" + std::wstring(T(S_TEX_HOWTO)) + L"\u202C" : T(S_TEX_HOWTO);
     StringFormat sf; sf.SetAlignment(StringAlignmentNear); sf.SetLineAlignment(StringAlignmentNear);
     SolidBrush hb(C_DIM);
-    gr.DrawString(howto.c_str(), -1, &fsm, RectF(x, y, w, 60), &sf, &hb);
+    gr.DrawString(howto.c_str(), -1, &fsm, RectF(x, y, w, 110), &sf, &hb);
+    g_page_end=std::max(g_page_end,y+110);
 }
 
 /* The page's scroll bar, at the window's right edge, and a fade above the
@@ -2172,6 +2196,13 @@ void click(int id)
         if (!p.empty()) { g.s.patch_dir = p; scan_patch_dir(); changed(); }
     }
     else if (id == ID_PATCH_DIR_OPEN && !g.s.patch_dir.empty()) open_in_explorer(g.s.patch_dir);
+    else if (id == ID_PATCH_DIR_CLEAR && !g.s.patch_dir.empty()) {
+        // Unlink custom patches from settings only. Never delete their files.
+        g.s.patch_dir.clear();
+        g.s.patch_files_on.clear();
+        scan_patch_dir();
+        changed();
+    }
     else if (id == ID_TEX_BROWSE) {
         auto p = pick(true, tex_folder().wstring(), nullptr, nullptr);
         if (!p.empty()) { g.s.tex_dir = p; g.tex_rep = -1; set_texture_env(); changed(); }
@@ -2193,7 +2224,21 @@ void click(int id)
         g.tex_rep = -1;
     }
     else if (id == ID_TEX_REPLACE) toggle_textures("switch");
-    else if (id == ID_TEX_DUMP) { g.s.tex_dump = !g.s.tex_dump; set_texture_env(); changed(); }
+    else if (id == ID_TEX_DUMP && !cv_texture_export_status().running) {
+        g.s.tex_dump = !g.s.tex_dump;if(g.s.tex_dump)g.s.tex_dump_all=false;set_texture_env();changed();
+    }
+    else if (id == ID_TEX_ALL && !cv_texture_export_status().running) {
+        g.s.tex_dump_all=!g.s.tex_dump_all;if(g.s.tex_dump_all)g.s.tex_dump=false;set_texture_env();changed();
+    }
+    else if (id == ID_TEX_ALL_RUN) {
+        if(cv_texture_export_status().running)cv_texture_export_cancel();
+        else if(g.s.tex_dump_all){
+            g.s.tex_dump=false;set_texture_env();changed();
+            const fs::path source=fs::path(g.s.game)/L"USRDIR"/L"BHCV"/L"nativePS3"/L"biocv_disc";
+            if(!cv_texture_export_start(source,tex_dump_folder()))g.play_msg=T(S_TEX_ALL_FAILED);
+            else g.play_msg.clear();
+        }
+    }
     else if (id >= ID_FPATCH && id < ID_FPATCH + (int)g.fpatches.size()) {
         const FilePatch& p = g.fpatches[(size_t)(id - ID_FPATCH)];
         auto& on = g.s.patch_files_on;
@@ -2396,6 +2441,14 @@ LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp)
             st = kind == PAD_KIND_XINPUT ? L"Xbox" : kind == PAD_KIND_DS4 ? L"DualShock 4" : kind ? L"DualSense" : L"";
         }
         bool redraw = st != g.pad_status || cnt != g.pad_count || kind != g.pad_kind;
+        {
+            static uint64_t previous=~uint64_t(0);static bool was_exporting=false;
+            const auto e=cv_texture_export_status();
+            const uint64_t key=uint64_t(e.files)<<32|uint64_t(e.written)<<4|uint64_t(e.running)<<3|uint64_t(e.finished)<<2|uint64_t(e.failed)<<1|e.canceled;
+            if(key!=previous){previous=key;if(g.page==P_MODS)redraw=true;}
+            if(was_exporting&&!e.running){g.tex_rep=-1;if(g.page==P_MODS)redraw=true;}
+            was_exporting=e.running;
+        }
         g.pad_status = st; g.pad_count = cnt; g.pad_kind = kind;
         if (g.cap == CAP_BTN) {
             for (int i = 0; i < PAD_PHYS_MAX; i++) {
@@ -2413,7 +2466,7 @@ LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp)
         }
         if (redraw) InvalidateRect(h, NULL, FALSE);
         return 0; }
-    case WM_DESTROY: PostQuitMessage(0); return 0;
+    case WM_DESTROY: cv_texture_export_cancel(); PostQuitMessage(0); return 0;
     }
     if (m == WM_TOGGLE_MENU) { toggle_menu(); return 0; }
     if (m == WM_TOGGLE_TEXTURES) { toggle_textures("F9"); return 0; }
@@ -2470,11 +2523,15 @@ void set_srt_env()
 
 void set_texture_env()
 {
+    if(g.s.tex_dir.empty()){
+        std::error_code ec;fs::create_directories(tex_folder()/GAME_CODE,ec);
+    }
     set_env("TEXTURE_DIR", save_utf8(tex_folder()));
     set_env("TEXTURE_GAME", CV_TITLE_ID);
     set_env("TEXTURE_DUMP_DIR", save_utf8(tex_dump_folder()));
     set_env("TEXTURE_REPLACE", g.s.tex_replace ? "1" : "0");
-    set_env("TEXTURE_DUMP", g.s.tex_dump ? "1" : "0");
+    set_env("TEXTURE_DUMP", g.s.tex_dump && !g.s.tex_dump_all ? "1" : "0");
+    texpack_flags_changed();
 }
 
 /* PERF_OVERLAY from the settings: empty while the overlay is off. The game
