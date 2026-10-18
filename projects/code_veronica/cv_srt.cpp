@@ -24,7 +24,7 @@
 using namespace Gdiplus;
 namespace {
 struct Config {
-    bool enabled=false,name=true,health=true,time=true,stats=true,inventory=false,inventory_below=false,window=false;
+    bool enabled=false,name=true,health=true,time=true,stats=true,inventory=false,inventory_below=false,window=false,border=true;
     cv_srt_i18n::Language lang=cv_srt_i18n::EN;
     int enemies=3,scale=100,corner=0,opacity=70,boss_bar=0;   // boss_bar: 0 in the panel, 1 top centre, 2 bottom centre
     std::wstring credit=L"by Kastiel",game_root;
@@ -525,6 +525,7 @@ void build(const cv_srt_state& st,const Config& cfg,uint32_t width,uint32_t heig
     Canvas c(logical_width,h,scale,cfg.opacity,cfg.lang);
     auto panel=[&](float x,float ph,float pw=304) {
         c.background(x,0,pw,ph,Color(255,12,12,14));
+        if(!cfg.border)return;
         c.line(x,0,x+pw,0,Color(190,163,51,44));c.line(x,ph-1,x+pw,ph-1,Color(100,93,68,52));
         c.line(x,0,x,ph,Color(100,103,91,74));c.line(x+pw-1,0,x+pw-1,ph,Color(100,103,91,74));
     };
@@ -686,6 +687,16 @@ constexpr UINT WM_SRT_SHOW=WM_APP+1,WM_SRT_HIDE=WM_APP+2;
 SRWLOCK lock=SRWLOCK_INIT;
 std::vector<uint32_t> shared;int shared_w=0,shared_h=0;   // under lock
 HWND hwnd=nullptr;volatile LONG started=0;
+// The panel's border also turns off the thin rim Windows 11 draws around
+// the window; applied by the window's thread when it changes.
+volatile bool border=true;int border_shown=-1;
+void apply_border() {
+    if(border_shown==int(border))return;border_shown=int(border);
+    using SetAttr=HRESULT(WINAPI*)(HWND,DWORD,LPCVOID,DWORD);
+    static const SetAttr set=SetAttr(GetProcAddress(LoadLibraryW(L"dwmapi.dll"),"DwmSetWindowAttribute"));
+    const DWORD colour=border?0xFFFFFFFFu:0xFFFFFFFEu;   // DWMWA_COLOR_DEFAULT / DWMWA_COLOR_NONE
+    if(set)set(hwnd,34,&colour,sizeof colour);           // DWMWA_BORDER_COLOR
+}
 std::vector<uint32_t> base,frame;int bw=0,bh=0;float bx=0,by=0;uint64_t cached_gen=0;
 
 std::wstring ini() {
@@ -719,6 +730,7 @@ void show() {
     std::vector<uint32_t> px;int w,h;
     AcquireSRWLockShared(&lock);px=shared;w=shared_w;h=shared_h;ReleaseSRWLockShared(&lock);
     if(!w||!h)return;
+    apply_border();
     BITMAPINFO bi{};bi.bmiHeader={sizeof(BITMAPINFOHEADER),w,-h,1,32,BI_RGB};
     void* bits=nullptr;HDC screen=GetDC(nullptr),mem=CreateCompatibleDC(screen);
     HBITMAP dib=CreateDIBSection(screen,&bi,DIB_RGB_COLORS,&bits,nullptr,0);
@@ -829,6 +841,7 @@ extern "C" void cv_srt_configure_env() {
     // In its own window the panel starts at the window's corner; the corner
     // choice only applies over the game.
     c.window=env_int("SRT_WINDOW",0)!=0;if(c.window)c.corner=0;
+    c.border=env_int("SRT_BORDER",1)!=0;srt_window::border=c.border;
     if(const char* bar=std::getenv("SRT_BOSS_BAR"))c.boss_bar=!strcmp(bar,"top")?1:!strcmp(bar,"bottom")?2:0;
     c.lang=cv_srt_i18n::language(std::getenv("SRT_LANGUAGE"));c.words=cv_srt_i18n::labels(c.lang);
     c.credit=cv_srt_i18n::credit(c.lang);

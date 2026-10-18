@@ -26,6 +26,7 @@
 #include "rsx_tex_hook.h"
 #include "rsx_perf_overlay.h"
 #include "rsx_texture_pack.h"
+#include "../codec/stb_image_write.h"
 #include "rsx_fp_decompiler.h"
 #include "rsx_dxc.h"
 #include <stdio.h>
@@ -1161,6 +1162,7 @@ static HWND s_backdrop;
 static u32  s_win_w = 1280, s_win_h = 720;   /* render size, for the framed window */
 void (*g_rsx_menu_hook)(void);               /* Insert: the title's options menu */
 void (*g_rsx_key_hook)(unsigned vk);         /* any other key pressed (not repeats): the title's hotkeys */
+static volatile LONG s_shot_request;   /* F11, taken by shot_record() */
 
 static void window_apply_mode(HWND hwnd, int mode)
 {
@@ -1253,6 +1255,7 @@ static LRESULT CALLBACK d3d12_wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         }
         if (wp == VK_INSERT && !(lp & (1 << 30)) && g_rsx_menu_hook) g_rsx_menu_hook();
         else if (!(lp & (1 << 30)) && g_rsx_key_hook) g_rsx_key_hook((unsigned)wp);
+        if (wp == VK_F11 && !(lp & (1 << 30))) InterlockedExchange(&s_shot_request, 1);   /* F11: screenshot */
         if (wp == VK_F12 && !(lp & (1 << 30))) {   /* F12: rsxcap the next frame */
             extern volatile int g_rsx_cap_request;
             g_rsx_cap_request = 1;
@@ -2578,6 +2581,112 @@ static void cap_readback_write(ID3D12Resource* res, u32 w, u32 h, u32 dxgi,
         rb->lpVtbl->Unmap(rb, 0, &wr);
     }
     rb->lpVtbl->Release(rb);
+}
+
+/* F11: a screenshot of the finished frame -- after anti-aliasing, scaling
+ * and sharpening, before the port's own overlays (performance panel, SRT,
+ * notices), so the picture is the game alone. The copy rides in the frame's
+ * command list; once it has run, a thread writes the PNG into "screenshots"
+ * beside the exe and a notice says how it went (SCREENSHOT_TEXT, UTF-8
+ * "<saved>|<failed>", gives the launcher's words). */
+static ID3D12Resource* s_shot_rb;
+static u32 s_shot_w, s_shot_h, s_shot_pitch;
+typedef struct { u8* rgba; u32 w, h; } ShotJob;
+static void shot_png_write(void* ctx, void* data, int size) { fwrite(data, 1, (size_t)size, (FILE*)ctx); }
+static DWORD WINAPI shot_thread(LPVOID arg)
+{
+    ShotJob* j = (ShotJob*)arg;
+    wchar_t dir[MAX_PATH], path[MAX_PATH + 64];
+    DWORD n = GetModuleFileNameW(NULL, dir, MAX_PATH);
+    while (n && dir[n - 1] != L'\\' && dir[n - 1] != L'/') n--;
+    dir[n] = 0;
+    wcscat_s(dir, MAX_PATH, L"screenshots");
+    CreateDirectoryW(dir, NULL);
+    SYSTEMTIME t; GetLocalTime(&t);
+    int ok = 0;
+    for (int k = 1; k < 100; k++) {
+        if (k == 1) swprintf(path, MAX_PATH + 64, L"%ls\\%04u-%02u-%02u_%02u-%02u-%02u.png", dir, t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond);
+        else swprintf(path, MAX_PATH + 64, L"%ls\\%04u-%02u-%02u_%02u-%02u-%02u_%d.png", dir, t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond, k);
+        if (GetFileAttributesW(path) == INVALID_FILE_ATTRIBUTES) break;
+    }
+    FILE* f = _wfopen(path, L"wb");
+    if (f) {
+        ok = stbi_write_png_to_func(shot_png_write, f, (int)j->w, (int)j->h, 4, j->rgba, (int)j->w * 4) && !ferror(f);
+        if (fclose(f)) ok = 0;
+        if (!ok) DeleteFileW(path);
+    }
+    wchar_t words[160] = L"Screenshot saved|Could not save the screenshot";
+    const char* e = (getenv)("SCREENSHOT_TEXT");
+    if (e && *e) MultiByteToWideChar(CP_UTF8, 0, e, -1, words, 160);
+    wchar_t* bar = wcschr(words, L'|');
+    if (bar) *bar = 0;
+    perf_overlay_toast(ok || !bar ? words : bar + 1, ok);
+    fprintf(stderr, "[SHOT] %ls: %s\n", path, ok ? "saved" : "failed");
+    free(j->rgba); free(j);
+    return 0;
+}
+/* res is a R8G8B8A8 render target in RENDER_TARGET state. */
+static void shot_record(ID3D12Resource* res, u32 w, u32 h)
+{
+    if (!s_shot_request || s_shot_rb || !res || !w || !h) return;
+    InterlockedExchange(&s_shot_request, 0);
+    const u32 pitch = (w * 4 + 255) & ~255u;
+    D3D12_HEAP_PROPERTIES hp = {0}; hp.Type = D3D12_HEAP_TYPE_READBACK;
+    D3D12_RESOURCE_DESC rd = {0};
+    rd.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    rd.Width = (u64)pitch * h; rd.Height = 1; rd.DepthOrArraySize = 1;
+    rd.MipLevels = 1; rd.SampleDesc.Count = 1; rd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+    if (FAILED(s_d3d.device->lpVtbl->CreateCommittedResource(s_d3d.device, &hp, D3D12_HEAP_FLAG_NONE, &rd,
+            D3D12_RESOURCE_STATE_COPY_DEST, NULL, &IID_ID3D12Resource, (void**)&s_shot_rb)) || !s_shot_rb) {
+        s_shot_rb = NULL;
+        perf_overlay_toast(L"Screenshot failed", 0);
+        return;
+    }
+    D3D12_RESOURCE_BARRIER b = {0};
+    b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    b.Transition.pResource = res;
+    b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    b.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
+    b.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
+    s_d3d.cmd_list->lpVtbl->ResourceBarrier(s_d3d.cmd_list, 1, &b);
+    D3D12_TEXTURE_COPY_LOCATION dst = {0}, src = {0};
+    dst.pResource = s_shot_rb; dst.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+    dst.PlacedFootprint.Footprint.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    dst.PlacedFootprint.Footprint.Width = w; dst.PlacedFootprint.Footprint.Height = h;
+    dst.PlacedFootprint.Footprint.Depth = 1; dst.PlacedFootprint.Footprint.RowPitch = pitch;
+    src.pResource = res; src.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+    s_d3d.cmd_list->lpVtbl->CopyTextureRegion(s_d3d.cmd_list, &dst, 0, 0, 0, &src, NULL);
+    b.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE;
+    b.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
+    s_d3d.cmd_list->lpVtbl->ResourceBarrier(s_d3d.cmd_list, 1, &b);
+    s_shot_w = w; s_shot_h = h; s_shot_pitch = pitch;
+}
+/* After the frame was submitted: wait for that one frame, take the pixels
+ * (alpha forced opaque) and hand them to the writer. */
+static void shot_finish(void)
+{
+    if (!s_shot_rb) return;
+    wait_for_gpu();
+    const u32 w = s_shot_w, h = s_shot_h;
+    void* mp = NULL; D3D12_RANGE rr = {0, (SIZE_T)s_shot_pitch * h};
+    ShotJob* j = (ShotJob*)malloc(sizeof *j);
+    u8* px = (u8*)malloc((size_t)w * h * 4);
+    int ok = 0;
+    if (j && px && SUCCEEDED(s_shot_rb->lpVtbl->Map(s_shot_rb, 0, &rr, &mp)) && mp) {
+        for (u32 y = 0; y < h; y++) {
+            u8* row = px + (size_t)y * w * 4;
+            memcpy(row, (const u8*)mp + (size_t)y * s_shot_pitch, (size_t)w * 4);
+            for (u32 x = 0; x < w; x++) row[x * 4 + 3] = 255;
+        }
+        D3D12_RANGE wr = {0, 0};
+        s_shot_rb->lpVtbl->Unmap(s_shot_rb, 0, &wr);
+        j->rgba = px; j->w = w; j->h = h;
+        HANDLE t = CreateThread(NULL, 0, shot_thread, j, 0, NULL);
+        if (t) { CloseHandle(t); ok = 1; }
+    }
+    s_shot_rb->lpVtbl->Release(s_shot_rb);
+    s_shot_rb = NULL;
+    if (!ok) { free(px); free(j); perf_overlay_toast(L"Screenshot failed", 0); }
 }
 
 /* Optional, bounded GPU instrumentation for the image investigation. */
@@ -8894,6 +9003,7 @@ static void display_present(u32 fi)
         aa_barrier(game, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_PRESENT);
         aa_barrier(out, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_RENDER_TARGET);
     }
+    shot_record(out, w, h);   /* the shown image, before the port's overlays */
     s_qb_display = 1; s_qb_rtv = rtv; s_qb_w = w; s_qb_h = h;
     perf_overlay_draw(fi);
     s_qb_display = 0;
@@ -10846,6 +10956,7 @@ skip_dump_consider: ;
     if (s_rb.present) ui_batch_draw(fi);
     if (s_rb.present) aa_apply(fi);   /* anti-aliasing on the finished frame */
     if (s_rb.present && !s_display) fsr_backbuffer(fi);   /* FSR 1 RCAS, after AA */
+    if (s_rb.present && !s_display) shot_record(s_d3d.render_targets[fi], rs_dim(s_d3d.width, s_rs), rs_dim(s_d3d.height, s_rs));
     if (s_rb.present && !s_display) perf_overlay_draw(fi);
     int dumping = (s_d3d.dump_frames_left > 0 && s_d3d.readback_buf
                    && s_d3d.dump_skip_left == 0);
@@ -10909,6 +11020,7 @@ skip_dump_consider: ;
     s_d3d.cmd_list->lpVtbl->Close(s_d3d.cmd_list);
     ID3D12CommandList* cmd_lists[] = {(ID3D12CommandList*)s_d3d.cmd_list};
     s_d3d.cmd_queue->lpVtbl->ExecuteCommandLists(s_d3d.cmd_queue, 1, cmd_lists);
+    shot_finish();
 
     /* D3D12_IQ=1: drain the debug layer's message queue after submitting the
      * frame. The legacy (is_vp=0) DrawInstanced path silently produced ZERO

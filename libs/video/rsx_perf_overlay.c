@@ -560,10 +560,10 @@ const rsx_ui_quad* perf_overlay_quads(uint32_t w, uint32_t h, uint32_t* count)
                                   if (g >= 0) swprintf(segs[n].value, 24, L"%ld%%", g); else wcscpy(segs[n].value, L"-"); n++; }
             if (items & OV_RAM) { PROCESS_MEMORY_COUNTERS pmc; wcscpy(segs[n].label, L"RAM");
                                   if (GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof pmc))
-                                      swprintf(segs[n].value, 24, L"%.2f GB", pmc.WorkingSetSize / 1073741824.0);
+                                      swprintf(segs[n].value, 24, L"%.0f MB", pmc.WorkingSetSize / 1048576.0);
                                   else wcscpy(segs[n].value, L"-");
                                   n++; }
-            if (items & OV_VRAM) { wcscpy(segs[n].label, L"VRAM"); swprintf(segs[n].value, 24, L"%.2f GB", vram_used() / 1073741824.0); n++; }
+            if (items & OV_VRAM) { wcscpy(segs[n].label, L"VRAM"); swprintf(segs[n].value, 24, L"%.0f MB", vram_used() / 1048576.0); n++; }
             if (n) build(w, h, corner, column, segs, n); else { s_panel.n = 0; s_panel_h = 0; }   /* "ms" alone shows nothing */
             last_items = items; last_corner = corner; last_column = column; last_w = w; last_h = h; last_build = now;
         }

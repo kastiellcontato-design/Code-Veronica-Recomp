@@ -71,6 +71,7 @@ enum StrId {
     S_SHARPNESS,
     S_PATCH_CUSTOM_T, S_PATCH_CUSTOM_D,
     S_FOCUS_PAUSE_T, S_FOCUS_PAUSE_D, S_PAUSED,
+    S_SRT_BORDER, S_SHOT_HINT, S_SHOT_OPEN, S_SHOT_SAVED, S_SHOT_FAILED,
     S_COUNT
 };
 
@@ -248,6 +249,11 @@ static const wchar_t* const k_str_pt[] = {
     L"Pausar quando a janela perde o foco",
     L"Ao clicar fora do jogo (outra janela, área de trabalho, Alt+Tab ou minimizar), o jogo pausa sozinho e volta ao clicar nele. O menu de opções, os mapas (F7) e o SRT não pausam.",
     L"Pausado",
+    L"Borda do painel",
+    L"Tire screenshots apertando F11. Elas ficam na pasta screenshots, ao lado do jogo.",
+    L"Abrir pasta das screenshots",
+    L"Screenshot salva",
+    L"Não foi possível salvar a screenshot",
 };
 static_assert(sizeof k_str_pt / sizeof k_str_pt[0] == S_COUNT, "k_str_pt: one text per StrId");
 
@@ -425,6 +431,11 @@ static const wchar_t* const k_str_en[] = {
     L"Pause when the window loses focus",
     L"Clicking outside the game (another window, the desktop, Alt+Tab or minimizing) pauses it, and clicking back on it resumes. The options menu, the maps (F7) and the SRT don't pause it.",
     L"Paused",
+    L"Panel border",
+    L"Take screenshots by pressing F11. They go to the screenshots folder next to the game.",
+    L"Open screenshots folder",
+    L"Screenshot saved",
+    L"Could not save the screenshot",
 };
 static_assert(sizeof k_str_en / sizeof k_str_en[0] == S_COUNT, "k_str_en: one text per StrId");
 
@@ -602,6 +613,11 @@ static const wchar_t* const k_str_es[] = {
     L"Pausar al perder el foco de la ventana",
     L"Al hacer clic fuera del juego (otra ventana, el escritorio, Alt+Tab o minimizar), el juego se pausa solo y continúa al volver a él. El menú de opciones, los mapas (F7) y el SRT no lo pausan.",
     L"En pausa",
+    L"Borde del panel",
+    L"Haz capturas de pantalla pulsando F11. Se guardan en la carpeta screenshots, junto al juego.",
+    L"Abrir carpeta de capturas",
+    L"Captura guardada",
+    L"No se pudo guardar la captura",
 };
 static_assert(sizeof k_str_es / sizeof k_str_es[0] == S_COUNT, "k_str_es: one text per StrId");
 
@@ -779,6 +795,11 @@ static const wchar_t* const k_str_ja[] = {
     L"ウィンドウが非アクティブになったら一時停止",
     L"ゲーム以外の場所 (別のウィンドウ、デスクトップ、Alt+Tab、最小化) をクリックすると自動で一時停止し、ゲームに戻ると再開します。オプションメニュー、マップ (F7)、SRT では一時停止しません。",
     L"一時停止中",
+    L"パネルの枠",
+    L"F11キーでスクリーンショットを撮影できます。ゲームと同じ場所の screenshots フォルダーに保存されます。",
+    L"スクリーンショットのフォルダーを開く",
+    L"スクリーンショットを保存しました",
+    L"スクリーンショットを保存できませんでした",
 };
 static_assert(sizeof k_str_ja / sizeof k_str_ja[0] == S_COUNT, "k_str_ja: one text per StrId");
 
@@ -1010,6 +1031,11 @@ static const wchar_t* const k_str_fr[] = {
     L"Pause quand la fenêtre perd le focus",
     L"Cliquer hors du jeu (autre fenêtre, bureau, Alt+Tab ou réduction) le met en pause ; il reprend quand vous y revenez. Le menu des options, les cartes (F7) et le SRT ne le mettent pas en pause.",
     L"En pause",
+    L"Bordure du panneau",
+    L"Appuyez sur F11 pour faire une capture d'écran. Elles vont dans le dossier screenshots, à côté du jeu.",
+    L"Ouvrir le dossier des captures",
+    L"Capture enregistrée",
+    L"Impossible d'enregistrer la capture",
 };
 static_assert(sizeof k_str_fr / sizeof k_str_fr[0] == S_COUNT, "k_str_fr: one text per StrId");
 
@@ -1241,6 +1267,11 @@ static const wchar_t* const k_str_de[] = {
     L"Pausieren, wenn das Fenster den Fokus verliert",
     L"Ein Klick außerhalb des Spiels (anderes Fenster, Desktop, Alt+Tab oder Minimieren) pausiert es; zurück im Spiel geht es weiter. Optionsmenü, Karten (F7) und SRT pausieren nicht.",
     L"Pausiert",
+    L"Rahmen des Panels",
+    L"Mit F11 machst du Screenshots. Sie landen im Ordner screenshots neben dem Spiel.",
+    L"Screenshot-Ordner öffnen",
+    L"Screenshot gespeichert",
+    L"Screenshot konnte nicht gespeichert werden",
 };
 static_assert(sizeof k_str_de / sizeof k_str_de[0] == S_COUNT, "k_str_de: one text per StrId");
 
@@ -1472,6 +1503,11 @@ static const wchar_t* const k_str_it[] = {
     L"Pausa quando la finestra perde il focus",
     L"Facendo clic fuori dal gioco (un'altra finestra, il desktop, Alt+Tab o riducendo a icona) il gioco va in pausa e riprende quando ci torni. Il menu delle opzioni, le mappe (F7) e l'SRT non lo mettono in pausa.",
     L"In pausa",
+    L"Bordo del pannello",
+    L"Premi F11 per fare uno screenshot. Vengono salvati nella cartella screenshots, accanto al gioco.",
+    L"Apri la cartella degli screenshot",
+    L"Screenshot salvato",
+    L"Impossibile salvare lo screenshot",
 };
 static_assert(sizeof k_str_it / sizeof k_str_it[0] == S_COUNT, "k_str_it: one text per StrId");
 
@@ -1703,6 +1739,11 @@ static const wchar_t* const k_str_pl[] = {
     L"Wstrzymaj, gdy okno straci fokus",
     L"Kliknięcie poza grą (inne okno, pulpit, Alt+Tab lub minimalizacja) wstrzymuje ją, a powrót do gry ją wznawia. Menu opcji, mapy (F7) i SRT jej nie wstrzymują.",
     L"Wstrzymano",
+    L"Ramka panelu",
+    L"Zrzuty ekranu robisz klawiszem F11. Trafiają do folderu screenshots obok gry.",
+    L"Otwórz folder zrzutów ekranu",
+    L"Zapisano zrzut ekranu",
+    L"Nie udało się zapisać zrzutu ekranu",
 };
 static_assert(sizeof k_str_pl / sizeof k_str_pl[0] == S_COUNT, "k_str_pl: one text per StrId");
 
@@ -1934,6 +1975,11 @@ static const wchar_t* const k_str_tr[] = {
     L"Pencere odağı kaybedince duraklat",
     L"Oyunun dışına tıklamak (başka bir pencere, masaüstü, Alt+Tab veya simge durumuna küçültme) oyunu duraklatır; oyuna dönünce devam eder. Seçenekler menüsü, haritalar (F7) ve SRT duraklatmaz.",
     L"Duraklatıldı",
+    L"Panel çerçevesi",
+    L"Ekran görüntüsü almak için F11'e basın. Görüntüler oyunun yanındaki screenshots klasörüne kaydedilir.",
+    L"Ekran görüntüleri klasörünü aç",
+    L"Ekran görüntüsü kaydedildi",
+    L"Ekran görüntüsü kaydedilemedi",
 };
 static_assert(sizeof k_str_tr / sizeof k_str_tr[0] == S_COUNT, "k_str_tr: one text per StrId");
 
@@ -2165,6 +2211,11 @@ static const wchar_t* const k_str_ar[] = {
     L"إيقاف مؤقت عند فقدان النافذة للتركيز",
     L"النقر خارج اللعبة (نافذة أخرى أو سطح المكتب أو Alt+Tab أو التصغير) يوقفها مؤقتًا، وتُستأنف عند العودة إليها. قائمة الخيارات والخرائط (F7) وSRT لا توقفها.",
     L"متوقف مؤقتًا",
+    L"إطار اللوحة",
+    L"اضغط F11 لالتقاط لقطة شاشة. تُحفظ اللقطات في مجلد screenshots بجوار اللعبة.",
+    L"فتح مجلد لقطات الشاشة",
+    L"تم حفظ لقطة الشاشة",
+    L"تعذّر حفظ لقطة الشاشة",
 };
 static_assert(sizeof k_str_ar / sizeof k_str_ar[0] == S_COUNT, "k_str_ar: one text per StrId");
 
@@ -2396,6 +2447,11 @@ static const wchar_t* const k_str_zh[] = {
     L"窗口失去焦点时暂停",
     L"点击游戏以外的地方（其他窗口、桌面、Alt+Tab 或最小化）时游戏自动暂停，回到游戏后继续。选项菜单、地图 (F7) 和 SRT 不会暂停游戏。",
     L"已暂停",
+    L"面板边框",
+    L"按 F11 截图。截图保存在游戏旁边的 screenshots 文件夹中。",
+    L"打开截图文件夹",
+    L"截图已保存",
+    L"无法保存截图",
 };
 static_assert(sizeof k_str_zh / sizeof k_str_zh[0] == S_COUNT, "k_str_zh: one text per StrId");
 
@@ -2627,6 +2683,11 @@ static const wchar_t* const k_str_ko[] = {
     L"창이 포커스를 잃으면 일시정지",
     L"게임 밖을 클릭하면(다른 창, 바탕 화면, Alt+Tab, 최소화) 자동으로 일시정지되고, 게임으로 돌아오면 다시 진행됩니다. 옵션 메뉴, 지도(F7), SRT는 일시정지하지 않습니다.",
     L"일시정지됨",
+    L"패널 테두리",
+    L"F11 키로 스크린샷을 찍을 수 있습니다. 게임 옆의 screenshots 폴더에 저장됩니다.",
+    L"스크린샷 폴더 열기",
+    L"스크린샷을 저장했습니다",
+    L"스크린샷을 저장하지 못했습니다",
 };
 static_assert(sizeof k_str_ko / sizeof k_str_ko[0] == S_COUNT, "k_str_ko: one text per StrId");
 
@@ -2858,6 +2919,11 @@ static const wchar_t* const k_str_ru[] = {
     L"Пауза, когда окно теряет фокус",
     L"Щелчок вне игры (другое окно, рабочий стол, Alt+Tab или сворачивание) ставит её на паузу, а возврат в игру снимает её. Меню настроек, карты (F7) и SRT паузу не ставят.",
     L"Пауза",
+    L"Рамка панели",
+    L"Нажмите F11, чтобы сделать снимок экрана. Снимки сохраняются в папку screenshots рядом с игрой.",
+    L"Открыть папку со снимками",
+    L"Снимок экрана сохранён",
+    L"Не удалось сохранить снимок экрана",
 };
 static_assert(sizeof k_str_ru / sizeof k_str_ru[0] == S_COUNT, "k_str_ru: one text per StrId");
 

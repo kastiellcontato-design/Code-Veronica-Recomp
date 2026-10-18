@@ -194,6 +194,7 @@ struct Settings {
     bool focus_pause=true; // pause while the game window is out of focus (cv_focus_pause.cpp)
     bool srt=false;
     bool srt_parts[5]={true,true,true,true,false}; // name, health, time, stats, inventory
+    bool srt_border=true;
     int srt_enemies=3, srt_corner=0, srt_scale=100, srt_language=0, srt_opacity=70, srt_inventory_below=0, srt_window=0, srt_boss_bar=0; // 0 follow, 1 EN, 2 PT-BR; 3..13 other launcher languages
     std::wstring game, rap, fw, saves;
     std::wstring patch_dir;                 /* patch files (patch_files.h) */
@@ -374,6 +375,7 @@ Settings load_settings()
     s.srt_inventory_below=std::clamp(_wtoi(ini_get(L"srt",L"inventario_embaixo",L"0").c_str()),0,1);
     s.srt_window=std::clamp(_wtoi(ini_get(L"srt",L"janela",L"0").c_str()),0,1);
     s.srt_boss_bar=std::clamp(_wtoi(ini_get(L"srt",L"barra_chefe",L"0").c_str()),0,2);
+    s.srt_border=_wtoi(ini_get(L"srt",L"borda",L"1").c_str())!=0;
     s.srt_language=std::clamp(_wtoi(ini_get(L"srt",L"idioma",L"0").c_str()),0,int(LANG_COUNT));
     s.overlay = _wtoi(ini_get(L"overlay", L"mostrar", L"0").c_str()) != 0;
     for (int i = 0; i < NSHADER_OPTS; i++)
@@ -446,6 +448,7 @@ void save_settings(const Settings& s)
     ini_set(L"srt",L"inventario_embaixo",std::to_wstring(s.srt_inventory_below));
     ini_set(L"srt",L"janela",std::to_wstring(s.srt_window));
     ini_set(L"srt",L"barra_chefe",std::to_wstring(s.srt_boss_bar));
+    ini_set(L"srt",L"borda",s.srt_border?L"1":L"0");
     ini_set(L"overlay", L"mostrar", s.overlay ? L"1" : L"0");
     ini_set(L"overlay", L"itens", std::to_wstring(s.overlay_items));
     ini_set(L"overlay", L"posicao", std::to_wstring(s.overlay_corner));
@@ -629,7 +632,8 @@ enum {
     ID_LAYOUT_PS = 600, ID_LAYOUT_XB, ID_LAYOUT_AUTO, ID_LAYOUT_KB,
     ID_KEY = 700, ID_BTN = 800, ID_RESTORE = 900, ID_PATCH = 1000,  /* + index (keys and buttons: action * slots + slot) */
     ID_TEST_ENABLE=2500, ID_TEST_OPEN,
-    ID_FOCUS_PAUSE=2550,
+    ID_FOCUS_PAUSE=2550, ID_SHOT_OPEN,
+    ID_SRT_BORDER=2560,
     ID_CACHE_CLEAR = 1100, ID_CACHE_OPEN,
     ID_KEY_CLEAR = 1200, ID_BTN_CLEAR = 1300,                      /* + action * slots + slot */
     ID_OVERLAY = 1400, ID_OVERLAY_ITEM = 1410,                     /* + item */
@@ -1057,6 +1061,8 @@ void draw_jogo(Graphics& gr, const Font& head, const Font& body, const Font& fsm
     button(gr,RectF(x+404,y+228,260,32),T(S_TEST_OPEN),ID_TEST_OPEN,body,false,g.s.test_tools&&g.running);
     option_card(gr,x,y+276,W-SIDE-64.0f,84,g.s.focus_pause,ID_FOCUS_PAUSE,
                 T(S_FOCUS_PAUSE_T),T(S_FOCUS_PAUSE_D),body,fsm);
+    text(gr,T(S_SHOT_HINT),x,y+380,fsm,C_DIM,StringAlignmentNear,W-SIDE-64.0f,24);
+    button(gr,RectF(x,y+410,330,32),T(S_SHOT_OPEN),ID_SHOT_OPEN,body);
     if (g.running)
         text(gr, T(S_PATHS_RESTART), x, y + 195, body, C_RED_HI,
              StringAlignmentNear, 820, 24);
@@ -1602,6 +1608,7 @@ void draw_srt(Graphics& gr,const Font& head,const Font& body,const Font& fsm)
     dropdown(gr,RectF(last,604,third,32),T(g.s.srt_window?S_SRT_IN_WINDOW:S_SRT_IN_GAME),ID_DD_SRT_WINDOW,body);
     gr.DrawString(T(S_SRT_HOTKEY),-1,&fsm,RectF(x,648,third*2+24,42),&sf,&brush);
     if(g.s.srt_window)gr.DrawString(T(S_SRT_WINDOW_HINT),-1,&fsm,RectF(last,648,third,60),&sf,&brush);
+    option_card(gr,x,716,col,58,g.s.srt_border,ID_SRT_BORDER,T(S_SRT_BORDER),L"",body,fsm);
 }
 
 void draw_desempenho(Graphics& gr, const Font& head, const Font& body, const Font& fsm)
@@ -2055,6 +2062,7 @@ void click(int id)
     else if(id==ID_TEST_ENABLE){g.s.test_tools=!g.s.test_tools;cv_test_tools_enable(g.s.test_tools);changed();}
     else if(id==ID_TEST_OPEN&&g.running)cv_test_tools_show(g.hwnd,g.s.game,g_lang);
     else if(id==ID_FOCUS_PAUSE){g.s.focus_pause=!g.s.focus_pause;changed();}
+    else if(id==ID_SHOT_OPEN){const fs::path d=fs::path(ini_path()).parent_path()/L"screenshots";std::error_code ec;fs::create_directories(d,ec);open_in_explorer(d.wstring());}
     else if (id == ID_GAME_BROWSE) { auto p = pick(true, g.s.game, nullptr, nullptr); if (!p.empty()) { g.s.game = p; changed(); } }
     else if (id == ID_RAP_BROWSE) { auto p = pick(false, g.s.rap, T(S_RAP_FILTER), L"*.rap"); if (!p.empty()) { g.s.rap = p; changed(); } }
     else if (id == ID_SAVE_BROWSE) { auto p = pick(true, save_folder().wstring(), nullptr, nullptr); if (!p.empty()) { g.s.saves = p; changed(); } }
@@ -2130,6 +2138,7 @@ void click(int id)
     }
     else if(id==ID_SRT)toggle_srt();
     else if(id>=ID_SRT_PART&&id<ID_SRT_PART+5) {g.s.srt_parts[id-ID_SRT_PART]^=true;set_srt_env();changed();}
+    else if(id==ID_SRT_BORDER) {g.s.srt_border=!g.s.srt_border;set_srt_env();changed();}
     else if (id == ID_OVERLAY) { g.s.overlay = !g.s.overlay; set_overlay_env(); changed(); }
     else if (id >= ID_SHADER_OPT && id < ID_SHADER_OPT + NSHADER_OPTS) {
         if (id - ID_SHADER_OPT == 5 && g.running) return;   /* fixed once the game runs */
@@ -2357,6 +2366,7 @@ void set_env_default(const char* k, const char* v) { if (!getenv(k)) _putenv_s(k
 void set_note_text_env()
 {
     set_env("SHADER_NOTE_TEXT", save_utf8(fs::path(std::wstring(T(S_SH_NOTE_LOADING)) + L"|" + T(S_SH_NOTE_LOADED))));
+    set_env("SCREENSHOT_TEXT", save_utf8(fs::path(std::wstring(T(S_SHOT_SAVED)) + L"|" + T(S_SHOT_FAILED))));
 }
 
 /* Texture mods (rsx_texture_pack.h). The game reads the switches again as it
@@ -2370,6 +2380,7 @@ void set_srt_env()
     set_env("SRT_OPACITY",std::to_string(g.s.srt_opacity));
     set_env("SRT_INVENTORY_POS",g.s.srt_inventory_below?"below":"side");
     set_env("SRT_WINDOW",g.s.srt_window?"1":"0");
+    set_env("SRT_BORDER",g.s.srt_border?"1":"0");
     set_env("SRT_BOSS_BAR",g.s.srt_boss_bar==1?"top":g.s.srt_boss_bar==2?"bottom":"panel");
     set_env("SRT_ENEMIES",std::to_string(g.s.srt_enemies));set_env("SRT_SCALE",std::to_string(g.s.srt_scale));
     const char* corners[]={"tl","tr","bl","br"};set_env("SRT_CORNER",corners[g.s.srt_corner]);
