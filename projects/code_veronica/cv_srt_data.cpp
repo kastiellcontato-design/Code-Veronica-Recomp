@@ -4,6 +4,8 @@
  * This is an independent implementation; the external scanner is not linked.
  */
 #include "cv_srt.h"
+#include "cv_srt_enemy_hold.h"
+#include <chrono>
 #include "cv_version.h"
 #include <algorithm>
 #include <cstring>
@@ -49,9 +51,10 @@ bool has_quantity(int id) {
         (id>=0x20&&id<=0x26)||id==0x28||id==0x2a||id==0x78||id==0x82||id==0x83||id==0x8e||id==0x8f||id==0x98||id==0x99;
 }
 struct Seen { int type=0,slot=0,hp=0,alive=0; };
-Seen seen[CV_SRT_MAX_ENEMIES];int previous_room=-1;
+Seen seen[CV_SRT_MAX_ENEMIES];int previous_room=-1,previous_character=-1;
+cv_srt_enemy_hold::Cache enemy_display;
 }
-extern "C" int cv_srt_sample(cv_srt_state* out) {
+static int sample_current(cv_srt_state* out) {
     *out={};
     if(!readable(CV_SRT_CHARACTER,0x900)||!readable(CV_SRT_RDX,0xa00))return 0;
     const int character=vm_read8(CV_SRT_CHARACTER);
@@ -88,7 +91,10 @@ extern "C" int cv_srt_sample(cv_srt_state* out) {
             item.counted=has_quantity(item.id);
         }
     }
-    if(previous_room!=room) {std::memset(seen,0,sizeof seen);previous_room=room;}
+    if(previous_room!=room || previous_character!=character) {
+        std::memset(seen,0,sizeof seen);previous_room=room;previous_character=character;
+    }
+    std::array<cv_srt_enemy_hold::Observation,CV_SRT_MAX_ENEMIES> observed{};
     const int count=std::clamp(int32_t(vm_read32(CV_SRT_ENEMY_COUNT)),0,int(CV_SRT_MAX_ENEMIES));
     bool leader_alive=false,leader_seen=false;
     for(int i=0;i<count;i++) {
@@ -99,6 +105,9 @@ extern "C" int cv_srt_sample(cv_srt_state* out) {
         const int enemy_hp=int32_t(vm_read32(address+0x41c));
         const int action=vm_read8(address+0xc),status=vm_read8(address+0xf),model=vm_read8(address+0x88);
         const int slot=int32_t(vm_read32(address+0x39c));
+        auto& observation=observed[i];
+        observation.identified=true;observation.type=type;observation.slot=slot;
+        observation.remove=enemy_hp<=0;
         const bool active=action>0&&action<4;
         bool alive=active&&status>0;
         switch(type) {
@@ -110,6 +119,10 @@ extern "C" int cv_srt_sample(cv_srt_state* out) {
         case 30:alive=leader_alive;break;
         }
         alive=alive&&enemy_hp>=0&&enemy_hp<=100000;
+        // These existing rules explicitly exclude another boss form/room,
+        // rather than indicating a briefly missing actor. Do not retain it.
+        observation.remove=observation.remove || (type==14&&!alive) ||
+            (type==30&&!alive) || ((type==12||type==29)&&room==0x091e);
         if(!leader_seen) {leader_alive=alive;leader_seen=true;}
         Seen& history=seen[i];
         if(history.type!=type||history.slot!=slot||(!history.alive&&alive))history={type,slot,std::max(1,enemy_hp),0};
@@ -117,11 +130,24 @@ extern "C" int cv_srt_sample(cv_srt_state* out) {
         if(!alive)continue;
         auto& enemy=out->enemies[out->enemy_count++];enemy.type=type;enemy.hp=enemy_hp;
         const int fixed=maximum(type,room);enemy.estimated=!fixed;enemy.maximum=fixed?fixed:std::max(1,history.hp);
+        observation.shown=true;observation.enemy=enemy;
     }
     if(vm_read8(CV_SRT_CHARACTER)!=character || vm_read16(CV_SRT_ROOM)!=room ||
        vm_read32(CV_SRT_RDX)!=rdx[character]) {*out={};previous_room=-1;return 0;}
+    const uint64_t now=uint64_t(std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count());
+    enemy_display.apply(*out,observed,now);
     if(const char* log=std::getenv("SRT_LOG");log&&*log&&*log!='0') {
         static unsigned n; if(++n%30==1)std::fprintf(stderr,"[SRT %s] char=%d hp=%d/%d state=%d time=%u room=%04X enemies=%d equip=%d difficulty=%d\n",CV_TITLE_ID,character,hp,maxhp,out->condition,out->seconds,room,out->enemy_count,out->equipped,difficulty);
     }
     return 1;
+}
+
+extern "C" int cv_srt_sample(cv_srt_state* out) {
+    const int valid=sample_current(out);
+    if(!valid) {
+        // Menus/loading/invalid reads must never retain enemies from a prior game.
+        enemy_display.clear();previous_room=previous_character=-1;
+    }
+    return valid;
 }

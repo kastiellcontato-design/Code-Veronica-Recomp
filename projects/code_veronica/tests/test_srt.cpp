@@ -3,6 +3,7 @@
 #include <objidl.h>
 #include <gdiplus.h>
 #include "../cv_srt.h"
+#include "../cv_srt_enemy_hold.h"
 #include "../cv_version.h"
 #include "../cv_srt_text.h"
 #include "../cv_srt_icons.h"
@@ -81,6 +82,46 @@ static void export_png(const char* path,const rsx_ui_quad* quads,uint32_t count,
     }
     GdiplusShutdown(token);
 }
+static void test_enemy_absence() {
+    using namespace cv_srt_enemy_hold;
+    Cache cache;cv_srt_state state{};state.room=1;
+    std::array<Observation,CV_SRT_MAX_ENEMIES> observations{};
+    auto& first=observations[0];
+    first={true,true,false,1,7,{1,100,100,1}};
+    cache.apply(state,observations,100);assert(state.enemy_count==1);
+    first={};cache.apply(state,observations,1099);
+    assert(state.enemy_count==1&&state.enemies[0].hp==100);
+    cache.apply(state,observations,1100);assert(state.enemy_count==0);
+    first={true,true,false,1,7,{1,100,100,1}};
+    cache.apply(state,observations,1200);
+    first={};cache.apply(state,observations,1250);assert(state.enemy_count==1);
+    first={true,true,false,1,7,{1,70,70,1}};
+    cache.apply(state,observations,1300);
+    assert(state.enemy_count==1&&state.enemies[0].hp==70&&state.enemies[0].maximum==100);
+    first.shown=false;first.remove=true;
+    cache.apply(state,observations,1301);assert(state.enemy_count==0);
+    first={};cache.apply(state,observations,1302);assert(state.enemy_count==0);
+    first={true,true,false,1,7,{1,0,100,1}};
+    cache.apply(state,observations,1400);assert(state.enemy_count==1&&state.enemies[0].hp==0);
+    first={};cache.apply(state,observations,1401);assert(state.enemy_count==0);
+    first={true,true,false,1,7,{1,100,100,1}};
+    cache.apply(state,observations,1500);
+    first.slot=8;first.shown=false;cache.apply(state,observations,1501);assert(state.enemy_count==0);
+    first.shown=true;cache.apply(state,observations,1600);
+    first={};++state.room;cache.apply(state,observations,1601);assert(state.enemy_count==0);
+    first={true,true,false,1,7,{1,100,100,1}};cache.apply(state,observations,1700);
+    first={};++state.character;cache.apply(state,observations,1701);assert(state.enemy_count==0);
+    first={true,true,false,1,7,{1,100,100,1}};cache.apply(state,observations,1800);
+    cache.clear();first={};cache.apply(state,observations,1801);assert(state.enemy_count==0);
+    // Every entry, including the last slot, may be retained, with stable order.
+    for(size_t i=0;i<observations.size();++i)
+        observations[i]={true,true,false,1,int(i),{1,int(i+1),100,1}};
+    cache.apply(state,observations,1900);assert(state.enemy_count==CV_SRT_MAX_ENEMIES);
+    observations={};cache.apply(state,observations,2899);assert(state.enemy_count==CV_SRT_MAX_ENEMIES);
+    assert(state.enemies[63].hp==64);
+    cache.apply(state,observations,2900);assert(state.enemy_count==0);
+    std::puts("[SRT-TEST] PASS: 1s absence, instant live HP, stable maximum, death, slot reuse, room/character/reset, 64 slots");
+}
 static void test_item_wrapping() {
     using namespace Gdiplus;
     GdiplusStartupInput input;ULONG_PTR token;assert(GdiplusStartup(&token,&input,nullptr)==Ok);
@@ -105,6 +146,7 @@ static void test_item_wrapping() {
     GdiplusShutdown(token);
 }
 int main(int argc,char** argv) {
+    test_enemy_absence();
     test_item_wrapping();
     namespace loc=cv_srt_i18n;
     assert(loc::selection(0,LANG_JA)==loc::JA&&loc::selection(1,LANG_JA)==loc::EN&&loc::selection(2,LANG_EN)==loc::PT);
@@ -218,6 +260,18 @@ int main(int argc,char** argv) {
     put16(CV_SRT_ROOM,0x0302);put32(CV_SRT_ENEMIES+0x41c,400);cv_srt_sample(&state);assert(state.enemies[0].maximum==500);
     put16(CV_SRT_ENEMIES+4,1);put32(CV_SRT_ENEMIES+0x41c,100);cv_srt_sample(&state);
     put32(CV_SRT_ENEMIES+0x41c,70);cv_srt_sample(&state);assert(state.enemies[0].maximum==100&&state.enemies[0].hp==70&&state.enemies[0].estimated);
+    put32(CV_SRT_ENEMY_COUNT,0);cv_srt_sample(&state);
+    assert(state.enemy_count==1&&state.enemies[0].hp==70);
+    put32(CV_SRT_ENEMY_COUNT,1);memory[CV_SRT_ENEMIES+0xc]=0;cv_srt_sample(&state);
+    assert(state.enemy_count==1&&state.enemies[0].hp==70);
+    memory[CV_SRT_ENEMIES+0xc]=1;put32(CV_SRT_ENEMIES+0x41c,60);cv_srt_sample(&state);
+    assert(state.enemy_count==1&&state.enemies[0].hp==60&&state.enemies[0].maximum==100);
+    memory[CV_SRT_ENEMIES+0xc]=0;put32(CV_SRT_ENEMIES+0x41c,0);cv_srt_sample(&state);
+    assert(state.enemy_count==0);
+    memory[CV_SRT_ENEMIES+0xc]=1;put32(CV_SRT_ENEMIES+0x41c,50);cv_srt_sample(&state);
+    assert(state.enemy_count==1);
+    put32(CV_SRT_ENEMY_COUNT,0);put16(CV_SRT_ROOM,0x0303);cv_srt_sample(&state);
+    assert(state.enemy_count==0);
     const auto before=memory;cv_srt_sample(&state);assert(before==memory);
     put32(CV_SRT_RDX,0);assert(!cv_srt_sample(&state)&&!state.valid&&state.enemy_count==0);
     game();put32(CV_SRT_HEALTH,max);cv_srt_sample(&state);
