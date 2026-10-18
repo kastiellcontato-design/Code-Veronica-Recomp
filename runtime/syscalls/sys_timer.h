@@ -33,6 +33,20 @@ extern "C" {
 uint64_t ppu_timebase_now(void);
 
 #ifdef _WIN32
+/* Guest time can be held still: a port's pause (the game window lost focus)
+ * stops the clocks the guest reads -- mftb, sys_time_get_system_time, the GCM
+ * timestamps -- so on resume the title measures no gap at all. ps3_guest_qpc
+ * is QueryPerformanceCounter minus every held span; while held it returns the
+ * moment the hold began. ps3_guest_clock_hold is called by one thread only,
+ * which is also the one thread ps3_guest_hold_wait never parks (it pumps the
+ * window that ends the hold). The others park in usleep/yield until it ends. */
+int64_t ps3_guest_qpc(void);
+void    ps3_guest_clock_hold(int on);
+int     ps3_guest_clock_held(void);
+void    ps3_guest_hold_wait(void);
+#endif
+
+#ifdef _WIN32
 /* Sub-millisecond timed-wait support for the lv2 sync primitives.
  * SleepConditionVariableCS / WaitForSingleObject floor a timed wait to 1 ms,
  * and the OS then rounds that up to the timer tick -- a 30 us guest timeout

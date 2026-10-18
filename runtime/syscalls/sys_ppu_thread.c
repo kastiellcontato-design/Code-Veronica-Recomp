@@ -1091,6 +1091,8 @@ int64_t sys_ppu_thread_yield(ppu_context* ctx)
       } }
     (void)ctx;
 #ifdef _WIN32
+    { extern void ps3_guest_hold_wait(void);
+      ps3_guest_hold_wait(); }   /* paused: park until the pause ends (sys_timer.h) */
     /* A thread that does nothing but yield is spin-waiting -- Code Veronica's
      * 30 fps limiter usleeps to ~1 ms before its deadline and then loops on
      * yield + timebase until it passes, about a fifth of its main thread's

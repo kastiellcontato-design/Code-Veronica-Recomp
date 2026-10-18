@@ -49,13 +49,13 @@ static void ensure_qpc_init(void)
     }
 }
 
+extern int64_t ps3_guest_qpc(void);   /* sys_timer.h: stands still while paused */
 static u64 get_timestamp_ns(void)
 {
-    LARGE_INTEGER now;
     ensure_qpc_init();
-    QueryPerformanceCounter(&now);
+    const int64_t now = ps3_guest_qpc();
     /* Convert to nanoseconds: (count * 1e9) / freq */
-    return (u64)((double)now.QuadPart * 1000000000.0 / (double)s_qpc_freq.QuadPart);
+    return (u64)((double)now * 1000000000.0 / (double)s_qpc_freq.QuadPart);
 }
 #else
 static u64 get_timestamp_ns(void)

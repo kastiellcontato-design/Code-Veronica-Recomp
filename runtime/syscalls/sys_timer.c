@@ -41,6 +41,50 @@ int lv2_deadline_passed(int64_t deadline)
     QueryPerformanceCounter(&now);
     return now.QuadPart >= deadline;
 }
+
+/* The held guest clock (sys_timer.h). Real waits and deadlines above stay on
+ * the real clock: only what the guest reads as "now" stands still. */
+static volatile LONGLONG s_guest_shift;    /* QPC ticks of every finished hold */
+static volatile LONGLONG s_guest_hold;     /* the guest reading while held; 0 running */
+static volatile LONG     s_guest_holder;   /* thread id of the caller of ps3_guest_clock_hold */
+
+int64_t ps3_guest_qpc(void)
+{
+    const LONGLONG hold = ReadAcquire64(&s_guest_hold);
+    if (hold) return hold;
+    LARGE_INTEGER now;
+    QueryPerformanceCounter(&now);
+    return now.QuadPart - ReadAcquire64(&s_guest_shift);
+}
+
+void ps3_guest_clock_hold(int on)
+{
+    LARGE_INTEGER now;
+    ensure_qpc_init();
+    QueryPerformanceCounter(&now);
+    InterlockedExchange(&s_guest_holder, (LONG)GetCurrentThreadId());
+    if (on) {
+        if (s_guest_hold) return;
+        /* A reader that sampled the real clock just before this may already
+         * have returned a moment past "now"; hold 5 ms later so the guest's
+         * time never steps backwards. */
+        WriteRelease64(&s_guest_hold, now.QuadPart - s_guest_shift + s_qpc_freq.QuadPart / 200);
+    } else {
+        const LONGLONG hold = s_guest_hold;
+        if (!hold) return;
+        /* Shift first: a reader that sees the hold gone must see the new shift. */
+        WriteRelease64(&s_guest_shift, now.QuadPart - hold);
+        WriteRelease64(&s_guest_hold, 0);
+    }
+}
+
+int ps3_guest_clock_held(void) { return ReadAcquire64(&s_guest_hold) != 0; }
+
+void ps3_guest_hold_wait(void)
+{
+    while (ReadAcquire64(&s_guest_hold) && (DWORD)s_guest_holder != GetCurrentThreadId())
+        Sleep(5);
+}
 #endif
 
 /* ---------------------------------------------------------------------------
@@ -60,7 +104,7 @@ uint64_t ppu_timebase_now(void)
     static LONGLONG t0 = 0;
     ensure_qpc_init();
     LARGE_INTEGER now;
-    QueryPerformanceCounter(&now);
+    now.QuadPart = ps3_guest_qpc();   /* stands still while a pause holds it */
     if (!t0) t0 = now.QuadPart;   /* benign race: same anchor either way */
     uint64_t d = (uint64_t)(now.QuadPart - t0);
     uint64_t q = (uint64_t)s_qpc_freq.QuadPart;
@@ -246,6 +290,7 @@ int64_t sys_timer_usleep(ppu_context* ctx)
         ppu_log_host_chain("usleep1ms"); } }
 
 #ifdef _WIN32
+    ps3_guest_hold_wait();   /* paused: guest threads park here until the pause ends */
     /* Use high-resolution sleep via waitable timer for better precision */
     if (usec >= 1000) {
         HANDLE timer = CreateWaitableTimerW(NULL, TRUE, NULL);

@@ -660,6 +660,13 @@ static void audio_notify_event_queues(void)
 }
 
 #ifdef _WIN32
+/* A port's pause (sys_timer.h, ps3_guest_clock_hold): the device keeps
+ * getting silence at the normal pace, but the rings stop -- no block is read
+ * and no event wakes the title's mixer -- so music and voices resume at the
+ * sample they stopped on. */
+static volatile LONG s_audio_paused;
+void cellAudio_set_paused(int on) { InterlockedExchange(&s_audio_paused, on ? 1 : 0); }
+
 static unsigned __stdcall audio_mix_thread_func(void* arg)
 {
     (void)arg;
@@ -700,6 +707,11 @@ static unsigned __stdcall audio_mix_thread_func(void* arg)
                     (long long)(blocks * CELL_AUDIO_BLOCK_SAMPLES * qf.QuadPart / CELL_AUDIO_SAMPLE_RATE);
         }
         blocks++;
+        if (s_audio_paused) {
+            memset(s_mix_buffer, 0, sizeof(float) * CELL_AUDIO_BLOCK_SAMPLES * 2);
+            audio_backend_submit(s_mix_buffer, CELL_AUDIO_BLOCK_SAMPLES);
+            continue;
+        }
         /* Mix and submit one block */
         audio_mix_one_block();
         /* AUDIO_PEAK=1: report the mixed block's peak amplitude periodically so

@@ -69,6 +69,8 @@ extern void (*g_rsx_menu_hook)(void);
 extern void (*g_rsx_key_hook)(unsigned vk);
 extern int g_pad_block;
 void  perf_overlay_toast(const wchar_t* text, int on);
+void  cv_focus_pause_enable(int on);               /* cv_focus_pause.cpp */
+void  cv_focus_pause_label(const wchar_t* text);
 void  texpack_flags_changed(void);
 void  cellpad_set_map(const int* btn, const int* key);
 void  ps3_patch_set(const char* name, int on);
@@ -189,6 +191,7 @@ struct Settings {
     std::wstring tex_dump_dir;         /* where dumps go; empty: <tex_dir>\<version>\dump */
     bool tex_replace = false, tex_dump = false;
     bool test_tools=false; // optional experimental map window, off by default
+    bool focus_pause=true; // pause while the game window is out of focus (cv_focus_pause.cpp)
     bool srt=false;
     bool srt_parts[5]={true,true,true,true,false}; // name, health, time, stats, inventory
     int srt_enemies=3, srt_corner=0, srt_scale=100, srt_language=0, srt_opacity=70, srt_inventory_below=0, srt_window=0, srt_boss_bar=0; // 0 follow, 1 EN, 2 PT-BR; 3..13 other launcher languages
@@ -366,6 +369,7 @@ Settings load_settings()
     s.srt_corner=std::clamp(_wtoi(ini_get(L"srt",L"posicao",L"0").c_str()),0,3);
     s.srt_scale=std::clamp(_wtoi(ini_get(L"srt",L"tamanho",L"100").c_str()),50,200);
     s.test_tools=_wtoi(ini_get(L"testes",L"mapas",L"0").c_str())!=0;
+    s.focus_pause=_wtoi(ini_get(L"jogo",L"pausar_sem_foco",L"1").c_str())!=0;
     s.srt_opacity=std::clamp(_wtoi(ini_get(L"srt",L"opacidade",L"70").c_str()),0,100);
     s.srt_inventory_below=std::clamp(_wtoi(ini_get(L"srt",L"inventario_embaixo",L"0").c_str()),0,1);
     s.srt_window=std::clamp(_wtoi(ini_get(L"srt",L"janela",L"0").c_str()),0,1);
@@ -430,6 +434,7 @@ void save_settings(const Settings& s)
     for (int i = 0; i < NPATCHES; i++)
         ini_set(L"patches", widen(k_patches[i].id).c_str(), s.patch[i] ? L"1" : L"0");
     ini_set(L"testes",L"mapas",s.test_tools?L"1":L"0");
+    ini_set(L"jogo",L"pausar_sem_foco",s.focus_pause?L"1":L"0");
     ini_set(L"srt", L"mostrar",s.srt?L"1":L"0");
     { const wchar_t* keys[]={L"nome",L"vida",L"tempo",L"contadores",L"inventario"};
       for(int i=0;i<5;i++)ini_set(L"srt",keys[i],s.srt_parts[i]?L"1":L"0"); }
@@ -590,6 +595,9 @@ struct UI {
     Capture cap = CAP_NONE; int cap_action = -1, cap_slot = 0; ULONGLONG cap_since = 0;
     std::vector<FilePatch> fpatches;   /* read from s.patch_dir when it changes or the page opens */
     int fpatch_files = 0; float patch_scroll = 0, patch_scroll_max = 0;
+    float page_scroll[P_COUNT] = {}, page_scroll_max[P_COUNT] = {};   /* each page scrolls on its own */
+    bool page_drag = false; float page_grab = 0;                      /* dragging the page's scroll bar */
+    RectF page_track, page_thumb;                                      /* where the bar was drawn */
     std::wstring log_msg;   /* after Copy / Save on the Advanced page */
     uint32_t pad_prev[PAD_PHYS_MAX] = {};
     uint32_t test_combo_prev=0;
@@ -621,6 +629,7 @@ enum {
     ID_LAYOUT_PS = 600, ID_LAYOUT_XB, ID_LAYOUT_AUTO, ID_LAYOUT_KB,
     ID_KEY = 700, ID_BTN = 800, ID_RESTORE = 900, ID_PATCH = 1000,  /* + index (keys and buttons: action * slots + slot) */
     ID_TEST_ENABLE=2500, ID_TEST_OPEN,
+    ID_FOCUS_PAUSE=2550,
     ID_CACHE_CLEAR = 1100, ID_CACHE_OPEN,
     ID_KEY_CLEAR = 1200, ID_BTN_CLEAR = 1300,                      /* + action * slots + slot */
     ID_OVERLAY = 1400, ID_OVERLAY_ITEM = 1410,                     /* + item */
@@ -630,9 +639,30 @@ enum {
     ID_SRT=2400, ID_SRT_PART=2410, ID_DD_SRT_ENEMIES=2420, ID_DD_SRT_CORNER, ID_DD_SRT_LANGUAGE, ID_SRT_SCALE, ID_SRT_OPACITY,
     ID_DD_OV_CORNER = 2450, ID_DD_OV_LAYOUT, ID_DD_SRT_INVPOS, ID_DD_SRT_WINDOW, ID_DD_SRT_BOSSBAR,
     ID_TEX_BROWSE = 2300, ID_TEX_OPEN, ID_TEX_REPLACE, ID_TEX_DUMP, ID_TEX_DUMP_BROWSE, ID_TEX_DUMP_OPEN,
+    ID_PAGE_THUMB = 2600, ID_PAGE_TRACK,
 };
 
-void hit(float x, float y, float w, float h, int id) { g.hits.push_back({ RectF(x, y, w, h), id }); }
+/* Page scrolling. A page draws in its own coordinates, as tall as it needs;
+ * paint() shifts it up by the page's scroll and clips it above the Jogar bar
+ * (PAGE_BOTTOM), so a page that grows past the window scrolls (wheel or bar)
+ * instead of running under the button. While a page draws, hit areas and the
+ * open dropdown's anchor move with it, and the lowest thing drawn sets how far
+ * the page can scroll. */
+const float PAGE_BOTTOM = H - 92.0f;
+bool  g_in_page = false;
+float g_page_dy = 0, g_page_end = 0;
+
+void hit(float x, float y, float w, float h, int id)
+{
+    if (g_in_page) {
+        g_page_end = std::max(g_page_end, y + h);
+        y -= g_page_dy;
+        const float top = std::max(y, 0.0f), bottom = std::min(y + h, PAGE_BOTTOM);
+        if (bottom <= top) return;   /* scrolled out of view */
+        h = bottom - top; y = top;
+    }
+    g.hits.push_back({ RectF(x, y, w, h), id });
+}
 
 GraphicsPath* round_rect(RectF r, float rad)
 {
@@ -649,6 +679,7 @@ GraphicsPath* round_rect(RectF r, float rad)
 void text(Graphics& gr, const std::wstring& t, float x, float y, const Font& f, const Color& c,
           StringAlignment h = StringAlignmentNear, float w = 0, float hh = 0)
 {
+    if (g_in_page) g_page_end = std::max(g_page_end, y + (hh > 0 ? hh : f.GetHeight(&gr)));
     SolidBrush b(c);
     /* Arabic reads right to left: embed each text as a right-to-left run so
      * mixed text like "(720p)" and the final full stop land where they belong. */
@@ -831,7 +862,7 @@ void dropdown(Graphics& gr, RectF r, const std::wstring& value, int id, const Fo
                       PointF(r.X + r.Width - 13, r.Y + r.Height / 2 + 3) };
     gr.FillPolygon(&ab, tri, 3);
     if (enabled) hit(r.X, r.Y, r.Width, r.Height, id);
-    if (id >= 0 && id == g.open_dd) g_dd_anchor = r;
+    if (id >= 0 && id == g.open_dd) { g_dd_anchor = r; g_dd_anchor.Y -= g_page_dy; }
 }
 
 void section(Graphics& gr, const std::wstring& t, float x, float y, float w, const Font& f)
@@ -985,6 +1016,9 @@ void save_note(Graphics& gr, const wchar_t* message, float x, float y, const Fon
     gr.DrawString(message, -1, &font, RectF(x, y, 655, 52), &sf, &brush);
 }
 
+void option_card(Graphics& gr, float x, float y, float w, float h, bool on, int id,
+                 const std::wstring& title, const std::wstring& desc, const Font& body, const Font& fsm);
+
 void draw_jogo(Graphics& gr, const Font& head, const Font& body, const Font& fsm)
 {
     float x = SIDE + 32.0f, y = 34;
@@ -1021,6 +1055,8 @@ void draw_jogo(Graphics& gr, const Font& head, const Font& body, const Font& fsm
            body, false, !g.s.saves.empty());
     button(gr,RectF(x,y+228,390,32),T(g.s.test_tools?S_TEST_ENABLED:S_TEST_ENABLE),ID_TEST_ENABLE,body);
     button(gr,RectF(x+404,y+228,260,32),T(S_TEST_OPEN),ID_TEST_OPEN,body,false,g.s.test_tools&&g.running);
+    option_card(gr,x,y+276,W-SIDE-64.0f,84,g.s.focus_pause,ID_FOCUS_PAUSE,
+                T(S_FOCUS_PAUSE_T),T(S_FOCUS_PAUSE_D),body,fsm);
     if (g.running)
         text(gr, T(S_PATHS_RESTART), x, y + 195, body, C_RED_HI,
              StringAlignmentNear, 820, 24);
@@ -1647,6 +1683,45 @@ void draw_mods(Graphics& gr, const Font& head, const Font& body, const Font& fsm
     gr.DrawString(howto.c_str(), -1, &fsm, RectF(x, y, w, 60), &sf, &hb);
 }
 
+/* The page's scroll bar, at the window's right edge, and a fade above the
+ * Jogar bar while more of the page is below. The Patches page keeps its own
+ * list scrolling and always fits. */
+void draw_page_scroll(Graphics& gr, int pi)
+{
+    const float max = pi == P_PATCHES ? 0.0f : std::max(0.0f, g_page_end + 24 - PAGE_BOTTOM);
+    g.page_scroll_max[pi] = max;
+    if (g.page_scroll[pi] > max) { g.page_scroll[pi] = max; InvalidateRect(g.hwnd, NULL, FALSE); }
+    g.page_track = g.page_thumb = RectF();
+    if (max <= 0) return;
+    const float sc = g.page_scroll[pi];
+    if (sc < max) {
+        LinearGradientBrush fade(PointF(0, PAGE_BOTTOM - 28), PointF(0, PAGE_BOTTOM + 1), Color(0, 21, 17, 17), C_BG);
+        gr.FillRectangle(&fade, (float)SIDE, PAGE_BOTTOM - 28, (float)(W - SIDE) - 14, 28.0f);
+    }
+    const float top = 8, track = PAGE_BOTTOM - 16, view = PAGE_BOTTOM;
+    const float bar = std::max(40.0f, track * view / (view + max));
+    g.page_track = RectF(W - 12.0f, top, 10.0f, track);
+    g.page_thumb = RectF(W - 12.0f, top + (track - bar) * sc / max, 10.0f, bar);
+    SolidBrush tb(Color(255, 30, 25, 25)); gr.FillRectangle(&tb, W - 9.0f, top, 4.0f, track);
+    const bool hot = g.page_drag || g.hover == ID_PAGE_THUMB;
+    SolidBrush th(hot ? C_RED : Color(255, 90, 80, 78));
+    gr.FillRectangle(&th, W - 10.0f, g.page_thumb.Y, 6.0f, bar);
+    hit(g.page_track.X, g.page_track.Y, g.page_track.Width, g.page_track.Height, ID_PAGE_TRACK);
+    hit(g.page_thumb.X, g.page_thumb.Y, g.page_thumb.Width, g.page_thumb.Height, ID_PAGE_THUMB);
+}
+
+void page_scroll_to(float v)
+{
+    const int pi = g.page;
+    v = std::clamp(v, 0.0f, g.page_scroll_max[pi]);
+    if (v != g.page_scroll[pi]) { g.page_scroll[pi] = v; g.open_dd = -1; InvalidateRect(g.hwnd, NULL, FALSE); }
+}
+void page_drag_to(int mouse_y)
+{
+    const float room = g.page_track.Height - g.page_thumb.Height;
+    if (room > 0) page_scroll_to((mouse_y - g.page_grab - g.page_track.Y) / room * g.page_scroll_max[g.page]);
+}
+
 void paint(HDC hdc)
 {
     Bitmap back(W, H, PixelFormat32bppARGB);
@@ -1664,6 +1739,10 @@ void paint(HDC hdc)
     Font fCode(&serif, 18, FontStyleBold, UnitPixel), fBig(&serif, 22, FontStyleBold, UnitPixel);
     Font fCol(&serif, 15, FontStyleBold, UnitPixel);
 
+    const int pi = g.page;
+    g_in_page = true; g_page_dy = g.page_scroll[pi]; g_page_end = 0;
+    gr.SetClip(RectF((float)SIDE, 0.0f, (float)(W - SIDE), PAGE_BOTTOM));
+    gr.TranslateTransform(0, -g_page_dy);
     if (g.page == P_INICIO) draw_inicio(gr, fHead, fBody, fCode, fSmall);
     else if (g.page == P_JOGO) draw_jogo(gr, fHead, fBody, fSmall);
     else if (g.page == P_CONTROLES) draw_controles(gr, fHead, fBody, fSmall, fCol);
@@ -1672,6 +1751,9 @@ void paint(HDC hdc)
     else if (g.page == P_MODS) draw_mods(gr, fHead, fBody, fSmall);
     else if (g.page == P_SRT) draw_srt(gr, fHead, fBody, fSmall);
     else draw_avancado(gr, fHead, fBody, fSmall);
+    gr.ResetTransform(); gr.ResetClip();
+    g_in_page = false; g_page_dy = 0;
+    draw_page_scroll(gr, pi);
     draw_sidebar(gr, fTitle, fTitle2, fNav, fSmall);
     draw_play(gr, fBig, fSmall);
 
@@ -1832,6 +1914,8 @@ void finish_srt_drag();
 void apply_live(bool restore_menu = true)
 {
     cv_test_tools_enable(g.s.test_tools);
+    cv_focus_pause_enable(g.s.focus_pause);
+    cv_focus_pause_label(T(S_PAUSED));
     if (!g.running) return;
     if (g.s.mode != g.applied_mode) {
         g.applied_mode = g.s.mode;
@@ -1970,6 +2054,7 @@ void click(int id)
     else if (id == ID_CACHE_OPEN) { std::error_code ec; fs::create_directories(cache_dir(), ec); open_in_explorer(cache_dir().wstring()); }
     else if(id==ID_TEST_ENABLE){g.s.test_tools=!g.s.test_tools;cv_test_tools_enable(g.s.test_tools);changed();}
     else if(id==ID_TEST_OPEN&&g.running)cv_test_tools_show(g.hwnd,g.s.game,g_lang);
+    else if(id==ID_FOCUS_PAUSE){g.s.focus_pause=!g.s.focus_pause;changed();}
     else if (id == ID_GAME_BROWSE) { auto p = pick(true, g.s.game, nullptr, nullptr); if (!p.empty()) { g.s.game = p; changed(); } }
     else if (id == ID_RAP_BROWSE) { auto p = pick(false, g.s.rap, T(S_RAP_FILTER), L"*.rap"); if (!p.empty()) { g.s.rap = p; changed(); } }
     else if (id == ID_SAVE_BROWSE) { auto p = pick(true, save_folder().wstring(), nullptr, nullptr); if (!p.empty()) { g.s.saves = p; changed(); } }
@@ -2105,6 +2190,7 @@ LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp)
     case WM_PAINT: { PAINTSTRUCT ps; HDC dc = BeginPaint(h, &ps); paint(dc); EndPaint(h, &ps); return 0; }
     case WM_MOUSEMOVE: {
         if(g.srt_drag>=0) {update_srt_slider(g.srt_drag,GET_X_LPARAM(lp));SetCursor(LoadCursor(NULL,IDC_HAND));return 0;}
+        if (g.page_drag) { page_drag_to(GET_Y_LPARAM(lp)); return 0; }
         int id = hit_at(GET_X_LPARAM(lp), GET_Y_LPARAM(lp));
         if (id != g.hover) { g.hover = id; InvalidateRect(h, NULL, FALSE); }
         SetCursor(LoadCursor(NULL, id >= 0 ? IDC_HAND : IDC_ARROW));
@@ -2128,6 +2214,8 @@ LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp)
         } else if (g.page == P_PATCHES && g.patch_scroll_max > 0) {
             g.patch_scroll += GET_WHEEL_DELTA_WPARAM(wp) > 0 ? -60.0f : 60.0f;
             InvalidateRect(h, NULL, FALSE);
+        } else if (g.page_scroll_max[g.page] > 0) {
+            page_scroll_to(g.page_scroll[g.page] + (GET_WHEEL_DELTA_WPARAM(wp) > 0 ? -60.0f : 60.0f));
         }
         return 0;
     case WM_MOUSELEAVE: g.hover = -1; InvalidateRect(h, NULL, FALSE); return 0;
@@ -2138,11 +2226,21 @@ LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp)
             g.srt_drag=id;g.srt_drag_dirty=false;SetCapture(h);
             update_srt_slider(id,GET_X_LPARAM(lp));InvalidateRect(h,NULL,FALSE);return 0;
         }
+        if (id == ID_PAGE_THUMB) {
+            g.page_drag = true; g.page_grab = GET_Y_LPARAM(lp) - g.page_thumb.Y; SetCapture(h);
+            InvalidateRect(h, NULL, FALSE); return 0;
+        }
+        if (id == ID_PAGE_TRACK) {   /* a page up or down, towards the click */
+            const float step = PAGE_BOTTOM - 80;
+            page_scroll_to(g.page_scroll[g.page] + (GET_Y_LPARAM(lp) < g.page_thumb.Y ? -step : step));
+            return 0;
+        }
         click(id);return 0;
     }
     case WM_LBUTTONUP:
+        if (g.page_drag) { g.page_drag = false; ReleaseCapture(); InvalidateRect(h, NULL, FALSE); return 0; }
         if(g.srt_drag>=0) {update_srt_slider(g.srt_drag,GET_X_LPARAM(lp));finish_srt_drag();return 0;}break;
-    case WM_CAPTURECHANGED: case WM_CANCELMODE: finish_srt_drag();return 0;
+    case WM_CAPTURECHANGED: case WM_CANCELMODE: g.page_drag = false; finish_srt_drag();return 0;
     case WM_KEYDOWN: case WM_SYSKEYDOWN:
         if (g.cap == CAP_KEY) {
             if (wp == VK_ESCAPE) { g.cap = CAP_NONE; InvalidateRect(h, NULL, FALSE); return 0; }
@@ -2438,6 +2536,8 @@ void start_game()
     for (int i = 0; i < NPATCHES; i++)
         if (s.patch[i]) pl += (pl.empty() ? "" : ",") + std::string(k_patches[i].id);
     set_env("PS3_PATCHES", pl);
+    cv_focus_pause_enable(s.focus_pause);   /* also when nothing changed before Jogar */
+    cv_focus_pause_label(T(S_PAUSED));
     set_map_env();
     set_overlay_env();
     set_env("PSO_LIBRARY", s.shader_opt[0] ? "1" : "0");

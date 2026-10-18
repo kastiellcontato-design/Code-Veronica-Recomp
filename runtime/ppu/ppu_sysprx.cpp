@@ -61,13 +61,16 @@ static void sys_initialize_tls(ppu_context* ctx)
  * lands here) paced the intro at ~1/10th speed: video decoded at <1 fps,
  * the audio preload threshold took forever to fill (movie stayed silent),
  * and every frontend animation timed off it crawled. */
+#ifdef _WIN32
+extern "C" int64_t ps3_guest_qpc(void);   /* sys_timer.h: stands still while a pause holds it */
+#endif
 static void sys_time_get_system_time(ppu_context* ctx)
 {
 #ifdef _WIN32
     static LARGE_INTEGER s_freq, s_base;
-    if (!s_freq.QuadPart) { QueryPerformanceFrequency(&s_freq); QueryPerformanceCounter(&s_base); }
-    LARGE_INTEGER now; QueryPerformanceCounter(&now);
-    ctx->gpr[3] = (uint64_t)((now.QuadPart - s_base.QuadPart) * 1000000ull / (uint64_t)s_freq.QuadPart);
+    if (!s_freq.QuadPart) { QueryPerformanceFrequency(&s_freq); s_base.QuadPart = ps3_guest_qpc(); }
+    const int64_t now = ps3_guest_qpc();
+    ctx->gpr[3] = (uint64_t)((now - s_base.QuadPart) * 1000000ull / (uint64_t)s_freq.QuadPart);
 #else
     struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
     ctx->gpr[3] = (uint64_t)ts.tv_sec * 1000000ull + (uint64_t)ts.tv_nsec / 1000ull;

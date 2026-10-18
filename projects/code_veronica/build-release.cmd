@@ -125,6 +125,12 @@ if "%CV_MAP_TESTS%"=="1" (
  )
 )
 
+rem Pause on focus loss: the decision logic, no game or window needed.
+if "%CV_FOCUS_PAUSE_TESTS%"=="1" (
+ cmake --build build-release --target code_veronica_focus_pause_tests -j 6 || exit /b 1
+ build-release\bin\code_veronica_focus_pause_tests.exe || exit /b 1
+)
+
 rem Optional visual preview of the shared keyboard icon artwork.
 if "%CV_KEYCAP_PREVIEW%"=="1" (
  cmake --build build-release --target code_veronica_keycap_preview -j 6 || exit /b 1

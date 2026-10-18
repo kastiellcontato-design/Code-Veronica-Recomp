@@ -58,6 +58,9 @@
 #include <io.h>        /* _dup2: the log redirect of a double-clicked start */
 #endif
 
+#ifdef _WIN32
+extern "C" int cv_focus_pause_poll(void);   /* cv_focus_pause.cpp */
+#endif
 extern "C" void pad_phys_rumble_off(void);   /* libs/input/pad_phys.c */
 
 /* ---------------------------------------------------------------------------
@@ -265,8 +268,20 @@ static DWORD WINAPI frame_clock(LPVOID)
         }
         const double now = (double)now_us();
 
+        /* Paused (the window lost focus, cv_focus_pause.cpp): no vblank or
+         * flip, the guest clock held. The FIFO drain and the window pump
+         * below go on, so the frame in flight completes and a click on the
+         * game window is seen. On resume the clock restarts from now, not
+         * with a burst of the ticks the pause skipped. */
+#ifdef _WIN32
+        const bool paused = cv_focus_pause_poll() != 0;
+#else
+        const bool paused = false;
+#endif
+        if (paused) next_tick = now;
+
         int fired = 0;
-        while (now >= next_tick && fired < 240) {
+        while (!paused && now >= next_tick && fired < 240) {
             ps3_tl_begin(11);
             cellGcmTickVBlank();
             cellGcmTickFlip();

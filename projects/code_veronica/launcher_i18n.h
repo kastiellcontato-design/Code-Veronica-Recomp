@@ -70,6 +70,7 @@ enum StrId {
     S_ANISO,
     S_SHARPNESS,
     S_PATCH_CUSTOM_T, S_PATCH_CUSTOM_D,
+    S_FOCUS_PAUSE_T, S_FOCUS_PAUSE_D, S_PAUSED,
     S_COUNT
 };
 
@@ -244,6 +245,9 @@ static const wchar_t* const k_str_pt[] = {
     L"Nitidez (FSR 1 RCAS)",
     L"PATCHES PERSONALIZADOS",
     L"Patches que não vêm com o port: feitos por você ou baixados de outras pessoas, no formato do RPCS3 (arquivos .yml, como o patch.yml). Escolha a pasta onde eles estão; cada um aparece abaixo com a sua chave.",
+    L"Pausar quando a janela perde o foco",
+    L"Ao clicar fora do jogo (outra janela, área de trabalho, Alt+Tab ou minimizar), o jogo pausa sozinho e volta ao clicar nele. O menu de opções, os mapas (F7) e o SRT não pausam.",
+    L"Pausado",
 };
 static_assert(sizeof k_str_pt / sizeof k_str_pt[0] == S_COUNT, "k_str_pt: one text per StrId");
 
@@ -418,6 +422,9 @@ static const wchar_t* const k_str_en[] = {
     L"Sharpness (FSR 1 RCAS)",
     L"CUSTOM PATCHES",
     L"Patches that don't ship with the port: made by you or downloaded from others, in RPCS3's format (.yml files such as patch.yml). Pick the folder they are in; each one shows up below with its own switch.",
+    L"Pause when the window loses focus",
+    L"Clicking outside the game (another window, the desktop, Alt+Tab or minimizing) pauses it, and clicking back on it resumes. The options menu, the maps (F7) and the SRT don't pause it.",
+    L"Paused",
 };
 static_assert(sizeof k_str_en / sizeof k_str_en[0] == S_COUNT, "k_str_en: one text per StrId");
 
@@ -592,6 +599,9 @@ static const wchar_t* const k_str_es[] = {
     L"Nitidez (FSR 1 RCAS)",
     L"PARCHES PERSONALIZADOS",
     L"Parches que no vienen con el port: hechos por ti o descargados de otras personas, en el formato de RPCS3 (archivos .yml, como patch.yml). Elige la carpeta donde están; cada uno aparece abajo con su interruptor.",
+    L"Pausar al perder el foco de la ventana",
+    L"Al hacer clic fuera del juego (otra ventana, el escritorio, Alt+Tab o minimizar), el juego se pausa solo y continúa al volver a él. El menú de opciones, los mapas (F7) y el SRT no lo pausan.",
+    L"En pausa",
 };
 static_assert(sizeof k_str_es / sizeof k_str_es[0] == S_COUNT, "k_str_es: one text per StrId");
 
@@ -766,6 +776,9 @@ static const wchar_t* const k_str_ja[] = {
     L"シャープネス (FSR 1 RCAS)",
     L"カスタムパッチ",
     L"ポートに含まれないパッチです。自作のものや他の人が作ったものを RPCS3 形式 (.yml ファイル、patch.yml など) で使えます。ファイルのあるフォルダーを選ぶと、各パッチが下にスイッチ付きで表示されます。",
+    L"ウィンドウが非アクティブになったら一時停止",
+    L"ゲーム以外の場所 (別のウィンドウ、デスクトップ、Alt+Tab、最小化) をクリックすると自動で一時停止し、ゲームに戻ると再開します。オプションメニュー、マップ (F7)、SRT では一時停止しません。",
+    L"一時停止中",
 };
 static_assert(sizeof k_str_ja / sizeof k_str_ja[0] == S_COUNT, "k_str_ja: one text per StrId");
 
@@ -994,6 +1007,9 @@ static const wchar_t* const k_str_fr[] = {
     L"Netteté (FSR 1 RCAS)",
     L"PATCHS PERSONNALISÉS",
     L"Patchs qui ne sont pas fournis avec le port : faits par vous ou récupérés auprès d'autres personnes, au format de RPCS3 (fichiers .yml, comme patch.yml). Choisissez leur dossier ; chacun apparaît ci-dessous avec son interrupteur.",
+    L"Pause quand la fenêtre perd le focus",
+    L"Cliquer hors du jeu (autre fenêtre, bureau, Alt+Tab ou réduction) le met en pause ; il reprend quand vous y revenez. Le menu des options, les cartes (F7) et le SRT ne le mettent pas en pause.",
+    L"En pause",
 };
 static_assert(sizeof k_str_fr / sizeof k_str_fr[0] == S_COUNT, "k_str_fr: one text per StrId");
 
@@ -1222,6 +1238,9 @@ static const wchar_t* const k_str_de[] = {
     L"Schärfe (FSR 1 RCAS)",
     L"EIGENE PATCHES",
     L"Patches, die nicht zum Port gehören: selbst erstellt oder von anderen heruntergeladen, im Format von RPCS3 (.yml-Dateien wie patch.yml). Wähle ihren Ordner; jeder erscheint unten mit eigenem Schalter.",
+    L"Pausieren, wenn das Fenster den Fokus verliert",
+    L"Ein Klick außerhalb des Spiels (anderes Fenster, Desktop, Alt+Tab oder Minimieren) pausiert es; zurück im Spiel geht es weiter. Optionsmenü, Karten (F7) und SRT pausieren nicht.",
+    L"Pausiert",
 };
 static_assert(sizeof k_str_de / sizeof k_str_de[0] == S_COUNT, "k_str_de: one text per StrId");
 
@@ -1450,6 +1469,9 @@ static const wchar_t* const k_str_it[] = {
     L"Nitidezza (FSR 1 RCAS)",
     L"PATCH PERSONALIZZATE",
     L"Patch che non sono incluse nel port: create da te o scaricate da altri, nel formato di RPCS3 (file .yml, come patch.yml). Scegli la cartella in cui si trovano; ognuna compare qui sotto con il suo interruttore.",
+    L"Pausa quando la finestra perde il focus",
+    L"Facendo clic fuori dal gioco (un'altra finestra, il desktop, Alt+Tab o riducendo a icona) il gioco va in pausa e riprende quando ci torni. Il menu delle opzioni, le mappe (F7) e l'SRT non lo mettono in pausa.",
+    L"In pausa",
 };
 static_assert(sizeof k_str_it / sizeof k_str_it[0] == S_COUNT, "k_str_it: one text per StrId");
 
@@ -1678,6 +1700,9 @@ static const wchar_t* const k_str_pl[] = {
     L"Ostrość (FSR 1 RCAS)",
     L"WŁASNE ŁATKI",
     L"Łatki spoza portu: zrobione przez ciebie lub pobrane od innych, w formacie RPCS3 (pliki .yml, np. patch.yml). Wybierz folder, w którym się znajdują; każda pojawi się poniżej z własnym przełącznikiem.",
+    L"Wstrzymaj, gdy okno straci fokus",
+    L"Kliknięcie poza grą (inne okno, pulpit, Alt+Tab lub minimalizacja) wstrzymuje ją, a powrót do gry ją wznawia. Menu opcji, mapy (F7) i SRT jej nie wstrzymują.",
+    L"Wstrzymano",
 };
 static_assert(sizeof k_str_pl / sizeof k_str_pl[0] == S_COUNT, "k_str_pl: one text per StrId");
 
@@ -1906,6 +1931,9 @@ static const wchar_t* const k_str_tr[] = {
     L"Keskinlik (FSR 1 RCAS)",
     L"ÖZEL YAMALAR",
     L"Portla gelmeyen yamalar: kendi yaptığın ya da başkalarından indirdiğin, RPCS3 biçiminde (.yml dosyaları, örneğin patch.yml). Bulundukları klasörü seç; her biri aşağıda kendi anahtarıyla görünür.",
+    L"Pencere odağı kaybedince duraklat",
+    L"Oyunun dışına tıklamak (başka bir pencere, masaüstü, Alt+Tab veya simge durumuna küçültme) oyunu duraklatır; oyuna dönünce devam eder. Seçenekler menüsü, haritalar (F7) ve SRT duraklatmaz.",
+    L"Duraklatıldı",
 };
 static_assert(sizeof k_str_tr / sizeof k_str_tr[0] == S_COUNT, "k_str_tr: one text per StrId");
 
@@ -2134,6 +2162,9 @@ static const wchar_t* const k_str_ar[] = {
     L"الحدّة (FSR 1 RCAS)",
     L"تصحيحات مخصصة",
     L"تصحيحات لا تأتي مع المنفذ: من صنعك أو منزّلة من آخرين، بصيغة RPCS3 (ملفات .yml مثل patch.yml). اختر المجلد الذي توجد فيه؛ يظهر كل تصحيح أدناه بمفتاح خاص به.",
+    L"إيقاف مؤقت عند فقدان النافذة للتركيز",
+    L"النقر خارج اللعبة (نافذة أخرى أو سطح المكتب أو Alt+Tab أو التصغير) يوقفها مؤقتًا، وتُستأنف عند العودة إليها. قائمة الخيارات والخرائط (F7) وSRT لا توقفها.",
+    L"متوقف مؤقتًا",
 };
 static_assert(sizeof k_str_ar / sizeof k_str_ar[0] == S_COUNT, "k_str_ar: one text per StrId");
 
@@ -2362,6 +2393,9 @@ static const wchar_t* const k_str_zh[] = {
     L"锐化 (FSR 1 RCAS)",
     L"自定义补丁",
     L"不随移植版附带的补丁：可以是你自己制作的，也可以是从别人那里下载的，格式为 RPCS3 的 .yml 文件（例如 patch.yml）。选择它们所在的文件夹，每个补丁都会在下方显示并带有开关。",
+    L"窗口失去焦点时暂停",
+    L"点击游戏以外的地方（其他窗口、桌面、Alt+Tab 或最小化）时游戏自动暂停，回到游戏后继续。选项菜单、地图 (F7) 和 SRT 不会暂停游戏。",
+    L"已暂停",
 };
 static_assert(sizeof k_str_zh / sizeof k_str_zh[0] == S_COUNT, "k_str_zh: one text per StrId");
 
@@ -2590,6 +2624,9 @@ static const wchar_t* const k_str_ko[] = {
     L"선명도 (FSR 1 RCAS)",
     L"사용자 패치",
     L"포트에 포함되지 않은 패치입니다. 직접 만들거나 다른 사람에게서 받은 RPCS3 형식의 패치(.yml 파일, 예: patch.yml)를 쓸 수 있습니다. 파일이 있는 폴더를 고르면 각 패치가 아래에 스위치와 함께 표시됩니다.",
+    L"창이 포커스를 잃으면 일시정지",
+    L"게임 밖을 클릭하면(다른 창, 바탕 화면, Alt+Tab, 최소화) 자동으로 일시정지되고, 게임으로 돌아오면 다시 진행됩니다. 옵션 메뉴, 지도(F7), SRT는 일시정지하지 않습니다.",
+    L"일시정지됨",
 };
 static_assert(sizeof k_str_ko / sizeof k_str_ko[0] == S_COUNT, "k_str_ko: one text per StrId");
 
@@ -2818,6 +2855,9 @@ static const wchar_t* const k_str_ru[] = {
     L"Резкость (FSR 1 RCAS)",
     L"СВОИ ПАТЧИ",
     L"Патчи, которых нет в порте: сделанные вами или скачанные у других, в формате RPCS3 (файлы .yml, например patch.yml). Выберите папку с ними; каждый появится ниже со своим переключателем.",
+    L"Пауза, когда окно теряет фокус",
+    L"Щелчок вне игры (другое окно, рабочий стол, Alt+Tab или сворачивание) ставит её на паузу, а возврат в игру снимает её. Меню настроек, карты (F7) и SRT паузу не ставят.",
+    L"Пауза",
 };
 static_assert(sizeof k_str_ru / sizeof k_str_ru[0] == S_COUNT, "k_str_ru: one text per StrId");
 

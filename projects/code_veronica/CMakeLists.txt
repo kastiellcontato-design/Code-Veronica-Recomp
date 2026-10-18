@@ -264,7 +264,7 @@ endif()
 # title's own artwork and are not in the repository; without them the launcher
 # draws a plain banner and the exe keeps the default icon.
 if(WIN32)
-    target_sources(${PROJECT_NAME} PRIVATE native_pc_menu.cpp boot_skip.cpp cv_test_tools.cpp cv_native_libc.cpp)
+    target_sources(${PROJECT_NAME} PRIVATE native_pc_menu.cpp boot_skip.cpp cv_test_tools.cpp cv_native_libc.cpp cv_focus_pause.cpp)
     file(GLOB LAUNCHER_ART CONFIGURE_DEPENDS
          "${CMAKE_CURRENT_SOURCE_DIR}/launcher_art/*.png"
          "${CMAKE_CURRENT_SOURCE_DIR}/launcher_art/*.jpg")
@@ -487,6 +487,16 @@ if(WIN32)
         target_compile_definitions(code_veronica_map_tests PRIVATE CV_REGION_US=1)
         set_target_properties(code_veronica_map_tests PROPERTIES OUTPUT_NAME "code_veronica_map_tests_us")
     endif()
+endif()
+
+# Pause on focus loss: the decision (which windows count as the game's focus,
+# entering and leaving the pause, the option off). No window or game needed.
+add_executable(code_veronica_focus_pause_tests EXCLUDE_FROM_ALL tests/test_focus_pause.cpp)
+target_include_directories(code_veronica_focus_pause_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+if(MSVC)
+    target_compile_options(code_veronica_focus_pause_tests PRIVATE /UNDEBUG)
+else()
+    target_compile_options(code_veronica_focus_pause_tests PRIVATE -UNDEBUG)
 endif()
 
 # Visual contact sheet using the exact keyboard renderer shipped by the game.
