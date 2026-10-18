@@ -440,3 +440,10 @@ Continuação do trabalho do GPT (fotos, munição do equipado, 13 idiomas).
 - O atlas consultado e o original da instalacao local JP; o mod nao e empacotado.
 
 Validacao da alabarda: build-release.cmd concluiu EU/JP/US com CV_SRT_TESTS=1; testes PASS nas tres regioes. A integracao leu o atlas original JP (jpn) e extraiu o ID 0x51 com a celula corrigida. Executaveis atualizados para teste pelo usuario.
+
+### Ordem da janela separada do SRT (2026-10-18)
+- A janela separada passa a ter a janela do jogo do mesmo processo como proprietaria, mantendo-se acima dela ao alternar foco e modo de exibicao. Outra instancia/regiao nao pode ser escolhida como proprietaria.
+- Ao atualizar o painel, verifica a ordem quando o jogo esta em primeiro plano e restaura TOPMOST somente se necessario, sem ativar o SRT nem tirar o foco dos controles.
+- Mantidos o arraste, a posicao salva, APPWINDOW para captura no OBS e a renderizacao do painel. A janela acompanha a minimizacao do jogo.
+- Validacao interativa: usuario confirmou que a sobreposicao do SRT funcionou no jogo.
+- Validacao: script oficial concluido com EU/JP/US recompilados e CV_SRT_TESTS=1; testes do SRT aprovados nas tres regioes. Sobreposicao em gameplay confirmada pelo usuario.

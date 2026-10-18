@@ -699,6 +699,31 @@ constexpr UINT WM_SRT_SHOW=WM_APP+1,WM_SRT_HIDE=WM_APP+2;
 SRWLOCK lock=SRWLOCK_INIT;
 std::vector<uint32_t> shared;int shared_w=0,shared_h=0;   // under lock
 HWND hwnd=nullptr;volatile LONG started=0;
+// Find only this process's game window: another running region must not own us.
+HWND game_window() {
+    HWND found=nullptr;
+    EnumWindows([](HWND w,LPARAM data)->BOOL {
+        DWORD pid=0;GetWindowThreadProcessId(w,&pid);
+        if(pid!=GetCurrentProcessId())return TRUE;
+        wchar_t name[64]{};GetClassNameW(w,name,64);
+        if(wcscmp(name,L"ps3recomp_d3d12"))return TRUE;
+        *reinterpret_cast<HWND*>(data)=w;return FALSE;
+    },reinterpret_cast<LPARAM>(&found));
+    return found;
+}
+void keep_above_game() {
+    const HWND game=game_window();if(!game)return;
+    // An owned top-level window stays above its owner when the game is raised
+    // or switches between windowed/fullscreen. APPWINDOW keeps OBS discovery.
+    if(GetWindow(hwnd,GW_OWNER)!=game)
+        SetWindowLongPtrW(hwnd,GWLP_HWNDPARENT,reinterpret_cast<LONG_PTR>(game));
+    if(GetForegroundWindow()!=game||IsIconic(game))return;
+    if(GetWindowLongPtrW(hwnd,GWL_EXSTYLE)&WS_EX_TOPMOST) {
+        for(HWND above=GetWindow(game,GW_HWNDPREV);above;above=GetWindow(above,GW_HWNDPREV))
+            if(above==hwnd)return; // already in the right order; do not reorder every frame
+    }
+    SetWindowPos(hwnd,HWND_TOPMOST,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE);
+}
 // The panel's border also turns off the thin rim Windows 11 draws around
 // the window; applied by the window's thread when it changes.
 volatile bool border=true;int border_shown=-1;
@@ -730,7 +755,7 @@ POINT initial_position() {
         if(MonitorFromPoint(POINT{p.x+20,p.y+20},MONITOR_DEFAULTTONULL))return p;   // still on a monitor
     }
     // First time: just right of the game window, or its top-left corner.
-    RECT g;HWND game=FindWindowW(L"ps3recomp_d3d12",nullptr);
+    RECT g;HWND game=game_window();
     if(game&&GetWindowRect(game,&g)) {
         HMONITOR m=MonitorFromWindow(game,MONITOR_DEFAULTTONEAREST);MONITORINFO mi{sizeof mi};GetMonitorInfoW(m,&mi);
         if(g.right+340<=mi.rcWork.right)return POINT{g.right+8,g.top};
@@ -754,6 +779,7 @@ void show() {
         SelectObject(mem,old);DeleteObject(dib);
     }
     DeleteDC(mem);ReleaseDC(nullptr,screen);
+    keep_above_game();
     if(!IsWindowVisible(hwnd))ShowWindow(hwnd,SW_SHOWNOACTIVATE);
 }
 // Dragged by hand (button down anywhere, move, release): the system move
@@ -786,7 +812,7 @@ DWORD WINAPI thread(LPVOID) {
     // A normal top-level window (in the taskbar), so OBS's window capture
     // lists it as "SRT · Code: Veronica".
     hwnd=CreateWindowExW(WS_EX_LAYERED|WS_EX_TOPMOST|WS_EX_APPWINDOW|WS_EX_NOACTIVATE,L"cv_srt_window",L"SRT · Code: Veronica",
-                         WS_POPUP,p.x,p.y,16,16,nullptr,nullptr,wc.hInstance,nullptr);
+                         WS_POPUP,p.x,p.y,16,16,game_window(),nullptr,wc.hInstance,nullptr);
     MSG m;while(GetMessageW(&m,nullptr,0,0)>0) {TranslateMessage(&m);DispatchMessageW(&m);}
     return 0;
 }
