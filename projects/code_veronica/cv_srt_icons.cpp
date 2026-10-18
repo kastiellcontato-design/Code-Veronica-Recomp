@@ -1,8 +1,10 @@
 #include "cv_srt_icons.h"
+#include "cv_srt_ring_mask.h"
 #include "../../libs/filesystem/edat.h"
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <deque>
 #include <filesystem>
 
 namespace cv_srt_icons {
@@ -98,17 +100,54 @@ std::vector<uint32_t> decode_atlas(const std::vector<uint8_t>& archive,int page)
     }
     return {};
 }
-Icon extract(const std::vector<uint32_t>& atlas,const Sprite& rect) {
+Icon extract(const std::vector<uint32_t>& atlas,const Sprite& rect,int id) {
     if(atlas.size()!=atlas_pixels||rect.x<0||rect.y<0||rect.w<=0||rect.h<=0||rect.x+rect.w>768||rect.y+rect.h>768)return {};
     std::vector<uint32_t> pixels(size_t(rect.w)*rect.h);
     int left=rect.w,top=rect.h,right=0,bottom=0;
+    const auto is_key=[](uint32_t color) {
+        const unsigned r=(color>>16)&255,g=(color>>8)&255,b=color&255;
+        return r<=24&&g<=16&&b>=32&&b<=112&&b>=r+24&&b>=g+24;
+    };
+    const bool keep_enclosed_key=id==0x2e; // Alfred's Jewel contains key-coloured pixels inside its outline.
+    std::vector<uint8_t> exterior(size_t(rect.w)*rect.h,0);
+    std::deque<size_t> queue;
+    if(keep_enclosed_key) {
+        for(int x=0;x<rect.w;x++) {
+            if(is_key(atlas[rect.y*768+rect.x+x]))queue.push_back(size_t(x));
+            const size_t i=size_t(rect.h-1)*rect.w+x;
+            if(is_key(atlas[(rect.y+rect.h-1)*768+rect.x+x]))queue.push_back(i);
+        }
+        for(int y=0;y<rect.h;y++) {
+            if(is_key(atlas[(rect.y+y)*768+rect.x]))queue.push_back(size_t(y)*rect.w);
+            const size_t i=size_t(y)*rect.w+rect.w-1;
+            if(is_key(atlas[(rect.y+y)*768+rect.x+rect.w-1]))queue.push_back(i);
+        }
+        while(!queue.empty()) {
+            const size_t i=queue.front();queue.pop_front();
+            if(exterior[i])continue;
+            const int x=int(i%rect.w),y=int(i/rect.w);
+            const uint32_t color=atlas[(rect.y+y)*768+rect.x+x];
+            if(!is_key(color))continue;
+            exterior[i]=1;
+            if(x>0)queue.push_back(i-1);if(x+1<rect.w)queue.push_back(i+1);
+            if(y>0)queue.push_back(i-rect.w);if(y+1<rect.h)queue.push_back(i+rect.w);
+        }
+    }
+    const bool remove_divider=id==0x46||id==0x4d||id==0x54||id==0x5b||id==0x62||id==0x69||id==0x70||id==0x77||id==0x7e||id==0x91;
     for(int y=0;y<rect.h;y++)for(int x=0;x<rect.w;x++) {
         uint32_t color=atlas[(rect.y+y)*768+rect.x+x];
-        const unsigned r=(color>>16)&255,g=(color>>8)&255,b=color&255;
         // DXT1 stores the blue key as several nearby colours. Only the dark,
         // almost zero-red/green key range is removed; cyan herbs and blue gems
-        // retain their colour. Transparent holes are keyed too, not just edges.
-        if(r<=24&&g<=16&&b>=32&&b<=112&&b>=r+24&&b>=g+24)color=0;
+        // retain their colour. Alfred's Jewel keeps enclosed key-colored pixels
+        // so the center of the jewel does not become transparent.
+        if(id==0x2d) {
+            unsigned alpha=0;
+            if(x>=ring_mask_x&&x<ring_mask_x+ring_mask_w&&y>=ring_mask_y&&y<ring_mask_y+ring_mask_h)
+                alpha=ring_mask[y-ring_mask_y][x-ring_mask_x];
+            color=(color&0x00ffffffu)|(alpha<<24);
+        } else if(is_key(color)&&(!keep_enclosed_key||exterior[size_t(y)*rect.w+x]))color=0;
+        // These cells include the atlas's one-pixel black separator at x=101.
+        if(remove_divider&&x==rect.w-1)color=0;
         pixels[size_t(y)*rect.w+x]=color;
         if(color>>24) {left=std::min(left,x);top=std::min(top,y);right=std::max(right,x+1);bottom=std::max(bottom,y+1);}
     }
@@ -135,7 +174,7 @@ bool Library::load(const std::wstring& root) {
 const Icon* Library::get(int id) {
     if(id<=0||id>=int(icons_.size()))return nullptr;
     auto& icon=icons_[id];
-    if(icon.argb.empty()) {Sprite rect;if(!sprite(id,rect))return nullptr;icon=extract(atlas_[rect.page],rect);}
+    if(icon.argb.empty()) {Sprite rect;if(!sprite(id,rect))return nullptr;icon=extract(atlas_[rect.page],rect,id);}
     return icon.argb.empty()?nullptr:&icon;
 }
 }

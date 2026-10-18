@@ -285,13 +285,19 @@ void draw(Graphics& g,View& v,const std::wstring& game) {
     p.text(std::wstring(t(v,tx::SUBTITLE))+L"  ·  "+t(v,tx::PAUSED),RectF(LX,54,520,20),14,C_DIM);
     if(inv.valid) {
         if(Bitmap* face=portrait(inv.character)) {
-            RectF r(W-32-50,18,50,50);p.panel(r,C_FIELD,C_RED,4,1.5f);
+            RectF r(W-32-24-6-50,18,50,50);p.panel(r,C_FIELD,C_RED,4,1.5f);
             g.DrawImage(face,RectF(r.X+2,r.Y+2,r.Width-4,r.Height-4));
         }
-        p.text(character_name(inv.character),RectF(W-32-60-330,20,330,24),18,C_TEXT,true,StringAlignmentFar,StringAlignmentNear,false,true);
+        p.text(character_name(inv.character),RectF(W-32-88-300,20,300,24),18,C_TEXT,true,StringAlignmentFar,StringAlignmentNear,false,true);
         wchar_t spaces[64];swprintf(spaces,64,t(v,tx::SPACES_FMT),inv.used(),inv.capacity);
-        p.text(spaces,RectF(W-32-60-330,46,330,20),13,C_DIM,false,StringAlignmentFar);
+        p.text(spaces,RectF(W-32-88-300,46,300,20),13,C_DIM,false,StringAlignmentFar);
     } else p.text(t(v,tx::WAITING),RectF(W-32-400,30,400,24),15,C_DIM,false,StringAlignmentFar);
+    {
+        const RectF r(W-32-24,31,24,24);
+        p.panel(r,C_SELECT,C_RED_HI,12,1.5f);
+        p.text(L"×",r,19,C_TEXT,true,StringAlignmentCenter,StringAlignmentCenter);
+        p.hit(r,HIT_CLOSE,0);
+    }
     p.box(RectF(LX,80,W-2*LX,1),C_LINE);
 
     // Categories.
@@ -427,6 +433,7 @@ void click(int x,int y) {
     for(const auto& hit:view.hits) {
         if(!hit.rect.Contains(px,py))continue;
         switch(hit.kind) {
+        case HIT_CLOSE:cv_item_menu_close();return;
         case HIT_TAB:view.category=hit.value;view.selected=0;view.scroll=0;view.focus=0;break;
         case HIT_ITEM:if(view.selected==hit.value&&view.focus==0)apply(view,CONFIRM);else{view.selected=hit.value;view.focus=0;}break;
         case HIT_SLOT:if(view.focus==1){const auto l=targets(view);if(std::find(l.begin(),l.end(),hit.value)!=l.end())view.target=hit.value;

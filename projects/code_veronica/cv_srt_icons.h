@@ -12,7 +12,7 @@ struct Icon { int width=0,height=0;std::vector<uint32_t> argb; };
 bool sprite(int id,Sprite& out);
 std::vector<uint8_t> unpack_archive(const std::vector<uint8_t>& file);
 std::vector<uint32_t> decode_atlas(const std::vector<uint8_t>& archive,int page);
-Icon extract(const std::vector<uint32_t>& atlas,const Sprite& rect);
+Icon extract(const std::vector<uint32_t>& atlas,const Sprite& rect,int id=0);
 class Library {
     bool attempted_=false;
     std::wstring root_;

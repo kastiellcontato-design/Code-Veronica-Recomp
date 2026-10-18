@@ -274,6 +274,9 @@ static void previews(const char* folder,const char* game_path) {
     begin(0);fill(0,{0x00370001,0x00090010,0x00080000,0x000C001E,0x00150001,0x001F0002,0x00430001},2);
     View v;v.language=0;refresh(v,read());apply(v,DOWN);
     export_png(file("pt-grid"),v,game,1120,700);
+    const auto close=std::find_if(v.hits.begin(),v.hits.end(),[](const Hit& hit){return hit.kind==HIT_CLOSE;});
+    assert(close!=v.hits.end());
+    assert(close->rect.X==float(W-32-24)&&close->rect.Y==31&&close->rect.Width==24&&close->rect.Height==24);
     apply(v,CONFIRM);apply(v,RIGHT);apply(v,RIGHT);apply(v,RIGHT);
     export_png(file("pt-panel"),v,game,1680,1050);
     apply(v,DOWN);apply(v,RIGHT);apply(v,RIGHT);

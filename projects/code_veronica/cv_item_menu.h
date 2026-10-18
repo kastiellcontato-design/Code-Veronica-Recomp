@@ -17,7 +17,7 @@ namespace cv_item_menu {
 constexpr int W=1120,H=700;   // design units, scaled to the window
 enum Action { UP, DOWN, LEFT, RIGHT, PREV, NEXT, CONFIRM, BACK, REMOVE };
 struct Hit { Gdiplus::RectF rect; int kind, value; };
-enum HitKind { HIT_TAB, HIT_ITEM, HIT_SLOT, HIT_QTY_MINUS, HIT_QTY_PLUS, HIT_TARGET_PREV, HIT_TARGET_NEXT, HIT_PLACE };
+enum HitKind { HIT_TAB, HIT_ITEM, HIT_SLOT, HIT_QTY_MINUS, HIT_QTY_PLUS, HIT_TARGET_PREV, HIT_TARGET_NEXT, HIT_PLACE, HIT_CLOSE };
 enum Tone { NEUTRAL, GOOD, WARN, BAD };
 struct View {
     cv_items::Inventory inventory;

@@ -462,27 +462,29 @@ std::wstring item(int id,Language lang) {
     }
 }
 std::wstring enemy(int id,Language lang) {
-    if(lang==PT||lang==EN) {
-        const bool pt=lang==PT;
-        switch(id) {
-        case 1:return pt?L"Zumbi":L"Zombie";case 3:return pt?L"Aranha":L"Black Widow";
-        case 4:return pt?L"Cão zumbi":L"Zombie Dog";case 6:return pt?L"Mariposa":L"Moth";
-        case 7:return pt?L"Morcego":L"Bat";case 17:return pt?L"Steve mutante":L"Mutated Steve";
-        case 23:return L"Giant Black Widow";case 26:return pt?L"Zumbi anatomista":L"Anatomist Zombie";
-        case 29:return pt?L"Tentáculo":L"Tentacle";
-        }
-    } else {
-        switch(id) {
-        case 1:return tr(Zombie,lang);case 3:return tr(Spider,lang);case 4:return tr(ZombieDog,lang);
-        case 6:return tr(Moth,lang);case 7:return tr(Bat,lang);case 17:return tr(MutatedSteve,lang);
-        case 23:return tr(GiantSpider,lang);case 26:return tr(Anatomist,lang);case 29:return tr(Tentacle,lang);
-        }
-    }
+    // Proper names/designations remain identical in every SRT language.
     switch(id) {
-    case 2:return L"Gulp Worm";case 5:return L"Hunter";case 9:return L"Bandersnatch";
+    case 5:return L"Hunter";case 9:return L"Bandersnatch";
     case 12:return L"Alexia Ashford";case 13:return L"Alexia — II";case 14:return L"Alexia — III";
-    case 15:return L"Nosferatu";case 19:return L"Tyrant";case 21:case 22:return L"Albinoid";case 30:return L"Alexia Baby";
-    default:return lang==PT?L"Inimigo":lang==EN?L"Enemy":tr(Enemy,lang);
+    case 15:return L"Nosferatu";case 21:case 22:return L"Albinoid";case 30:return L"Alexia Baby";
     }
+    // Descriptions follow the SRT language, shared by the list and boss bar.
+    struct Name {int id;const wchar_t* text[COUNT];};
+    static const Name names[]={
+        {1,{L"Zumbi",L"Zombie",L"Zombi",L"ゾンビ",L"Zombie",L"Zombie",L"Zombi",L"Zombie",L"Zombi",L"زومبي",L"丧尸",L"좀비",L"Зомби"}},
+        {2,{L"Verme gigante",L"Gulp Worm",L"Gusano gigante",L"巨大ワーム",L"Ver géant",L"Riesenwurm",L"Verme gigante",L"Olbrzymi robak",L"Dev solucan",L"دودة عملاقة",L"巨型蠕虫",L"거대 벌레",L"Гигантский червь"}},
+        {3,{L"Viúva-negra",L"Black Widow",L"Viuda negra",L"クロゴケグモ",L"Veuve noire",L"Schwarze Witwe",L"Vedova nera",L"Czarna wdowa",L"Karadul",L"الأرملة السوداء",L"黑寡妇蜘蛛",L"검은과부거미",L"Чёрная вдова"}},
+        {4,{L"Cão zumbi",L"Zombie Dog",L"Perro zombi",L"ゾンビ犬",L"Chien zombie",L"Zombiehund",L"Cane zombi",L"Pies zombie",L"Zombi köpek",L"كلب زومبي",L"丧尸犬",L"좀비견",L"Зомби-пёс"}},
+        {6,{L"Mariposa",L"Moth",L"Polilla",L"蛾",L"Papillon de nuit",L"Motte",L"Falena",L"Ćma",L"Güve",L"عثة",L"飞蛾",L"나방",L"Мотылёк"}},
+        {7,{L"Morcego",L"Bat",L"Murciélago",L"コウモリ",L"Chauve-souris",L"Fledermaus",L"Pipistrello",L"Nietoperz",L"Yarasa",L"خفاش",L"蝙蝠",L"박쥐",L"Летучая мышь"}},
+        {17,{L"Steve mutante",L"Mutated Steve",L"Steve mutado",L"変異したSteve",L"Steve muté",L"Mutierter Steve",L"Steve mutato",L"Zmutowany Steve",L"Mutasyona uğramış Steve",L"Steve المتحول",L"变异的Steve",L"변이한 Steve",L"Мутировавший Steve"}},
+        {19,{L"Tirano",L"Tyrant",L"Tirano",L"暴君",L"Tyran",L"Tyrann",L"Tiranno",L"Tyran",L"Tiran",L"الطاغية",L"暴君",L"폭군",L"Тиран"}},
+        {23,{L"Viúva-negra gigante",L"Giant Black Widow",L"Viuda negra gigante",L"巨大クロゴケグモ",L"Veuve noire géante",L"Riesige Schwarze Witwe",L"Vedova nera gigante",L"Olbrzymia czarna wdowa",L"Dev karadul",L"الأرملة السوداء العملاقة",L"巨型黑寡妇蜘蛛",L"거대 검은과부거미",L"Гигантская чёрная вдова"}},
+        {26,{L"Zumbi anatomista",L"Anatomist Zombie",L"Zombi anatomista",L"解剖学者ゾンビ",L"Zombie anatomiste",L"Anatomie-Zombie",L"Zombi anatomista",L"Zombie anatom",L"Anatomist zombi",L"زومبي عالم التشريح",L"解剖学家丧尸",L"해부학자 좀비",L"Зомби-анатом"}},
+        {29,{L"Tentáculo",L"Tentacle",L"Tentáculo",L"触手",L"Tentacule",L"Tentakel",L"Tentacolo",L"Macka",L"Dokunaç",L"مجس",L"触手",L"촉수",L"Щупальце"}},
+    };
+    const auto selected=Language(std::clamp(int(lang),0,int(COUNT)-1));
+    for(const auto& name:names)if(name.id==id)return name.text[selected];
+    return selected==PT?L"Inimigo":selected==EN?L"Enemy":tr(Enemy,selected);
 }
 }

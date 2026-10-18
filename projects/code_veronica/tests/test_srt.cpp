@@ -170,7 +170,13 @@ int main(int argc,char** argv) {
             }
         }
         for(int enemy:{1,2,3,4,5,6,7,9,12,13,14,15,17,19,21,22,23,26,29,30})assert(!loc::enemy(enemy,language).empty());
+        for(int id:{5,9,12,13,14,15,21,22,30})assert(loc::enemy(id,language)==loc::enemy(id,loc::EN));
+        assert(loc::enemy(17,language).find(L"Steve")!=std::wstring::npos);
+        for(int id:{2,3,19,23})if(language!=loc::EN)assert(loc::enemy(id,language)!=loc::enemy(id,loc::EN));
     }
+    assert(loc::enemy(2,loc::PT)==L"Verme gigante"&&loc::enemy(3,loc::PT)==L"Viúva-negra");
+    assert(loc::enemy(19,loc::PT)==L"Tirano"&&loc::enemy(23,loc::PT)==L"Viúva-negra gigante");
+    assert(loc::enemy(30,loc::PT)==L"Alexia Baby");
     for(const wchar_t* name:{L"SRT_CLAIRE",L"SRT_CHRIS",L"SRT_STEVE",L"SRT_WESKER",
         L"SRT_BOSSBAR_FILL",L"SRT_BOSSBAR_EMPTY",L"SRT_BOSSBAR_SMALL_FILL",L"SRT_BOSSBAR_SMALL_EMPTY",
         L"SRT_BOSS_TYRANT",L"SRT_BOSS_NOSFERATU",L"SRT_BOSS_STEVE",L"SRT_BOSS_ALBINOID",L"SRT_BOSS_GIANT_SPIDER",L"SRT_BOSS_GULP_WORM",
@@ -194,6 +200,19 @@ int main(int argc,char** argv) {
     source[10*768+10]=0xff0080c0;source[12*768+12]=0xff2020a0;
     const auto original=source;const auto cut=extract(source,{0,0,0,102,72});
     assert(source==original&&cut.width==3&&cut.height==3&&cut.argb[0]==0xff0080c0&&cut.argb[4]==0&&cut.argb[8]==0xff2020a0);
+    // Atlas separator removal must retain real art, and never change the input.
+    auto divider_source=std::vector<uint32_t>(768*768,0xff080052);
+    divider_source[20*768+30]=0xffa09080;
+    for(int y=0;y<72;y++)divider_source[y*768+101]=0xff000000;
+    for(int id:{0x46,0x4d,0x54,0x5b,0x62,0x69,0x70,0x77,0x7e,0x91}) {
+        const auto cleaned=extract(divider_source,{1,0,0,102,72},id);
+        assert(cleaned.width==1&&cleaned.height==1&&cleaned.argb[0]==0xffa09080);
+    }
+    assert(divider_source[101]==0xff000000);
+    auto ring_source=std::vector<uint32_t>(768*768,0xff080052);
+    ring_source[52*768+28]=0xff080050; // blue bezel previously keyed away
+    const auto ring=extract(ring_source,{0,0,0,102,72},0x2d);
+    assert(std::find(ring.argb.begin(),ring.argb.end(),0xff080050)!=ring.argb.end());
     assert(extract(source,{0,760,0,102,72}).argb.empty());
     assert(extract({},sprite_rect).argb.empty());
     assert(unpack_archive({}).empty()&&unpack_archive(std::vector<uint8_t>(30)).empty());
