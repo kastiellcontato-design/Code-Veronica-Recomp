@@ -8,6 +8,7 @@
 #include "ppu_recomp.h"
 #include "cv_version.h"
 #include "../../libs/video/rsx_ui_batch.h"
+#include "../../libs/video/rsx_ui_cadence.h"
 #ifdef _WIN32
 #define NOMINMAX
 #include <windows.h>
@@ -302,7 +303,11 @@ void CV_FN_MENU_INPUT(ppu_context* ctx) {
      * yet. */
     static uint32_t last_screen=~0u,last_fade=0,last_frame=0;
     const uint32_t frame=cellGcm_flip_submit_count();
-    const uint32_t screen=last_frame+1==frame?last_screen:~0u,fade=last_fade;
+    static const bool interpolated=[] {
+        const char* fps=std::getenv("CV_FPS_TEST_60"),*pose=std::getenv("CV_RENDER_INTERPOLATION");
+        return fps&&std::strcmp(fps,"1")==0&&pose&&std::strcmp(pose,"1")==0;
+    }();
+    const uint32_t screen=rsx_ui_menu_contiguous(frame,last_frame,interpolated)?last_screen:~0u,fade=last_fade;
     last_screen=vm_read32(kScreen);last_fade=vm_read32(kFade);last_frame=frame;
     drawing_main=true;CV_OG_MENU_INPUT(ctx);finish(ctx);drawing_main=false;
     draw_entry(ctx,screen,fade);

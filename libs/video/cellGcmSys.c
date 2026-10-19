@@ -80,9 +80,18 @@ static u64 get_timestamp_ns(void)
 static int tl_on(void)
 {
     static int v = -1;
-    if (v < 0) { const char* e = getenv("PS3_TIMELINE"); v = (e && *e && *e != '0') ? 1 : 0; }
+    if (v < 0) {
+        const char* e = getenv("PS3_TIMELINE");
+        v = (e && *e && *e != '0') ? 1 : 0;
+        /* Coarse producer investigation: retain pipeline/wait markers without
+         * the two QPC pairs per draw/upload or the GPU command-list wrappers.
+         * Full PS3_TIMELINE retains its original behavior. */
+        if (!v) { const char* coarse = getenv("CV_PRODUCER_PROFILE");
+            if (coarse && !strcmp(coarse,"1")) v = 2; }
+    }
     return v;
 }
+
 static double tl_now(void)
 {
     LARGE_INTEGER t; ensure_qpc_init(); QueryPerformanceCounter(&t);
@@ -95,7 +104,12 @@ static u32    s_tl_cnt[TL_N];
 static const char* const s_tl_name[TL_N] = {
     "drain", "fc-sleep", "present", "wait-render", "render", "gpu-wait", NULL, "fc-sleep-behind", "vtx-upload", "draw-calls", "fc-pump", "fc-ticks", NULL, NULL, "MAIN-spu-join", "MAIN-evflag", "MAIN-lwmutex",
 };
-void ps3_tl_begin(int ev) { if (tl_on() && ev >= 0 && ev < TL_N) s_tl_t0[ev] = tl_now(); }
+static int tl_event_on(int ev)
+{
+    int mode = tl_on();
+    return mode && ev >= 0 && ev < TL_N && !(mode == 2 && (ev == 8 || ev == 9));
+}
+void ps3_tl_begin(int ev) { if (tl_event_on(ev)) s_tl_t0[ev] = tl_now(); }
 static int gcm_fifo_has_work(void);   /* with the FIFO walker below */
 void ps3_tl_end(int ev);
 /* frame_clock's idle sleep, split by whether the FIFO already held work. */
@@ -111,7 +125,7 @@ void ps3_tl_main_begin(int ev) { if (tl_on() && GetCurrentThreadId() == s_tl_fli
 void ps3_tl_main_end(int ev)   { if (tl_on() && GetCurrentThreadId() == s_tl_flip_tid) ps3_tl_end(ev); }
 void ps3_tl_end(int ev)
 {
-    if (!tl_on() || ev < 0 || ev >= TL_N || s_tl_t0[ev] == 0.0) return;
+    if (!tl_event_on(ev) || s_tl_t0[ev] == 0.0) return;
     s_tl_acc[ev] += tl_now() - s_tl_t0[ev]; s_tl_cnt[ev]++; s_tl_t0[ev] = 0.0;
 }
 
@@ -432,7 +446,7 @@ typedef struct IoMapping {
 static IoMapping s_io_mappings[CELL_GCM_MAX_IO_MAPPINGS];
 static int s_io_mapping_count = 0;
 
-/* Callback handlers — these are GUEST OPD addresses passed by the
+/* Callback handlers â€” these are GUEST OPD addresses passed by the
  * recompiled game, not host function pointers. Stored as uint32_t and
  * invoked through g_ps3_guest_caller (see ps3emu/guest_call.h). */
 
@@ -920,7 +934,7 @@ u32 cellGcmGetFlipStatus(void)
 {
     /* Avoid host-calling the guest OPDs directly (they're not valid host
      * function pointers). Use cellGcmTickVBlank() / TickFlip() instead,
-     * which dispatch via g_ps3_guest_caller — see below. */
+     * which dispatch via g_ps3_guest_caller â€” see below. */
     /* Report the CURRENT status; cellGcmTickFlip (the ticker's 60Hz vblank
      * beat) completes pending flips. The old self-completing version made
      * every wait-for-flip loop exit on its first poll, so titles ran
@@ -933,7 +947,7 @@ u32 cellGcmGetFlipStatus(void)
 }
 
 /* Host-side ticks. The game's host driver (e.g. flow main.cpp) calls
- * these periodically so registered guest handlers fire — that's what
+ * these periodically so registered guest handlers fire â€” that's what
  * drives the title-screen state machine for many games. */
 #include "ps3emu/guest_call.h"
 
@@ -2717,12 +2731,12 @@ static int gcm_flip_into_fifo(u32 ctx, u32 bufferId)
     return 1;
 }
 
-/* cellGcmSetFlip(context, buffer_id) — immediate flip request. PSL1GHT's
+/* cellGcmSetFlip(context, buffer_id) â€” immediate flip request. PSL1GHT's
  * gcmSetFlip import (NID 0xDC09357E) lands here; without it vkcube's flip was
  * a no-op, GetFlipStatus never cleared, and init timed out into exit(-1). */
 s32 cellGcmSetFlip(void* context, u32 bufferId)
 {
-    (void)context;   /* command context — flip is immediate in HLE */
+    (void)context;   /* command context â€” flip is immediate in HLE */
     return cellGcmSetFlipCommand(bufferId);
 }
 
@@ -2785,7 +2799,7 @@ u32 cellGcmGetCurrentDisplayBufferId(void)
 /* NID: 0xD9B7653E */
 void cellGcmSetFlipHandler(CellGcmFlipHandler handler)
 {
-    /* `handler` is a guest OPD address — store as such and remember
+    /* `handler` is a guest OPD address â€” store as such and remember
      * the legacy host-typed value too for any callers still using
      * the old API style. Real dispatch goes through
      * cellGcmDispatchVBlank()/DispatchFlip() via g_ps3_guest_caller. */
@@ -3136,7 +3150,7 @@ s32 cellGcmIoOffsetToAddress(u32 ioOffset, u32* ea)
  * table: if the offset's 1MB page is IO-mapped, it's main memory; otherwise it
  * is local video memory (localAddress + offset). IO mappings are sparse (the
  * command/IO window is a few MB) while local objects sit high in the local
- * heap, so this disambiguates every real case — only offsets inside the small
+ * heap, so this disambiguates every real case â€” only offsets inside the small
  * IO window are treated as main. */
 u32 cellGcmResolveOffset(u32 offset)
 {
@@ -3373,7 +3387,7 @@ void cellGcmSetDebugOutputLevel(u32 level)
  * Additional functions needed by Tokyo Jungle
  * -----------------------------------------------------------------------*/
 
-/* Notify data area — similar to report data, 16 bytes per slot */
+/* Notify data area â€” similar to report data, 16 bytes per slot */
 static u8 s_notify_data[256 * 16];
 
 void* cellGcmGetNotifyDataAddress(u32 index)
@@ -3382,7 +3396,7 @@ void* cellGcmGetNotifyDataAddress(u32 index)
     return &s_notify_data[index * 16];
 }
 
-/* Timestamp location — returns CELL_GCM_LOCATION_LOCAL or MAIN */
+/* Timestamp location â€” returns CELL_GCM_LOCATION_LOCAL or MAIN */
 /* The Location suffix names an ARGUMENT, not an out-parameter: it is the
  * caller saying which memory the report lives in, CELL_GCM_LOCATION_LOCAL or
  * _MAIN, exactly as cellGcmGetReportDataLocation and
@@ -3407,7 +3421,7 @@ u64 cellGcmGetTimeStampLocation(u32 index, u32 location)
     return s_report_data[index].timestamp;
 }
 
-/* SetTileInfo — alternative to SetTile with same parameters */
+/* SetTileInfo â€” alternative to SetTile with same parameters */
 s32 cellGcmSetTileInfo(u8 index, u8 location, u32 offset, u32 size,
                        u32 pitch, u8 comp, u16 base, u8 bank)
 {
@@ -3415,7 +3429,7 @@ s32 cellGcmSetTileInfo(u8 index, u8 location, u32 offset, u32 size,
     return cellGcmSetTile(index, location, offset, size, pitch, comp, base, bank);
 }
 
-/* Default FIFO size — configures command buffer size before init */
+/* Default FIFO size â€” configures command buffer size before init */
 static u32 s_default_fifo_size = 0x40000; /* 256KB default */
 
 s32 cellGcmSetDefaultFifoSize(u32 size)
@@ -3425,7 +3439,7 @@ s32 cellGcmSetDefaultFifoSize(u32 size)
     return CELL_OK;
 }
 
-/* Internal flip commands — called directly by some games */
+/* Internal flip commands â€” called directly by some games */
 /* libgcm's internal exports pass the command context FIRST -- taking
  * bufferId as arg1 made the range check eat the context pointer, so the
  * flip counter never advanced (wave: presents free-ran 4x per frame,
@@ -3455,7 +3469,7 @@ s32 _cellGcmSetFlipCommandWithWaitLabel(void* ctx, u32 bufferId,
  * Additional functions (RPCS3 parity)
  * -----------------------------------------------------------------------*/
 
-/* FIFO command buffer callback — called when put pointer wraps.
+/* FIFO command buffer callback â€” called when put pointer wraps.
  * In recomp we don't have a real GPU consuming FIFO, so this is a no-op. */
 s32 cellGcmCallback(void* context, u32 count)
 {
@@ -3464,7 +3478,7 @@ s32 cellGcmCallback(void* context, u32 count)
     return CELL_OK;
 }
 
-/* Map RSX local memory — returns the base address and size of local VRAM */
+/* Map RSX local memory â€” returns the base address and size of local VRAM */
 s32 cellGcmMapLocalMemory(u32* address, u32* size)
 {
     if (!address || !size)
@@ -3479,7 +3493,7 @@ s32 cellGcmMapLocalMemory(u32* address, u32* size)
     return CELL_OK;
 }
 
-/* Shutdown RSX — clear all state */
+/* Shutdown RSX â€” clear all state */
 void cellGcmTerminate(void)
 {
     printf("[cellGcmSys] Terminate\n");
@@ -3644,7 +3658,7 @@ void cellGcmSetDefaultCommandBuffer(void)
     }
 }
 
-/* Debug dump — no-op in recomp */
+/* Debug dump â€” no-op in recomp */
 void cellGcmDumpGraphicsError(void)
 {
     printf("[cellGcmSys] DumpGraphicsError (no-op)\n");
@@ -3662,7 +3676,7 @@ u32 cellGcmGetDefaultSegmentWordSize(void)
     return 0x100;
 }
 
-/* Immediate flip — perform flip right now */
+/* Immediate flip â€” perform flip right now */
 s32 cellGcmSetFlipImmediate(u32 bufferId)
 {
     if (ps3_log_verbose())
@@ -3732,7 +3746,7 @@ s32 cellGcmSetInvalidateTile(u8 index)
     return CELL_OK;
 }
 
-/* EA IO address remap — stub, sorting not needed in recomp */
+/* EA IO address remap â€” stub, sorting not needed in recomp */
 void cellGcmSortRemapEaIoAddress(void)
 {
     /* No-op: IO address remapping not required for recomp */

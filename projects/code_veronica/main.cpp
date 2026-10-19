@@ -59,6 +59,9 @@
 #endif
 
 #ifdef _WIN32
+extern "C" void cv_fps_register_game_update();
+#endif
+#ifdef _WIN32
 extern "C" int cv_focus_pause_poll(void);   /* cv_focus_pause.cpp */
 #endif
 extern "C" void pad_phys_rumble_off(void);   /* libs/input/pad_phys.c */
@@ -557,6 +560,9 @@ int main(int argc, char** argv)
     }
 
     ppu_recomp_register();   /* lifted function table -> address map */
+#ifdef _WIN32
+    cv_fps_register_game_update();
+#endif
     ps3_load_prx_modules();  /* this game's lifted system PRX, if it has any */
     ppu_hle_init();          /* firmware import NID -> HLE handlers */
     ppu_sysprx_register();   /* boot-critical CRT */

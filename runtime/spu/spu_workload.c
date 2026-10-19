@@ -14,6 +14,7 @@
 #include <string.h>
 #ifdef _WIN32
 #include <windows.h>
+#include "spu_task_pool.h"
 #else
 #include <pthread.h>
 #include <errno.h>
@@ -296,6 +297,9 @@ int spu_workload_dispatch(const uint8_t* image, uint32_t image_size,
  * concurrently with the PPU; a detached host thread models that. The image bytes
  * and args live in the shared guest arena (vm_base), so they stay valid. */
 typedef struct {
+#ifdef _WIN32
+    spu_pool_job       pool_job; /* intrusive FIFO; no second allocation */
+#endif
     const uint8_t*      image;
     uint32_t            image_size;
     uint32_t            args_ea;
@@ -549,6 +553,9 @@ void spu_job_describe(const void* c)
     fprintf(stderr, "\n");
     spu_fault_snapshot(ctx, t_job.ts, t_job.tid, t_job.args);
 }
+#ifdef _WIN32
+static __declspec(thread) int t_spu_task_boosted;
+#endif
 static void spu_async_run(spu_async_job* j)
 {
     t_prev_job = t_job;
@@ -565,6 +572,7 @@ static void spu_async_run(spu_async_job* j)
       for (const char* q = e; q && *q; ) {
           if (atoi(q) == j->image_id) {
               SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
+              t_spu_task_boosted = 1;
               break;
           }
           while (*q && *q != ',') q++;
@@ -948,11 +956,7 @@ static void spu_async_run_impl(spu_async_job* j)
 }
 
 #ifdef _WIN32
-static DWORD WINAPI spu_async_thread(LPVOID p) {
-    /* Reserve handler headroom so a stack overflow in lifted SPU code (e.g. a
-     * runaway brsl recursion) can actually reach the STACKOVERFLOW reporter
-     * instead of killing the process silently with 0x80000001. */
-    { ULONG g = 256 * 1024; SetThreadStackGuarantee(&g); }
+static void spu_async_thread_run(LPVOID p) {
     extern void ps3_samp_spu_thread(int enter);
     ps3_samp_spu_thread(1);
     spu_async_run((spu_async_job*)p);
@@ -961,30 +965,33 @@ static DWORD WINAPI spu_async_thread(LPVOID p) {
     { ULONG_PTR lo, hi; GetCurrentThreadStackLimits(&lo, &hi);
       extern void spu_coh_forget_range(uintptr_t, uintptr_t);
       spu_coh_forget_range((uintptr_t)lo, (uintptr_t)hi); }
+}
+static DWORD WINAPI spu_async_thread(LPVOID p)
+{
+    /* Stack-overflow reporter headroom: once per newly created host thread. */
+    { ULONG g = 256 * 1024; SetThreadStackGuarantee(&g); }
+    spu_async_thread_run(p);
     return 0;
 }
 
-/* SPU task pool. Every task used to get a fresh host thread (256 MB stack
- * reservation), created and torn down per task. Code Veronica's main thread
- * creates and joins SPU tasks ~39 times a frame and spent ~10 ms a frame in
- * those joins. Finished task threads now park here and take the next task;
- * a task still never waits for a thread -- with none idle, a new one is
- * started, exactly as before.
- *
- * OFF by default (SPU_TASK_POOL=1 to enable): measured in Code Veronica's
- * lighter scene it made things far worse -- ~25 -> 6-11 fps, the main
- * thread's SPU joins growing from ~10 to 36-75 ms a frame. One suspect, now
- * fixed: raised thread priorities leaked from task to task (see
- * spu_pool_task_reset). */
-typedef struct spu_pool_item { spu_async_job* j; unsigned taskid; struct spu_pool_item* next; } spu_pool_item;
-static SRWLOCK            s_pool_lock = SRWLOCK_INIT;
-static CONDITION_VARIABLE s_pool_cv   = CONDITION_VARIABLE_INIT;
-static spu_pool_item*     s_pool_head = NULL;
-static spu_pool_item*     s_pool_tail = NULL;
-static int s_pool_idle = 0, s_pool_queued = 0, s_pool_threads = 0;
+/* Process-lifetime workers, warmed once and then parked on a condition
+ * variable. Host-thread reuse only: taskset ownership, completion and the
+ * execution semaphore remain in their original paths (f59ffb6). */
+static spu_task_pool s_task_pool;
 
 /* Set once a service task's thread has been raised to highest priority. */
 static __declspec(thread) int t_spu_service_boosted = 0;
+static __declspec(thread) int t_spu_service_named = 0;
+
+static void spu_pool_priority_reset(void)
+{
+    /* These are the only priority changes in the task runner. Tracking them
+     * avoids a GetThreadPriority syscall for every short, normal-priority job. */
+    if (t_spu_service_boosted || t_spu_task_boosted) {
+        SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_NORMAL);
+        t_spu_service_boosted = t_spu_task_boosted = 0;
+    }
+}
 
 /* A pooled thread carries its last task's per-thread state into the next
  * one. Priority above all: a thread a service task or SPU_TASK_PRIO_IMG
@@ -1000,79 +1007,73 @@ static void spu_pool_task_reset(void)
     g_spu_pch_n = 0;
     g_spurs_job_mbox = g_spurs_job_mbox_intr = g_spurs_job_cmd = 0;
     g_spurs_job_mbox_valid = 0;
-    if (t_spu_service_boosted || GetThreadPriority(GetCurrentThread()) != THREAD_PRIORITY_NORMAL) {
-        SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_NORMAL);
-        t_spu_service_boosted = 0;
-    }
+    spu_pool_priority_reset();
 }
 
+static INIT_ONCE s_pool_config_once = INIT_ONCE_STATIC_INIT;
+static int s_pool_enabled, s_pool_trace;
+static unsigned s_pool_warm;
+static ULONGLONG s_pool_report_ms;
+static BOOL CALLBACK spu_pool_config(PINIT_ONCE once, PVOID arg, PVOID* context)
+{
+    (void)once; (void)arg; (void)context;
+    const char* e = getenv("SPU_TASK_POOL");
+    /* A/B in CV's heavy JP room did not demonstrate a frame-time win.
+     * Keep reuse opt-in until a repeatable improvement is measured. */
+    s_pool_enabled = e && *e && *e != '0';
+    s_pool_trace = getenv("PS3_TIMELINE") != NULL || getenv("PS3_SPU_STAT") != NULL;
+    SYSTEM_INFO info; GetSystemInfo(&info);
+    s_pool_warm = info.dwNumberOfProcessors;
+    if (s_pool_warm > 16) s_pool_warm = 16;
+    if (s_pool_warm < 2) s_pool_warm = 2;
+    fprintf(stderr, "[SPU-POOL] %s; warm=%u; SPU_TASK_POOL=1 enables reuse; =0 uses detached threads\n",
+            s_pool_enabled ? "enabled" : "disabled", s_pool_warm);
+    return TRUE;
+}
 static int spu_pool_on(void)
 {
-    static int v = -1;
-    if (v < 0) { const char* e = getenv("SPU_TASK_POOL"); v = (e && *e && *e != '0') ? 1 : 0; }
-    return v;
+    InitOnceExecuteOnce(&s_pool_config_once, spu_pool_config, NULL, NULL);
+    return s_pool_enabled;
 }
 
-static DWORD WINAPI spu_pool_worker(LPVOID p)
+static void spu_pool_run(spu_pool_job* node)
 {
-    (void)p;
-    { ULONG g = 256 * 1024; SetThreadStackGuarantee(&g); }
-    ULONG_PTR lo, hi; GetCurrentThreadStackLimits(&lo, &hi);
-    extern void spu_coh_forget_range(uintptr_t, uintptr_t);
-    extern void ps3_samp_spu_thread(int enter);
-    for (;;) {
-        AcquireSRWLockExclusive(&s_pool_lock);
-        while (!s_pool_head) {
-            s_pool_idle++;
-            SleepConditionVariableSRW(&s_pool_cv, &s_pool_lock, INFINITE, 0);
-            s_pool_idle--;
-        }
-        spu_pool_item* it = s_pool_head;
-        s_pool_head = it->next;
-        if (!s_pool_head) s_pool_tail = NULL;
-        s_pool_queued--;
-        ReleaseSRWLockExclusive(&s_pool_lock);
-
-        ps3_host_thread_name(GetCurrentThread(), "spu:task %u", it->taskid);
-        spu_pool_task_reset();            /* per-task thread-local state */
-        ps3_samp_spu_thread(1);
-        spu_async_run(it->j);
-        ps3_samp_spu_thread(0);
-        spu_coh_forget_range((uintptr_t)lo, (uintptr_t)hi);
-        free(it);
-        ps3_host_thread_name(GetCurrentThread(), "spu:pool (idle)");
+    spu_async_job* j = (spu_async_job*)node; /* node is the first field */
+    static __declspec(thread) unsigned named_task = (unsigned)-1;
+    if (named_task != j->taskid) {
+        ps3_host_thread_name(GetCurrentThread(), "spu:task %u", j->taskid);
+        named_task = j->taskid;
     }
-    return 0;
+    spu_pool_task_reset();
+    /* Same stack cleanup and sampling boundaries as a detached task; the
+     * worker already established stack-overflow headroom when it started. */
+    spu_async_thread_run(j);
+    /* Leave sleepers at normal priority. Retain the last task's name while
+     * idle, so another task with the same id needs no naming syscall. */
+    spu_pool_priority_reset();
+    if (t_spu_service_named) {
+        named_task = (unsigned)-1;
+        t_spu_service_named = 0;
+    }
 }
 
-/* 1 = queued for a pooled thread, 0 = could not (caller falls back). */
 static int spu_pool_submit(spu_async_job* j, unsigned taskid)
 {
-    spu_pool_item* it = (spu_pool_item*)malloc(sizeof *it);
-    if (!it) return 0;
-    it->j = j; it->taskid = taskid; it->next = NULL;
-    AcquireSRWLockExclusive(&s_pool_lock);
-    if (s_pool_tail) s_pool_tail->next = it; else s_pool_head = it;
-    s_pool_tail = it;
-    s_pool_queued++;
-    int need_thread = s_pool_idle < s_pool_queued;   /* every queued task gets a thread */
-    if (need_thread) s_pool_threads++;
-    ReleaseSRWLockExclusive(&s_pool_lock);
-    if (need_thread) {
-        HANDLE th = CreateThread(NULL, 256u << 20, spu_pool_worker, NULL,
-                                 STACK_SIZE_PARAM_IS_A_RESERVATION, NULL);
-        if (!th) {
-            /* No new thread: the task stays queued for the next idle one. */
-            AcquireSRWLockExclusive(&s_pool_lock);
-            s_pool_threads--;
-            ReleaseSRWLockExclusive(&s_pool_lock);
-            return 1;
+    (void)taskid;
+    int accepted = spu_task_pool_submit(&s_task_pool, &j->pool_job,
+                                        spu_pool_run, s_pool_warm);
+    if (s_pool_trace) {
+        ULONGLONG now = GetTickCount64();
+        AcquireSRWLockExclusive(&s_task_pool.lock);
+        if (now - s_pool_report_ms >= 5000) {
+            s_pool_report_ms = now;
+            fprintf(stderr, "[SPU-POOL] workers=%u busy=%u queued=%u submitted=%llu created=%llu fallback=%llu\n",
+                    s_task_pool.threads, s_task_pool.busy, s_task_pool.queued,
+                    s_task_pool.submitted, s_task_pool.created, s_task_pool.fallback);
         }
-        CloseHandle(th);
-    } else {
-        WakeConditionVariable(&s_pool_cv);
+        ReleaseSRWLockExclusive(&s_task_pool.lock);
     }
-    return 1;
+    return accepted;
 }
 #else
 static void* spu_async_thread(void* p) { spu_async_run((spu_async_job*)p); return NULL; }
@@ -1331,8 +1332,10 @@ int spu_taskset_wait_signal(uint32_t taskset_ea, uint32_t taskId)
      * SPU_SERVICE_PRIO=0 leaves these at normal priority. */
     { static int on = -1;
       if (on < 0) { const char* e = getenv("SPU_SERVICE_PRIO"); on = (e && *e == '0') ? 0 : 1; }
-      if (!t_spu_service_boosted)   /* PS3_SAMPLE_THREAD=spu:svc picks these out */
+      if (!t_spu_service_boosted) { /* PS3_SAMPLE_THREAD=spu:svc picks these out */
           ps3_host_thread_name(GetCurrentThread(), "spu:svc %08X t%u", taskset_ea, taskId);
+          t_spu_service_named = 1;
+      }
       if (on && !t_spu_service_boosted) {
           t_spu_service_boosted = 1;
           SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);

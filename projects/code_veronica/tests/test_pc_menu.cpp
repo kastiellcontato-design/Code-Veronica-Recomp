@@ -6,7 +6,7 @@
 static std::array<unsigned char, 16 * 1024 * 1024> memory;
 static std::array<int,8> settings={4,2,1,160,0,0,70,4};
 static std::vector<std::pair<int,int>> changes;
-static unsigned largest_batch;
+static unsigned largest_batch,last_batch,flip_counter,flip_step=1;
 extern "C" {
 uint8_t* vm_base=memory.data();
 PPU_THREAD_LOCAL void (*g_trampoline_fn)(void*)=nullptr;
@@ -26,9 +26,9 @@ int cv_pc_settings_read() {
 int cv_pc_settings_saturation_read() { return settings[5]; }
 int cv_pc_settings_effects_read() { return settings[6]|settings[7]<<8; }
 void cv_pc_settings_change(int which,int value) { settings[which]=value;changes.emplace_back(which,value); }
-uint32_t cellGcm_flip_submit_count() { static uint32_t frame;return ++frame; }   // one frame per menu call
+uint32_t cellGcm_flip_submit_count() { flip_counter+=flip_step;return flip_counter; }   // one frame per menu call
 void rsx_d3d12_set_ui_quads(const rsx_ui_quad* q,uint32_t count) {
-    largest_batch=std::max(largest_batch,count);
+    largest_batch=std::max(largest_batch,count);last_batch=count;
     assert(count<131072);
     for(uint32_t i=0;i<count;i++) {
         assert(q[i].w>0&&q[i].h>0);
@@ -43,7 +43,26 @@ void CV_OG_MENU_COLOR(ppu_context*) {}
 void CV_FN_MENU_FRAME(ppu_context*) {}
 void CV_FN_MENU_SOUND(ppu_context*) {}
 
-int main() {
+int main(int argc,char**) {
+    const bool interp=argc>1;
+    _putenv_s("CV_FPS_TEST_60",interp?"1":"");
+    _putenv_s("CV_RENDER_INTERPOLATION",interp?"1":"");
+    flip_step=interp?4:1;
+    uint32_t stamps[8]={};uint8_t valid[8]={};
+    auto publish=[&](uint32_t f){stamps[f%8]=f;valid[f%8]=1;};
+    publish(100);
+    assert(rsx_ui_select_batch(100,stamps,valid,8,0)==4);
+    assert(rsx_ui_select_batch(101,stamps,valid,8,0)==-1);
+    for(uint32_t f=100;f<=103;f++)assert(rsx_ui_select_batch(f,stamps,valid,8,3)==4);
+    assert(rsx_ui_select_batch(104,stamps,valid,8,3)==-1);
+    publish(102); // A newer empty batch must win too; no fallback to old text.
+    assert(rsx_ui_select_batch(102,stamps,valid,8,3)==6);
+    assert(rsx_ui_select_batch(101,stamps,valid,8,3)==4); // no future batch
+    memset(valid,0,sizeof valid);publish(UINT32_MAX);
+    assert(rsx_ui_select_batch(0,stamps,valid,8,3)==7);
+    assert(rsx_ui_menu_contiguous(0,UINT32_MAX,0));
+    assert(!rsx_ui_menu_contiguous(14,10,0)&&rsx_ui_menu_contiguous(14,10,1));
+    assert(!rsx_ui_menu_contiguous(15,10,1)&&!rsx_ui_menu_contiguous(10,10,1));
     assert(cv_native_pc_menu_selftest()==0);
     ppu_context ctx{};ctx.gpr[1]=0x8000;
     CV_FN_MENU_RESET(&ctx);
@@ -53,6 +72,9 @@ int main() {
         vm_write32(kInput,input);vm_write32(kRepeat,repeat);
         CV_FN_MENU_INPUT(&ctx);
     };
+    press(0,0);press(0,0);press(0,0);assert(last_batch>0);
+    vm_write32(kScreen,3);press(0,0);press(0,0);assert(last_batch==0);
+    vm_write32(kScreen,0);press(0,0);press(0,0);assert(last_batch>0);
     press(0,kDown);assert(pc_selected);
     press(0x4000,0);assert(pc_open&&pc_row==0);
     for(int i=0;i<kResetColorsRow;i++)press(0,kDown);

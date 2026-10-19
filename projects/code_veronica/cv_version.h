@@ -23,6 +23,9 @@
 
 #if defined(CV_REGION_JP)
 #define CV_TITLE_ID        "NPJB00135"
+/* Engine frame pacing: uses real time and emits a delta in 60 Hz ticks. */
+#define CV_FN_FRAME_PACE func_0050CE68
+#define CV_OG_FRAME_PACE cv_original_0050CE68
 /* SRT: read-only guest state. Source of address facts: Kapdap (MIT). */
 #define CV_SRT_TIME          0x00BB3E38u
 #define CV_SRT_ROOM          0x00BB3E4Cu
@@ -69,6 +72,9 @@
 #define CV_OG_MEMMOVE cv_original_007AD0E0
 #elif defined(CV_REGION_US)
 #define CV_TITLE_ID        "NPUB30467"
+/* Engine frame pacing: uses real time and emits a delta in 60 Hz ticks. */
+#define CV_FN_FRAME_PACE func_0050C578
+#define CV_OG_FRAME_PACE cv_original_0050C578
 /* SRT: read-only guest state. Source of address facts: Kapdap (MIT). */
 #define CV_SRT_TIME          0x00BB3DB8u
 #define CV_SRT_ROOM          0x00BB3DCCu
@@ -112,6 +118,9 @@
 #define CV_OG_MEMMOVE cv_original_007AC7F0
 #else
 #define CV_TITLE_ID        "NPEB00553"
+/* Engine frame pacing: uses real time and emits a delta in 60 Hz ticks. */
+#define CV_FN_FRAME_PACE func_0050E538
+#define CV_OG_FRAME_PACE cv_original_0050E538
 /* SRT: read-only guest state. Source of address facts: Kapdap (MIT). */
 #define CV_SRT_TIME          0x00BC40B8u
 #define CV_SRT_ROOM          0x00BC40CCu

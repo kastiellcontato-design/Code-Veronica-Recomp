@@ -226,6 +226,7 @@ add_executable(${PROJECT_NAME}
     cv_texture_export.cpp
     cv_srt.cpp
     cv_srt_data.cpp
+    cv_cheats.cpp
     cv_srt_icons.cpp
     cv_srt_i18n.cpp
     button_icons.cpp
@@ -265,7 +266,7 @@ endif()
 # title's own artwork and are not in the repository; without them the launcher
 # draws a plain banner and the exe keeps the default icon.
 if(WIN32)
-    target_sources(${PROJECT_NAME} PRIVATE native_pc_menu.cpp boot_skip.cpp cv_test_tools.cpp cv_native_libc.cpp cv_focus_pause.cpp cv_items.cpp cv_item_menu.cpp)
+    target_sources(${PROJECT_NAME} PRIVATE native_pc_menu.cpp boot_skip.cpp cv_test_tools.cpp cv_fps_experimental.cpp cv_native_libc.cpp cv_focus_pause.cpp cv_items.cpp cv_item_menu.cpp)
     file(GLOB LAUNCHER_ART CONFIGURE_DEPENDS
          "${CMAKE_CURRENT_SOURCE_DIR}/launcher_art/*.png"
          "${CMAKE_CURRENT_SOURCE_DIR}/launcher_art/*.jpg")
@@ -426,6 +427,9 @@ if(WIN32)
         "${PS3RECOMP_DIR}/runtime/spu/tests/test_spu_fault_snapshot.c"
         "${PS3RECOMP_DIR}/runtime/spu/spu_fault_snapshot.c")
     target_compile_options(code_veronica_spu_fault_tests PRIVATE /UNDEBUG)
+    add_executable(code_veronica_spu_pool_tests EXCLUDE_FROM_ALL
+        "${PS3RECOMP_DIR}/runtime/spu/tests/test_spu_task_pool.c")
+    target_compile_options(code_veronica_spu_pool_tests PRIVATE /UNDEBUG)
     add_executable(code_veronica_spu_schedule_tests EXCLUDE_FROM_ALL
         "${PS3RECOMP_DIR}/runtime/spu/tests/test_spu_taskset_schedule.c"
         "${PS3RECOMP_DIR}/runtime/spu/spu_taskset_schedule.c")
@@ -488,6 +492,46 @@ if(WIN32)
         target_compile_definitions(code_veronica_map_tests PRIVATE CV_REGION_US=1)
         set_target_properties(code_veronica_map_tests PROPERTIES OUTPUT_NAME "code_veronica_map_tests_us")
     endif()
+endif()
+
+if(WIN32)
+    add_executable(code_veronica_fps_tests EXCLUDE_FROM_ALL tests/test_fps_experimental.cpp cv_fps_experimental.cpp)
+    target_include_directories(code_veronica_fps_tests PRIVATE "${RECOMP_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}")
+    target_compile_options(code_veronica_fps_tests PRIVATE /UNDEBUG)
+    if(CV_REGION_LC STREQUAL "jp")
+        target_compile_definitions(code_veronica_fps_tests PRIVATE CV_REGION_JP=1)
+    elseif(CV_REGION_LC STREQUAL "us")
+        target_compile_definitions(code_veronica_fps_tests PRIVATE CV_REGION_US=1)
+    endif()
+endif()
+
+# CPU-only checks for render interpolation. No game assets or GPU required.
+add_executable(code_veronica_pose_tests EXCLUDE_FROM_ALL tests/test_pose_interpolation.cpp)
+target_include_directories(code_veronica_pose_tests PRIVATE "${PS3RECOMP_DIR}/libs/video")
+if(MSVC)
+    target_compile_options(code_veronica_pose_tests PRIVATE /UNDEBUG)
+else()
+    target_compile_options(code_veronica_pose_tests PRIVATE -UNDEBUG)
+endif()
+
+# GPU regression for packed UNORM16 filtering at byte carry boundaries.
+if(WIN32)
+    add_executable(code_veronica_pose_gpu_tests EXCLUDE_FROM_ALL tests/test_pose_gpu.cpp
+        "${PS3RECOMP_DIR}/libs/video/rsx_vertex_fetch.c")
+    target_include_directories(code_veronica_pose_gpu_tests PRIVATE "${PS3RECOMP_DIR}/libs/video" "${PS3RECOMP_DIR}/include")
+    target_compile_options(code_veronica_pose_gpu_tests PRIVATE /UNDEBUG)
+    target_link_libraries(code_veronica_pose_gpu_tests PRIVATE d3d11 d3dcompiler)
+    add_executable(code_veronica_pose_blend_tests EXCLUDE_FROM_ALL tests/test_pose_blend_d3d12.cpp
+        "${PS3RECOMP_DIR}/libs/video/rsx_dxc.cpp")
+    target_include_directories(code_veronica_pose_blend_tests PRIVATE "${PS3RECOMP_DIR}/libs/video")
+    target_compile_options(code_veronica_pose_blend_tests PRIVATE /UNDEBUG)
+    target_link_libraries(code_veronica_pose_blend_tests PRIVATE d3d12 dxgi d3dcompiler ole32)
+    add_executable(code_veronica_shadow_filter_tests EXCLUDE_FROM_ALL
+        "${PS3RECOMP_DIR}/libs/video/tests/test_packed16_filter.cpp")
+    target_include_directories(code_veronica_shadow_filter_tests PRIVATE "${PS3RECOMP_DIR}/libs/video")
+    target_link_libraries(code_veronica_shadow_filter_tests PRIVATE d3d11 d3dcompiler)
+endif()
+
 # The F6 item menu: catalog, placement, the guest write and the drawing,
 # against synthetic memory with this build's region addresses.
 if(WIN32)
@@ -505,6 +549,18 @@ if(WIN32)
     endif()
 endif()
 
+# Isolated cheat state/store tests against each region's own addresses.
+if(WIN32)
+    foreach(cheat_region IN ITEMS eu jp us)
+        add_executable(cv_cheats_tests_${cheat_region} EXCLUDE_FROM_ALL tests/test_cheats.cpp cv_cheats.cpp)
+        target_compile_options(cv_cheats_tests_${cheat_region} PRIVATE /UNDEBUG)
+        if(cheat_region STREQUAL "jp")
+            target_compile_definitions(cv_cheats_tests_${cheat_region} PRIVATE CV_REGION_JP=1)
+        elseif(cheat_region STREQUAL "us")
+            target_compile_definitions(cv_cheats_tests_${cheat_region} PRIVATE CV_REGION_US=1)
+        endif()
+    endforeach()
+    add_custom_target(code_veronica_cheat_tests DEPENDS cv_cheats_tests_eu cv_cheats_tests_jp cv_cheats_tests_us)
 endif()
 
 # Pause on focus loss: the decision (which windows count as the game's focus,
@@ -529,6 +585,14 @@ if(WIN32)
         "${PS3RECOMP_DIR}/libs/filesystem/edat.c")
     target_compile_options(code_veronica_hd_button_tests PRIVATE /UNDEBUG)
     target_link_libraries(code_veronica_hd_button_tests PRIVATE gdiplus ole32 user32 gdi32)
+endif()
+
+# Sampled frame timing: production query probe on D3D12 WARP, without game data.
+if(WIN32)
+    add_executable(code_veronica_frame_probe_tests EXCLUDE_FROM_ALL tests/test_frame_gpu_probe.cpp)
+    target_include_directories(code_veronica_frame_probe_tests PRIVATE "${PS3RECOMP_DIR}/libs/video")
+    target_compile_options(code_veronica_frame_probe_tests PRIVATE /UNDEBUG)
+    target_link_libraries(code_veronica_frame_probe_tests PRIVATE d3d12 dxgi dxguid)
 endif()
 
 # Offline archive extraction tests: no renderer, game process or inputs.

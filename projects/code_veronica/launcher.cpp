@@ -32,6 +32,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include "pad_phys.h"
+#include "../../libs/video/rsx_render_optimizations.h"
 #include "pad_map.h"
 #include "launcher_i18n.h"
 #include "patch_files.h"
@@ -43,6 +44,7 @@
 #include "cv_test_tools.h"
 #include "cv_item_menu.h"
 #include "cv_keycap_style.h"
+#include "cv_cheats.h"
 #include "cv_texture_export.h"
 #include "cv_texture_paths.h"
 #include "../../libs/video/rsx_texture_pack.h"
@@ -83,6 +85,8 @@ void  ps3_patch_set(const char* name, int on);
 int   ps3_patch_writes(const char* id, const char* spec, int on);
 }
 namespace {
+static bool opt30_comparison() {return rsx_opt30_parse(std::getenv("CV30_OPTIMIZATIONS"))>=0;}
+
 
 /* ---------------------------------------------------------------- palette */
 const Color C_BG(255, 21, 17, 17), C_SIDE(255, 13, 11, 11), C_PANEL(255, 30, 25, 25),
@@ -194,7 +198,7 @@ struct Settings {
     int mode = 0;          /* 0 janela, 1 sem borda, 2 tela cheia */
     int res = 1;           /* index into k_res */
     int aa = 0;            /* anti-aliasing: 0 off, 1 FXAA, 2 SMAA */
-    int fps = 0;           /* 0 the original 30; 1 unlocked 60 to measure maps (runs fast) */
+    int fps = 0;           /* 0 original 30; 1 experimental 60 with render-only interpolation */
     int aniso = 0;         /* anisotropic filtering: 0 off, 1-4 = 2x/4x/8x/16x */
     int brightness = 0;   /* -80..80, zero leaves the image unchanged */
     int contrast = 100;   /* 50..180 percent */
@@ -246,6 +250,8 @@ struct PatchOpt { const char* id; int title, desc, credit; };
 const PatchOpt k_patches[] = {
     { "cv_door_skip", S_PATCH_DOOR_T, S_PATCH_DOOR_D, S_PATCH_DOOR_C },
     { "cv_skip_logos", S_PATCH_LOGO_T, S_PATCH_LOGO_D, S_PATCH_LOGO_C },   /* boot_skip.cpp */
+    { "cv_infinite_health", S_CHEAT_HP_T, S_CHEAT_HP_D, S_PATCH_LOGO_C },
+    { "cv_infinite_ammo", S_CHEAT_AMMO_T, S_CHEAT_AMMO_D, S_PATCH_LOGO_C },
 };
 const int NPATCHES = sizeof k_patches / sizeof k_patches[0];
 /* Infinite health and ammunition: shown on the Inventario page, beside the
@@ -355,6 +361,7 @@ Settings load_settings()
     s.res    = _wtoi(ini_get(L"tela", L"resolucao", L"1").c_str());
     s.aa     = _wtoi(ini_get(L"tela", L"antialias", L"0").c_str());
     s.fps    = _wtoi(ini_get(L"tela", L"fps", L"0").c_str()) == 1;
+    if(opt30_comparison())s.fps=0;   // this process only; saved FPS choice is preserved
     s.aniso  = std::clamp(_wtoi(ini_get(L"tela", L"anisotropico", L"0").c_str()), 0, 4);
     s.brightness = _wtoi(ini_get(L"tela", L"brilho", L"0").c_str());
     s.contrast = _wtoi(ini_get(L"tela", L"contraste", L"100").c_str());
@@ -451,7 +458,7 @@ void save_settings(const Settings& s)
     ini_set(L"tela", L"modo", std::to_wstring(s.mode));
     ini_set(L"tela", L"resolucao", std::to_wstring(s.res));
     ini_set(L"tela", L"antialias", std::to_wstring(s.aa));
-    ini_set(L"tela", L"fps", std::to_wstring(s.fps));
+    if(!opt30_comparison())ini_set(L"tela", L"fps", std::to_wstring(s.fps));
     ini_set(L"tela", L"anisotropico", std::to_wstring(s.aniso));
     ini_set(L"tela", L"brilho", std::to_wstring(s.brightness));
     ini_set(L"tela", L"contraste", std::to_wstring(s.contrast));
@@ -974,7 +981,7 @@ void draw_inicio(Graphics& gr, const Font& head, const Font& body, const Font& c
     text(gr, T(S_DISPLAY_MODE), x, y, body, C_TEXT, StringAlignmentNear, 200, 30);
     dropdown(gr, RectF(x + 210, y, 200, 30), mode_name(g.s.mode), ID_DD_MODE, body);
     text(gr, T(S_FRAME_LIMIT), x + 450, y, body, C_TEXT, StringAlignmentNear, 180, 30);
-    dropdown(gr, RectF(x + 630, y, 180, 30), fps_name(g.s.fps), g.running ? -1 : ID_DD_FPS, body, !g.running);
+    dropdown(gr, RectF(x + 630, y, 180, 30), fps_name(g.s.fps), (g.running||opt30_comparison()) ? -1 : ID_DD_FPS, body, !g.running&&!opt30_comparison());
     y += 44;
     text(gr, T(S_RENDER_RES), x, y, body, C_TEXT, StringAlignmentNear, 205, 30);
     dropdown(gr, RectF(x + 210, y, 200, 30), res_name(g.s.res), ID_DD_RES, body);
@@ -2030,6 +2037,7 @@ void apply_live(bool restore_menu = true)
 {
     cv_test_tools_enable(g.s.test_tools);
     cv_item_menu_enable(g.s.items_menu);
+    cv_cheats_set(g.s.patch[2],g.s.patch[3]);
     cv_focus_pause_enable(g.s.focus_pause);
     cv_focus_pause_label(T(S_PAUSED));
     if (!g.running) return;
@@ -2146,7 +2154,7 @@ void click(int id)
             if (g.open_dd == ID_DD_MODE) g.s.mode = i;
             else if (g.open_dd == ID_DD_RES) g.s.res = i;
             else if (g.open_dd == ID_DD_AA) g.s.aa = i;
-            else if (g.open_dd == ID_DD_FPS) g.s.fps = i;
+            else if (g.open_dd == ID_DD_FPS && !opt30_comparison()) g.s.fps = i;
             else if (g.open_dd == ID_DD_ANISO) g.s.aniso = i;
             else if (g.open_dd == ID_DD_SHARP) g.s.sharpness = i * 10;
             else if(g.open_dd==ID_DD_SRT_ENEMIES)g.s.srt_enemies=i==6?99:i;
@@ -2674,6 +2682,9 @@ std::wstring folder_code()
  * the settings just saved and plays at once (CV_LAUNCHER_AUTOPLAY), and leave. */
 void start_other_version()
 {
+    /* The comparison build is deployed only to JP. Do not silently hand off
+     * to a sibling executable that does not implement the comparison policy. */
+    if(opt30_comparison()) { g.page=P_JOGO; g.play_msg=T(S_EBOOT_MISMATCH); return; }
     const GameVersion* v = version_of(folder_code());
     const std::wstring exe = v ? sibling_exe(*v) : L"";
     if (exe.empty()) { g.page = P_JOGO; g.play_msg = T(S_SET_FOLDER_FIRST); return; }
@@ -2692,6 +2703,10 @@ void start_other_version()
 void start_game()
 {
     const Settings& s = g.s;
+    /* Match the tested normal CMD when opening the executable directly.
+     * An explicit compiler override remains available to diagnostic launchers. */
+    const char* compiler_env=std::getenv("SHADER_COMPILER");
+    if(!compiler_env||!*compiler_env)set_env("SHADER_COMPILER","dxc");
     set_env("PS3_VFS_ROOT", narrow(s.game));
     set_env("PS3_SAVE_ROOT", s.saves.empty() ? "" : save_utf8(save_folder()));
     const auto rap = rap_for_game(s, GAME_CODE);
@@ -2701,14 +2716,23 @@ void start_game()
     set_env("WINDOW_MODE", k_mode_env[s.mode]);
     set_env("AA_MODE", std::to_string(s.aa));
     set_env("RSX_ANISO", s.aniso ? std::to_string(1 << s.aniso) : "0");
-    /* Unlocked 60 (cv_fps_experimental.cpp, raw benchmark): the game logic
-     * still steps once per drawn frame, so it runs fast. Only this process
-     * sees it; the ELF and the save stay as they are. 30 leaves the
-     * environment alone, as before this option existed. */
-    if (s.fps == 1) {
+    /* Opt-in 60 FPS: preserve native 30 Hz gameplay, blend render poses.
+     * The accelerated RAW benchmark remains a separate diagnostic shortcut. */
+    const char* diagnostic_env=std::getenv("CV_FPS_DIAGNOSTIC");
+    const bool fps_diagnostic=diagnostic_env&&std::strcmp(diagnostic_env,"1")==0;
+    if(opt30_comparison() || (!fps_diagnostic && s.fps==0)) {
+        set_env("CV_FPS_TEST_60", "");set_env("CV_FPS_BENCHMARK_RAW", "");
+        set_env("CV_RENDER_INTERPOLATION", "");set_env("VBLANK_HZ", "60");
+    } else if (s.fps == 1 || fps_diagnostic) {
         set_env("CV_FPS_TEST_60", "1");
-        set_env("CV_FPS_BENCHMARK_RAW", "1");
-        set_env("CV_RENDER_INTERPOLATION", "");
+        if(!fps_diagnostic)set_env("CV_FPS_BENCHMARK_RAW", "");
+        if(!fps_diagnostic)set_env("CV_RENDER_INTERPOLATION", "1");
+        set_env("VBLANK_HZ", "60");
+        if(!fps_diagnostic){set_env("CV_POSE_CPU_BLEND","1");set_env("CV_POSE_CPU","");}
+    }
+    if(!fps_diagnostic) {
+        for(const char* name:{"CV_POSE_PROFILE","CV_POSE_SEARCH_PROFILE","CV_FRAME_PROFILE",
+                             "CV_FRAME_DETAIL","CV_PRODUCER_PROFILE"})set_env(name,"");
     }
     set_env("CV_BRIGHTNESS", std::to_string(s.brightness));
     set_env("CV_CONTRAST", std::to_string(s.contrast));
@@ -2722,6 +2746,7 @@ void start_game()
     for (int i = 0; i < NPATCHES; i++)
         if (s.patch[i]) pl += (pl.empty() ? "" : ",") + std::string(k_patches[i].id);
     set_env("PS3_PATCHES", pl);
+    cv_cheats_set(s.patch[2],s.patch[3]);
     cv_item_menu_enable(s.items_menu);
     cv_focus_pause_enable(s.focus_pause);   /* also when nothing changed before Jogar */
     cv_focus_pause_label(T(S_PAUSED));

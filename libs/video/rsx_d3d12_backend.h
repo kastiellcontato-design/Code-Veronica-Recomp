@@ -49,6 +49,9 @@ int rsx_d3d12_backend_pump_messages(void);
 /* Force a present (useful for debugging). */
 void rsx_d3d12_backend_present(void);
 
+/* Optional render-only pose history: zero disables history outside gameplay. */
+void rsx_d3d12_pose_scene(u32 scene);
+
 #ifdef __cplusplus
 }
 #endif

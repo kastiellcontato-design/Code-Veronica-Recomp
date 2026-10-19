@@ -92,6 +92,11 @@ typedef struct {
 void rsx_fetch_plan_build(const rsx_state* st, rsx_fetch_plan* plan);
 /* All 16 attributes of vertex `vi` into out[16][4], as rsx_fetch_attrib. */
 void rsx_fetch_vertex_planned(rsx_fetch_plan* plan, u32 vi, float out[16][4]);
+/* Identical decoding for selected attributes; unselected output stays intact.
+ * The render interpolator needs only position and UV identity on the CPU. */
+void rsx_fetch_vertex_selected(rsx_fetch_plan* plan,u32 vi,u32 mask,float out[16][4]);
+/* Fixed 0/8/15 selection, bit-identical to selected(0x8101). */
+void rsx_fetch_pose_vertex(rsx_fetch_plan* plan,u32 vi,float out[16][4]);
 
 #ifdef __cplusplus
 }

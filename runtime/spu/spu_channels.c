@@ -111,7 +111,16 @@ static SPU_TLS int     s_spu_halt_armed = 0;
 /* image 22's bootstrap EXIT count, per task; reset when a pooled thread
  * takes a new task (spu_channels_job_reset). */
 static SPU_TLS int     s_exit_seen = 0;
-void spu_channels_job_reset(void) { s_exit_seen = 0; s_spu_halt_armed = 0; }
+static _Thread_local uint32_t t_poll_ea;
+static _Thread_local unsigned t_poll_n;
+static SPU_TLS uint32_t t_ovl_src, t_ovl_next_ea, t_ovl_next_lsa;
+void spu_channels_job_reset(void)
+{
+    s_exit_seen = 0;
+    s_spu_halt_armed = 0;
+    t_poll_ea = t_poll_n = 0;
+    t_ovl_src = t_ovl_next_ea = t_ovl_next_lsa = 0;
+}
 
 /* A non-local return replaces the old host call chain without changing
  * any architectural registers, local store, or pending guest work. */
@@ -312,8 +321,6 @@ int spu_run_with_halt(void (*entry)(spu_context*), spu_context* ctx)
  * write. The 1 ms timeout only covers a writer that does not notify.
  * SPU_POLL_WAIT=0 turns it off. */
 #define SPU_POLL_N 16
-static _Thread_local uint32_t t_poll_ea;
-static _Thread_local unsigned t_poll_n;
 volatile long long g_spu_poll_sleeps;
 static void spu_getllar_poll_wait(spu_context* ctx, uint32_t ea, const uint8_t* mem)
 {
@@ -1750,21 +1757,20 @@ static void spu_ovl_dump(spu_context* ctx, uint32_t ea, uint32_t lsa, const uint
                     char* c = strchr(s_dir, ','); if (c) { *c = 0; s_lsa = (uint32_t)strtoul(c + 1, 0, 0); } } }
     if (!s_on) return;
     static uint32_t s_seen[256]; static unsigned s_n;
-    static SPU_TLS uint32_t t_src, t_next_ea, t_next_lsa;
     FILE* f = NULL; char path[512];
     if (lsa == s_lsa && size >= 256) {
-        for (unsigned i = 0; i < s_n; i++) if (s_seen[i] == ea) { t_src = 0; return; }
+        for (unsigned i = 0; i < s_n; i++) if (s_seen[i] == ea) { t_ovl_src = 0; return; }
         if (s_n < 256) s_seen[s_n++] = ea;
-        t_src = ea;
+        t_ovl_src = ea;
         snprintf(path, sizeof path, "%s/ovl_%08X.bin", s_dir, ea);
         f = fopen(path, "wb");
         fprintf(stderr, "[spu-ovl-dump] img=%d body ea=0x%08X size=%u -> %s\n", ctx->image_id, ea, size, path);
-    } else if (t_src && ea == t_next_ea && lsa == t_next_lsa) {
-        snprintf(path, sizeof path, "%s/ovl_%08X.bin", s_dir, t_src);
+    } else if (t_ovl_src && ea == t_ovl_next_ea && lsa == t_ovl_next_lsa) {
+        snprintf(path, sizeof path, "%s/ovl_%08X.bin", s_dir, t_ovl_src);
         f = fopen(path, "ab");
-    } else { t_src = 0; return; }
+    } else { t_ovl_src = 0; return; }
     if (f) { fwrite(ls, 1, size, f); fclose(f); }
-    t_next_ea = ea + size; t_next_lsa = lsa + size;
+    t_ovl_next_ea = ea + size; t_ovl_next_lsa = lsa + size;
 }
 
 /* SPU_LOCKGUARD=<hex ea>: the word at that EA is a ticket lock (serving,next

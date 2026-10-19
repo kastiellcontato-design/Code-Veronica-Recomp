@@ -177,13 +177,10 @@ static inline u32 rd_be32(const u8* p)
 #endif
 }
 
-void rsx_fetch_vertex_planned(rsx_fetch_plan* plan, u32 vi, float out[16][4])
+static inline void fetch_planned_attribute(rsx_attr_plan* a,int i,u32 vi,float* o)
 {
-    for (int i = 0; i < 16; i++) {
-        rsx_attr_plan* a = &plan->a[i];
-        float* o = out[i];
         o[0] = a->cst[0]; o[1] = a->cst[1]; o[2] = a->cst[2]; o[3] = a->cst[3];
-        if (!a->active) continue;
+        if (!a->active) return;
         u32 ei = vi;
         if (a->freq) ei = a->modulo ? (vi % a->freq) : (vi / a->freq);
         u32 off = a->off0 + ei * a->stride;
@@ -227,5 +224,37 @@ void rsx_fetch_vertex_planned(rsx_fetch_plan* plan, u32 vi, float out[16][4])
             for (u32 k = 0; k < n; k++) o[k] = rsx_rd_bef(p + k * 4);
             break;
         }
-    }
+}
+void rsx_fetch_vertex_planned(rsx_fetch_plan* plan,u32 vi,float out[16][4])
+{
+    for(int i=0;i<16;i++)fetch_planned_attribute(&plan->a[i],i,vi,out[i]);
+}
+void rsx_fetch_vertex_selected(rsx_fetch_plan* plan,u32 vi,u32 mask,float out[16][4])
+{
+    for(int i=0;i<16&&mask;i++,mask>>=1)if(mask&1u)fetch_planned_attribute(&plan->a[i],i,vi,out[i]);
+}
+
+/* V35: fixed selection used by CPU pose capture. No cross-draw memoization.
+ * Fast float arrays preserve exact component bits; unusual formats/divisors
+ * continue through the same generic decoder. Never read beyond n components. */
+static inline void fetch_pose_attribute(rsx_attr_plan* a,int i,u32 vi,float* o)
+{
+    if(!a->active){memcpy(o,a->cst,16);return;}
+    if(a->type!=2 || a->freq){fetch_planned_attribute(a,i,vi,o);return;}
+    u32 off=a->off0+vi*a->stride;
+    const u8* p;
+    if(a->main_mem){
+        u32 pg=off>>20;
+        if(pg!=a->page){a->page=pg;a->page_base=vm_base+cellGcmResolveLocated(0,pg<<20);}
+        p=a->page_base+(off&0xFFFFFu);
+    }else p=vm_base+cellGcmResolveLocated(1,off);
+    /* The generic plan clamps n to 1..4 and retains constant components. */
+    for(u32 k=0;k<a->n;k++){u32 w=rd_be32(p+k*4);memcpy(o+k,&w,4);}
+    for(u32 k=a->n;k<4;k++)memcpy(o+k,a->cst+k,4);
+}
+void rsx_fetch_pose_vertex(rsx_fetch_plan* plan,u32 vi,float out[16][4])
+{
+    fetch_pose_attribute(&plan->a[0],0,vi,out[0]);
+    fetch_pose_attribute(&plan->a[8],8,vi,out[8]);
+    fetch_pose_attribute(&plan->a[15],15,vi,out[15]);
 }

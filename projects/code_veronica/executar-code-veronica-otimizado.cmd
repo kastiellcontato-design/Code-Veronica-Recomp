@@ -55,6 +55,22 @@ if /i "%~1"=="--dxc-experimental" (
  echo DXC EXPERIMENTAL: pode apresentar falhas nas sombras.
  echo Para usar o FXC, feche o jogo e rode este atalho com --fxc.
 )
+rem Always restore the native clock on normal entry points. The experiment
+rem is process-local, never saved to cv_launcher.ini or written into the ELF.
+set "VBLANK_HZ=60"
+if "%CV_FPS_TEST_60%"=="1" (
+ set "VBLANK_HZ=60"
+ set "GAME_LOG=%~dp0run-log-fps60-experimental.txt"
+ title Code Veronica - teste de 60 FPS
+ echo TESTE: desenho em 60 FPS; logica do jogo em 30 Hz; vblank em 60 Hz.
+ if "%CV_FPS_BENCHMARK_RAW%"=="1" echo BENCHMARK RAW: este modo acelera a logica do jogo.
+ if "%CV_RENDER_INTERPOLATION%"=="1" echo Interpolacao experimental de geometria ativada. Confira movimento e cortes de camera.
+ echo Para voltar aos 30 FPS, feche e use o atalho normal.
+)
+if "%CV_FPS_TEST_60%"=="1" if "%CV_FPS_BENCHMARK_RAW%"=="1" set "GAME_LOG=%~dp0run-log-benchmark60-acelerado.txt"
+if not "%CV_FPS_TEST_60%"=="1" set "CV_RENDER_INTERPOLATION="
+if "%CV_FPS_TEST_60%"=="1" if "%CV_RENDER_INTERPOLATION%"=="1" set "GAME_LOG=%~dp0run-log-fps60-interpolado.txt"
+if "%CV_LIGHTER_PROBE%"=="1" set "GAME_LOG=%~dp0run-log-sombra-isqueiro.txt"
 rem Limpar opcoes de diagnostico que podem alterar o desenho.
 for /f "delims==" %%V in ('set FP_ 2^>nul') do set "%%V="
 for /f "delims==" %%V in ('set TEX_ 2^>nul') do set "%%V="
@@ -87,7 +103,8 @@ rem Preserve the last three runs: a restart must not erase the freeze evidence.
 if exist "%GAME_LOG%.previous-2.txt" copy /y "%GAME_LOG%.previous-2.txt" "%GAME_LOG%.previous-3.txt" >nul
 if exist "%GAME_LOG%.previous-1.txt" copy /y "%GAME_LOG%.previous-1.txt" "%GAME_LOG%.previous-2.txt" >nul
 if exist "%GAME_LOG%" copy /y "%GAME_LOG%" "%GAME_LOG%.previous-1.txt" >nul
-"%GAME_EXE%" "%GAME_ELF%" > "%GAME_LOG%" 2>&1
+> "%GAME_LOG%" echo [runner] vblank_hz=%VBLANK_HZ% fps_test_60=%CV_FPS_TEST_60% shader_compiler=%SHADER_COMPILER%
+"%GAME_EXE%" "%GAME_ELF%" >> "%GAME_LOG%" 2>&1
 set "GAME_RESULT=%ERRORLEVEL%"
 echo [runner] exit code=%GAME_RESULT%>> "%GAME_LOG%"
 echo.

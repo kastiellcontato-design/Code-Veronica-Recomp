@@ -102,6 +102,10 @@ if "%CV_SPU_FAULT_TESTS%"=="1" (
  cmake --build build-release --target code_veronica_spu_fault_tests -j 6 || exit /b 1
  build-release\bin\code_veronica_spu_fault_tests.exe || exit /b 1
 )
+if "%CV_SPU_POOL_TESTS%"=="1" (
+ cmake --build build-release --target code_veronica_spu_pool_tests -j 6 || exit /b 1
+ build-release\bin\code_veronica_spu_pool_tests.exe || exit /b 1
+)
 if "%CV_SPU_SCHEDULE_TESTS%"=="1" (
  cmake --build build-release --target code_veronica_spu_schedule_tests -j 6 || exit /b 1
  build-release\bin\code_veronica_spu_schedule_tests.exe || exit /b 1
@@ -134,6 +138,27 @@ if "%CV_MAP_TESTS%"=="1" (
  )
 )
 
+if "%CV_FPS_TESTS%"=="1" (
+ cmake --build build-release --target code_veronica_fps_tests -j 6 || exit /b 1
+ build-release\bin\code_veronica_fps_tests.exe off || exit /b 1
+ build-release\bin\code_veronica_fps_tests.exe on || exit /b 1
+ build-release\bin\code_veronica_fps_tests.exe raw || exit /b 1
+)
+
+if "%CV_POSE_TESTS%"=="1" (
+ cmake --build build-release --target code_veronica_pose_tests -j 6 || exit /b 1
+ build-release\bin\code_veronica_pose_tests.exe || exit /b 1
+)
+
+if "%CV_SHADOW_FILTER_TESTS%"=="1" (
+ cmake --build build-release --target code_veronica_shadow_filter_tests -j 6 || exit /b 1
+ build-release\bin\code_veronica_shadow_filter_tests.exe || exit /b 1
+)
+if "%CV_POSE_GPU_TESTS%"=="1" (
+ cmake --build build-release --target code_veronica_pose_gpu_tests -j 6 || exit /b 1
+ build-release\bin\code_veronica_pose_gpu_tests.exe || exit /b 1
+)
+
 rem F6 item menu: rules and guest write on synthetic memory, per region;
 rem with CV_ITEMS_PREVIEW=<folder> the EU run also draws the menu there.
 if "%CV_ITEMS_TESTS%"=="1" (
@@ -151,6 +176,13 @@ if "%CV_ITEMS_TESTS%"=="1" (
   cmake --build build-release-us --target code_veronica_items_tests -j 6 || exit /b 1
   build-release\bin\cv_items_tests_us.exe || exit /b 1
  )
+)
+
+if "%CV_CHEAT_TESTS%"=="1" (
+ cmake --build build-release --target code_veronica_cheat_tests -j 6 || exit /b 1
+ build-release\bin\cv_cheats_tests_eu.exe || exit /b 1
+ build-release\bin\cv_cheats_tests_jp.exe || exit /b 1
+ build-release\bin\cv_cheats_tests_us.exe || exit /b 1
 )
 
 rem Pause on focus loss: the decision logic, no game or window needed.
