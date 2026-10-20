@@ -77,6 +77,8 @@ enum StrId {
     S_PATCH_CLEAR_PATH, S_PATCH_CLEAR_PATH_HINT,
     S_TEX_ALL_T, S_TEX_ALL_D, S_TEX_ALL_START, S_TEX_ALL_CANCEL, S_TEX_ALL_DONE, S_TEX_ALL_CANCELED, S_TEX_ALL_FAILED, S_TEX_ALL_PROGRESS,
     S_TEX_PATH_CONFLICT, S_TEX_MOD_RESTART,
+    S_POSE_DEVICE, S_POSE_CPU, S_POSE_GPU,
+    S_FRAME_GEN, S_FRAME_GEN_OFF, S_FRAME_GEN_ON,
     S_COUNT
 };
 
@@ -284,6 +286,12 @@ static const wchar_t* const k_str_pt[] = {
     L"%u/%u arquivos · %u PNGs · %u existentes · %u ignoradas · %u erros",
     L"Escolha pastas diferentes para carregar o mod e salvar as texturas extraídas.",
     L"Ao trocar a pasta do mod, reinicie o jogo para carregar os PNGs.",
+    L"Interpolação (60 FPS)",
+    L"CPU (atual)",
+    L"GPU (Experimental)",
+    L"Geração de quadros",
+    L"Desligada",
+    L"FSR 3.1 (Experimental)",
 };
 static_assert(sizeof k_str_pt / sizeof k_str_pt[0] == S_COUNT, "k_str_pt: one text per StrId");
 
@@ -491,6 +499,12 @@ static const wchar_t* const k_str_en[] = {
     L"%u/%u files · %u PNGs · %u existing · %u skipped · %u errors",
     L"Choose different folders for loading mods and saving extracted textures.",
     L"After changing the mod folder, restart the game to load its PNGs.",
+    L"Interpolation (60 FPS)",
+    L"CPU (current)",
+    L"GPU (Experimental)",
+    L"Frame generation",
+    L"Off",
+    L"FSR 3.1 (Experimental)",
 };
 static_assert(sizeof k_str_en / sizeof k_str_en[0] == S_COUNT, "k_str_en: one text per StrId");
 
@@ -698,6 +712,12 @@ static const wchar_t* const k_str_es[] = {
     L"%u/%u archivos · %u PNG · %u existentes · %u omitidas · %u errores",
     L"Elige carpetas distintas para cargar el mod y guardar las texturas extraídas.",
     L"Tras cambiar la carpeta del mod, reinicia el juego para cargar los PNG.",
+    L"Interpolación (60 FPS)",
+    L"CPU (actual)",
+    L"GPU (Experimental)",
+    L"Generación de cuadros",
+    L"Desactivada",
+    L"FSR 3.1 (Experimental)",
 };
 static_assert(sizeof k_str_es / sizeof k_str_es[0] == S_COUNT, "k_str_es: one text per StrId");
 
@@ -905,6 +925,12 @@ static const wchar_t* const k_str_ja[] = {
     L"%u/%u ファイル · %u PNG · %u 既存 · %u 対象外 · %u エラー",
     L"MODの読み込み先と抽出テクスチャの保存先は別のフォルダーにしてください。",
     L"MODフォルダーの変更後は、ゲームを再起動してPNGを読み込んでください。",
+    L"補間（60 FPS）",
+    L"CPU（現行）",
+    L"GPU（実験的）",
+    L"フレーム生成",
+    L"オフ",
+    L"FSR 3.1（実験的）",
 };
 static_assert(sizeof k_str_ja / sizeof k_str_ja[0] == S_COUNT, "k_str_ja: one text per StrId");
 
@@ -1166,6 +1192,12 @@ static const wchar_t* const k_str_fr[] = {
     L"%u/%u fichiers · %u PNG · %u existants · %u ignorés · %u erreurs",
     L"Choisissez des dossiers différents pour charger le mod et enregistrer les textures extraites.",
     L"Après avoir changé le dossier du mod, redémarrez le jeu pour charger les PNG.",
+    L"Interpolation (60 FPS)",
+    L"CPU (actuel)",
+    L"GPU (expérimental)",
+    L"Génération d’images",
+    L"Désactivée",
+    L"FSR 3.1 (Expérimental)",
 };
 static_assert(sizeof k_str_fr / sizeof k_str_fr[0] == S_COUNT, "k_str_fr: one text per StrId");
 
@@ -1427,6 +1459,12 @@ static const wchar_t* const k_str_de[] = {
     L"%u/%u Dateien · %u PNGs · %u vorhanden · %u übersprungen · %u Fehler",
     L"Zum Laden des Mods und Speichern extrahierter Texturen unterschiedliche Ordner wählen.",
     L"Nach dem Wechsel des Mod-Ordners das Spiel neu starten, um die PNGs zu laden.",
+    L"Interpolation (60 FPS)",
+    L"CPU (aktuell)",
+    L"GPU (experimentell)",
+    L"Frame-Generierung",
+    L"Aus",
+    L"FSR 3.1 (Experimentell)",
 };
 static_assert(sizeof k_str_de / sizeof k_str_de[0] == S_COUNT, "k_str_de: one text per StrId");
 
@@ -1688,6 +1726,12 @@ static const wchar_t* const k_str_it[] = {
     L"%u/%u file · %u PNG · %u esistenti · %u ignorate · %u errori",
     L"Scegli cartelle diverse per caricare il mod e salvare le texture estratte.",
     L"Dopo aver cambiato la cartella del mod, riavvia il gioco per caricare i PNG.",
+    L"Interpolazione (60 FPS)",
+    L"CPU (attuale)",
+    L"GPU (sperimentale)",
+    L"Generazione fotogrammi",
+    L"Disattivata",
+    L"FSR 3.1 (Sperimentale)",
 };
 static_assert(sizeof k_str_it / sizeof k_str_it[0] == S_COUNT, "k_str_it: one text per StrId");
 
@@ -1949,6 +1993,12 @@ static const wchar_t* const k_str_pl[] = {
     L"%u/%u plików · %u PNG · %u istniejących · %u pominiętych · %u błędów",
     L"Wybierz różne foldery dla moda i wyodrębnionych tekstur.",
     L"Po zmianie folderu moda uruchom grę ponownie, aby wczytać pliki PNG.",
+    L"Interpolacja (60 FPS)",
+    L"CPU (obecna)",
+    L"GPU (eksperymentalna)",
+    L"Generowanie klatek",
+    L"Wyłączone",
+    L"FSR 3.1 (Eksperymentalne)",
 };
 static_assert(sizeof k_str_pl / sizeof k_str_pl[0] == S_COUNT, "k_str_pl: one text per StrId");
 
@@ -2210,6 +2260,12 @@ static const wchar_t* const k_str_tr[] = {
     L"%u/%u dosya · %u PNG · %u mevcut · %u atlanan · %u hata",
     L"Mod yükleme ve çıkarılan dokuları kaydetme klasörleri farklı olmalıdır.",
     L"Mod klasörünü değiştirdikten sonra PNG dosyalarını yüklemek için oyunu yeniden başlatın.",
+    L"Enterpolasyon (60 FPS)",
+    L"CPU (mevcut)",
+    L"GPU (deneysel)",
+    L"Kare üretimi",
+    L"Kapalı",
+    L"FSR 3.1 (Deneysel)",
 };
 static_assert(sizeof k_str_tr / sizeof k_str_tr[0] == S_COUNT, "k_str_tr: one text per StrId");
 
@@ -2471,6 +2527,12 @@ static const wchar_t* const k_str_ar[] = {
     L"%u/%u ملفات · %u PNG · %u موجودة · %u متجاوزة · %u أخطاء",
     L"اختر مجلدين مختلفين لتحميل التعديلات وحفظ الخامات المستخرجة.",
     L"بعد تغيير مجلد التعديل، أعد تشغيل اللعبة لتحميل صور PNG.",
+    L"الاستيفاء (60 FPS)",
+    L"CPU (الحالي)",
+    L"GPU (تجريبي)",
+    L"توليد الإطارات",
+    L"إيقاف",
+    L"FSR 3.1 (تجريبي)",
 };
 static_assert(sizeof k_str_ar / sizeof k_str_ar[0] == S_COUNT, "k_str_ar: one text per StrId");
 
@@ -2732,6 +2794,12 @@ static const wchar_t* const k_str_zh[] = {
     L"%u/%u 文件 · %u PNG · %u 已有 · %u 跳过 · %u 错误",
     L"加载模组和保存提取纹理必须使用不同的文件夹。",
     L"更改模组文件夹后，请重启游戏以加载 PNG。",
+    L"插值（60 FPS）",
+    L"CPU（当前）",
+    L"GPU（实验性）",
+    L"帧生成",
+    L"关闭",
+    L"FSR 3.1（实验性）",
 };
 static_assert(sizeof k_str_zh / sizeof k_str_zh[0] == S_COUNT, "k_str_zh: one text per StrId");
 
@@ -2993,6 +3061,12 @@ static const wchar_t* const k_str_ko[] = {
     L"%u/%u 파일 · %u PNG · %u 기존 · %u 건너뜀 · %u 오류",
     L"모드를 불러올 폴더와 추출한 텍스처를 저장할 폴더를 다르게 선택하세요.",
     L"모드 폴더를 바꾸면 게임을 다시 시작해야 PNG를 불러옵니다.",
+    L"보간 (60 FPS)",
+    L"CPU (현재)",
+    L"GPU (실험적)",
+    L"프레임 생성",
+    L"끄기",
+    L"FSR 3.1 (실험적)",
 };
 static_assert(sizeof k_str_ko / sizeof k_str_ko[0] == S_COUNT, "k_str_ko: one text per StrId");
 
@@ -3254,6 +3328,12 @@ static const wchar_t* const k_str_ru[] = {
     L"%u/%u файлов · %u PNG · %u имеющихся · %u пропущено · %u ошибок",
     L"Выберите разные папки для загрузки мода и сохранения извлечённых текстур.",
     L"После смены папки мода перезапустите игру для загрузки PNG.",
+    L"Интерполяция (60 FPS)",
+    L"CPU (текущая)",
+    L"GPU (экспериментально)",
+    L"Генерация кадров",
+    L"Выкл.",
+    L"FSR 3.1 (Эксперимент.)",
 };
 static_assert(sizeof k_str_ru / sizeof k_str_ru[0] == S_COUNT, "k_str_ru: one text per StrId");
 

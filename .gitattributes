@@ -1,0 +1,3 @@
+# Preserve the pinned upstream AMD SDK bytes, including license formatting.
+third_party/amd_fsr31/** -text -whitespace
+third_party/amd_fsr31/bin/*.dll binary

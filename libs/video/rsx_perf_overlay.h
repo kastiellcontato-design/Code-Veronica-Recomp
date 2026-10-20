@@ -1,3 +1,4 @@
+/* With active FSR: FPS real / total measured DXGI Presents; ms stays real. */
 /* rsx_perf_overlay.h -- the performance overlay in the corner of the game.
  *
  * PERF_OVERLAY lists what it shows, in this order, joined by commas:

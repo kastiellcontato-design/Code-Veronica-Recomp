@@ -6,6 +6,7 @@ set "CV_FPS_BENCHMARK_RAW="
 set "CV_RENDER_INTERPOLATION=1"
 set "CV_POSE_CPU="
 set "CV_POSE_CPU_BLEND=1"
+if /i "%~1"=="--gpu-compute" set "CV_POSE_COMPUTE=1"
 if /i "%~1"=="--gpu-blend" set "CV_POSE_CPU_BLEND=0"
 if /i "%~1"=="--cpu-blend" set "CV_POSE_CPU_BLEND=1"
 if /i "%~1"=="--cpu" set "CV_POSE_CPU=1"
@@ -24,7 +25,7 @@ set "FRAME_BUDGET="
 echo TESTE DE INTERPOLACAO: logica 30 Hz, poses intermediarias no desenho.
 if "%CV_POSE_CPU%"=="1" echo Comparacao: conversao de vertices na CPU (caminho anterior).
 if /i "%~1"=="--prepass-detail" echo Diagnostico PERF ativo: as medidas de tempo podem ter algum custo.
-if "%CV_POSE_CPU_BLEND%"=="1" echo Comparacao: calculo final das posicoes na CPU.
+if "%CV_POSE_COMPUTE%"=="1" (echo Interpolacao GPU: coerencia, combinacao dos passes, vetos, costuras e posicoes.) else if "%CV_POSE_CPU_BLEND%"=="1" echo Comparacao: interpolacao na CPU.
 echo Teste caminhada, giro e troca de camera. Para voltar, use o atalho habitual.
 echo Log separado: run-log-fps60-interpolado.txt
 call "%~dp0executar-code-veronica-otimizado.cmd"

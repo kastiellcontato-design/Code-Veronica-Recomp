@@ -14,9 +14,35 @@ A work-in-progress native Windows port of **Resident Evil Code: Veronica X HD**
 |---|---|
 | Boot | Reaches the title menu |
 | FMV (PAMF: MPEG-2 1280×640 @ 29.97 + ATRAC3plus) | Plays through FFmpeg; still slower than real time |
-| Gameplay | Not yet |
+| Gameplay | Playable scenes tested on JP; EU/US builds available; full playthrough unverified |
 
 Experimental. Expect graphical glitches and crashes.
+
+## 30/60 FPS and optional frame generation
+
+The normal launcher supports EU, US and JP executables with the same renderer.
+Start `executar-code-veronica-jogar.cmd`, choose the game folder/version, then
+select 30 or 60 FPS. Fresh settings default to native 30 FPS; the launcher keeps
+the user's saved choice. The 60 FPS mode interpolates presentation while game
+logic remains at 30 Hz. CPU interpolation is the default; GPU compute is optional.
+
+FSR Frame Generation 3.1.6 is separately opt-in for 60 FPS, with a restart required.
+It is off by default and never runs in native 30 FPS. Its official AMD runtime and
+license are copied beside the executables. The overlay displays real FPS / total
+DXGI presentation FPS when FSR is active. Diagnostic benchmark shortcuts keep FSR
+off so measurements remain comparable.
+
+The connected-surface fallback prevents mixed endpoint/intermediate triangles.
+Conflicting components can repeat their current pose, so local smoothness may
+vary. Graphics/lighting artifacts remain known; neither perfect image quality nor
+60 FPS on every PC is promised. Gameplay validation so far is primarily JP;
+EU/US receive the shared implementation and regional build/menu validation.
+
+F9 records a bounded motion diagnostic burst; F12 remains the detailed capture.
+Saves, captures, game files and generated game code are excluded from Git.
+Implementation/testing: [FPS60-EXPERIMENTAL.md](FPS60-EXPERIMENTAL.md),
+[FSR-FRAME-GENERATION.md](FSR-FRAME-GENERATION.md),
+[MOTION-CAPTURE.md](MOTION-CAPTURE.md).
 
 ## Requirements
 
@@ -91,7 +117,9 @@ o jogo e gerar o código recompilado na sua própria máquina.
 Para compilar: coloque o jogo em `JOGO/NPEB00553/`, gere o código seguindo o
 `docs/GETTING_STARTED.md` e rode o `build-release.cmd`. Para jogar, ajuste os
 caminhos no `executar-code-veronica-otimizado.cmd` e dê dois cliques nele.
-Hoje o jogo chega ao menu e os vídeos tocam, mas ainda um pouco lentos.
+Há gameplay testada na versão japonesa. O launcher normal oferece 30 FPS nativos
+(padrão inicial), 60 FPS interpolados e FSR Frame Generation opcional. As três
+regiões usam as mesmas melhorias; ainda há bugs gráficos e de iluminação.
 
 A versão japonesa da PSN (NPJB00135) também funciona, como um segundo
 executável (`MyGameRecomp_JP.exe`); veja a seção "Japanese version" acima.

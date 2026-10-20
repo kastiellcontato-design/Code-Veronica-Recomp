@@ -9,6 +9,9 @@
  */
 
 #include "rsx_live_draw.h"
+#include "rsx_fifo_idle.h"
+#include "rsx_fifo_probe.h"
+#include "rsx_fifo_publication.h"
 #include "rsx_draw_engine.h"
 #include "cellGcmSys.h"
 #include "../../runtime/platform/win32_compat.h"
@@ -1575,6 +1578,10 @@ void gcm_forget_spu_blocks(void)
 
 void gcm_note_spu_put(u32 ea, u32 size)
 {
+    extern u32 g_gcm_notify_put_addr;
+    void cellGcm_fifo_notify_put(void);
+    if(rsx_fifo_publication_contains(ea,size,g_gcm_notify_put_addr))cellGcm_fifo_notify_put();
+
     if (!size || size > 0x40000u) return;
     u32 room = 0;
     u32 io = gcm_ea2io_range(ea, &room);
@@ -1753,10 +1760,40 @@ static void gcm_rsx_process_fifo_unlocked(void);
  * the D3D12 backend it feeds) stays on the present thread -- running it from
  * the polling game thread killed the process silently. */
 static HANDLE s_gcm_kick_ev = NULL;
+/* Configuration is immutable after guest/frame threads start. Every title
+ * and native 30 FPS leave the watch disabled unless explicitly configured. */
+u32 g_gcm_notify_put_addr=0;
+static volatile LONG s_gcm_put_signals=0;
+void cellGcm_fifo_notify_put(void) {
+    if(s_gcm_kick_ev) {
+        InterlockedIncrement(&s_gcm_put_signals);
+        SetEvent(s_gcm_kick_ev); /* hint only; the original walker checks PUT */
+    }
+}
+unsigned cellGcm_fifo_notify_count(void) {
+    return (unsigned)InterlockedCompareExchange(&s_gcm_put_signals,0,0);
+}
+
 void* cellGcm_fifo_kick_event(void)
 {
     if (!s_gcm_kick_ev) s_gcm_kick_ev = CreateEventA(NULL, FALSE, FALSE, NULL);
     return (void*)s_gcm_kick_ev;
+}
+
+/* Called once from main before any guest or frame worker starts. */
+void cellGcm_fifo_notify_configure(int enable) {
+    const char* kick=getenv("GCM_FIFO_KICK");
+    if(enable && !(kick && *kick=='0') && cellGcm_fifo_kick_event()) {
+        g_gcm_notify_put_addr=GCM_CONTROL_GUEST_ADDR;
+        /* Lifted inline ppu_st32 bypasses vm_write32 for plain memory. Mark
+         * this one 128-byte line using its existing coherence fallback, so
+         * the real PUT store reaches the post-commit observer. No global
+         * diagnostic mode, re-lift, busy loop or fake reservation is needed. */
+        extern void spu_coh_watch_line(u32 ea);
+        spu_coh_watch_line(g_gcm_notify_put_addr);
+    }
+    fprintf(stderr,"[FIFO-NOTIFY] v41 enabled=%u put_addr=0x%08X (lifted-inline barrier + PPU32/DMA; timeout retained)\n",
+        g_gcm_notify_put_addr!=0,g_gcm_notify_put_addr);
 }
 
 /* The present thread's idle wait. It used to be a flat Sleep(4), which meant
@@ -1764,13 +1801,16 @@ void* cellGcm_fifo_kick_event(void)
  * starved guest still paid the full tick. Waiting here instead costs nothing
  * when no one kicks (the timeout is the old sleep) and drains immediately when
  * someone does. */
-void cellGcm_fifo_kick_wait(unsigned ms)
+int cellGcm_fifo_kick_wait_result(unsigned ms)
 {
     static int on = -1;
     if (on < 0) { const char* e = getenv("GCM_FIFO_KICK"); on = (e && *e == '0') ? 0 : 1; }
     HANDLE ev = on ? (HANDLE)cellGcm_fifo_kick_event() : NULL;
-    if (ev) WaitForSingleObject(ev, ms);
-    else    Sleep(ms);
+    return rsx_fifo_idle_wait(ev,ms);
+}
+void cellGcm_fifo_kick_wait(unsigned ms)
+{
+    (void)cellGcm_fifo_kick_wait_result(ms);
 }
 
 
@@ -1815,6 +1855,27 @@ volatile u32 g_gcm_drain_epoch = 1;
  * sleep is 1-2 ms on Windows, paid once per flip -- ~10 ms a frame in Code
  * Veronica's lighter scene, with the work sitting there. */
 static volatile int s_gcm_stopped_at_flip = 0;
+
+/* Optional profile only. Try-lock: never delay the frame clock behind a guest
+ * recycle. Snapshot is observational; PUT/head may change while sampled.
+ * No command execution, label/reference publication, or guest writes here. */
+void cellGcm_fifo_probe_snapshot(rsx_fifo_probe* out)
+{
+    memset(out,0,sizeof *out);
+    if(!TryAcquireSRWLockShared(&s_gcm_fifo_lock)) {
+        out->state=RSX_FIFO_PROBE_BUSY;return;
+    }
+    if(s_gcm_context_ea || s_gcm_syscall_mode) {
+        out->get=s_fifo_getoff;
+        out->put=vm_read32(GCM_CONTROL_GUEST_ADDR);
+        atomic_thread_fence(memory_order_acquire);
+        u32 ea=out->get!=out->put?gcm_io2ea(out->get):0;
+        if(ea)out->head=vm_read32(ea);
+        out->state=rsx_fifo_probe_classify(out->get,out->put,out->head,ea!=0);
+    }
+    ReleaseSRWLockShared(&s_gcm_fifo_lock);
+}
+
 int cellGcm_drain_more_ready(void)
 {
     static int on = -1;

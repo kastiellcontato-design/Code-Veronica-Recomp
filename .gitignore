@@ -143,3 +143,14 @@ projects/*/launcher_art/banner.*
 projects/*/launcher_art/icon.*
 # Texture mods: dumped and replacement PNGs are the game's images
 textures/
+
+# Local Code Veronica saves and diagnostics contain game-derived data.
+/Teste Codex save/
+projects/*/gamedata/
+projects/*/fsr-captures/
+projects/*/motion-captures/
+projects/code_veronica/vs_*.hlsl
+projects/code_veronica/ps_*.hlsl
+projects/code_veronica/tools/__pycache__/
+# Official redistributable AMD runtime, pinned with license and SHA256.
+!third_party/amd_fsr31/bin/amd_fidelityfx_framegeneration_dx12.dll

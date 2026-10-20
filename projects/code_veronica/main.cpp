@@ -39,6 +39,8 @@
  * passthrough to <windows.h>; off Windows the toolkit's shim supplies the same
  * names over pthreads and mmap, so the call sites below are written once. */
 #include "win32_compat.h"
+#include "../../libs/video/rsx_fifo_idle.h"
+#include "../../libs/video/rsx_fifo_probe.h"
 #include "host_thread_name.h"
 
 #include <stdint.h>
@@ -197,6 +199,10 @@ extern "C" void ps3_tl_begin(int ev);   /* PS3_TIMELINE, cellGcmSys.c */
 extern "C" void ps3_tl_end(int ev);
 extern "C" void ps3_tl_frame(void);
 extern "C" int cellGcm_drain_more_ready(void);
+extern "C" int cellGcm_fifo_kick_wait_result(unsigned ms);
+extern "C" void cellGcm_fifo_probe_snapshot(rsx_fifo_probe* out);
+extern "C" void cellGcm_fifo_notify_configure(int enable);
+extern "C" unsigned cellGcm_fifo_notify_count(void);
 extern "C" void ps3_tl_sleep_begin(void);
 extern "C" void ps3_tl_sleep_end(void);
 
@@ -251,6 +257,20 @@ static DWORD WINAPI frame_clock(LPVOID)
     double vblank_us = 1000000.0 / 60.0;
     { const char* e = getenv("VBLANK_HZ"); if (e && atof(e) > 1.0) vblank_us = 1000000.0 / atof(e); }
     double next_tick = (double)now_us();
+    const bool wake_fifo=rsx_fifo_idle_enabled(getenv("CV_FPS_TEST_60"),getenv("CV_RENDER_INTERPOLATION"),getenv("CV_FIFO_WAKE"))!=0;
+    const char* idle_probe=getenv("CV_PRODUCER_PROFILE");
+    const bool profile_idle=idle_probe&&!strcmp(idle_probe,"1");
+    const char* fifo_probe=getenv("CV_FIFO_PROFILE");
+    const bool profile_fifo=profile_idle&&fifo_probe&&!strcmp(fifo_probe,"1")&&
+        rsx_fifo_idle_enabled(getenv("CV_FPS_TEST_60"),getenv("CV_RENDER_INTERPOLATION"),nullptr);
+    unsigned fifo_states[RSX_FIFO_PROBE_STATES]={},fifo_put_changed=0,fifo_head_changed=0;
+    unsigned fifo_empty_to_pending=0,fifo_pending_unchanged=0,fifo_get_changed=0;
+    double fifo_wait_ms[RSX_FIFO_PROBE_STATES]={},fifo_probe_us=0;
+    unsigned put_signals_last=cellGcm_fifo_notify_count();
+    unsigned idle_calls=0,idle_signals=0,idle_timeouts=0,idle_fallbacks=0;
+    double idle_elapsed=0,idle_report=(double)now_us();
+    if(profile_idle)fprintf(stderr,"[FRAME-IDLE] v38 event_wake=%u timeout_ms=1 (reference CV_FIFO_WAKE=0; only native fence-poll kicks)\n",unsigned(wake_fifo));
+    if(profile_fifo)fprintf(stderr,"[FIFO-DELIVERY] v39 enabled; read-only snapshots around unchanged waits; CV_FIFO_PROFILE=0 disables\n");
 
     ULONGLONG diag_at = GetTickCount64() + 20000;
     int progress_diag = getenv("CV_PROGRESS_DIAG") != nullptr;
@@ -266,10 +286,54 @@ static DWORD WINAPI frame_clock(LPVOID)
          * already queued: present it and keep translating. */
         if (!cellGcm_drain_more_ready()) {
             ps3_tl_sleep_begin();
-            Sleep(1);
+            const double idle_start=profile_idle?(double)now_us():0;
+            rsx_fifo_probe before={},after={};
+            double wait_start=0,wait_end=0;
+            if(profile_fifo) {
+                cellGcm_fifo_probe_snapshot(&before);
+                wait_start=(double)now_us();fifo_probe_us+=wait_start-idle_start;
+            }
+            const int result=wake_fifo?cellGcm_fifo_kick_wait_result(1):(Sleep(1),-1);
+            if(profile_fifo) {
+                wait_end=(double)now_us();cellGcm_fifo_probe_snapshot(&after);
+                fifo_probe_us+=(double)now_us()-wait_end;
+                fifo_states[before.state]++;
+                fifo_wait_ms[before.state]+=(wait_end-wait_start)*.001;
+                const bool valid=before.state!=RSX_FIFO_INACTIVE&&before.state!=RSX_FIFO_PROBE_BUSY&&
+                                 after.state!=RSX_FIFO_INACTIVE&&after.state!=RSX_FIFO_PROBE_BUSY;
+                if(valid) {
+                    fifo_put_changed+=before.put!=after.put;
+                    fifo_get_changed+=before.get!=after.get;
+                    fifo_head_changed+=rsx_fifo_probe_head_changed(&before,&after);
+                    fifo_empty_to_pending+=before.state==RSX_FIFO_EMPTY&&before.get==after.get&&after.get!=after.put;
+                    fifo_pending_unchanged+=before.get!=before.put&&before.get==after.get&&
+                                            before.put==after.put&&before.head==after.head;
+                }
+            }
             ps3_tl_sleep_end();
+            if(profile_idle) {
+                idle_elapsed+=(double)now_us()-idle_start;idle_calls++;
+                if(result>0)idle_signals++;else if(result==0)idle_timeouts++;else idle_fallbacks++;
+            }
         }
         const double now = (double)now_us();
+        if(profile_idle&&now-idle_report>=5000000.0) {
+            const unsigned put_signals_now=cellGcm_fifo_notify_count();
+            fprintf(stderr,"[FIFO-NOTIFY] put_publications=%u (window count; signals coalesce; not milliseconds)\n",put_signals_now-put_signals_last);
+            put_signals_last=put_signals_now;
+            fprintf(stderr,"[FRAME-IDLE] calls=%u signaled=%u timeouts=%u sleep_fallback=%u wait_ms_per_call=%.3f window_ms=%.1f (overlaps timeline; not added to frame cost)\n",
+                    idle_calls,idle_signals,idle_timeouts,idle_fallbacks,idle_calls?idle_elapsed*.001/idle_calls:0,(now-idle_report)*.001);
+            if(profile_fifo) {
+                fprintf(stderr,"[FIFO-DELIVERY] v39 before_sleep inactive=%u empty=%u park=%u semaphore_header=%u pending_other=%u unmapped=%u probe_busy=%u put_changed_during_wait=%u head_patched_same_get=%u empty_to_pending=%u pending_unchanged=%u get_changed_during_wait=%u probe_ms=%.3f (observations overlap; pending is not proof of runnable commands)\n",
+                    fifo_states[0],fifo_states[1],fifo_states[2],fifo_states[3],fifo_states[4],fifo_states[5],fifo_states[6],
+                    fifo_put_changed,fifo_head_changed,fifo_empty_to_pending,fifo_pending_unchanged,fifo_get_changed,fifo_probe_us*.001);
+                fprintf(stderr,"[FIFO-DELIVERY-WAIT] empty_ms=%.3f park_ms=%.3f semaphore_header_ms=%.3f pending_other_ms=%.3f (window totals, overlap FRAME-IDLE; no publication timestamps)\n",
+                    fifo_wait_ms[1],fifo_wait_ms[2],fifo_wait_ms[3],fifo_wait_ms[4]);
+                memset(fifo_states,0,sizeof fifo_states);memset(fifo_wait_ms,0,sizeof fifo_wait_ms);
+                fifo_put_changed=fifo_head_changed=fifo_empty_to_pending=fifo_pending_unchanged=fifo_get_changed=0;fifo_probe_us=0;
+            }
+            idle_calls=idle_signals=idle_timeouts=idle_fallbacks=0;idle_elapsed=0;idle_report=now;
+        }
 
         /* Paused (the window lost focus, cv_focus_pause.cpp): no vblank or
          * flip, the guest clock held. The FIFO drain and the window pump
@@ -572,6 +636,9 @@ int main(int argc, char** argv)
 
     /* Install the guest-callback hook, then start the frame clock. It no-ops
      * until the title registers its vblank and flip handlers during init. */
+    { const char* notify=getenv("CV_FIFO_NOTIFY");
+      cellGcm_fifo_notify_configure(notify&&!strcmp(notify,"1")&&
+          rsx_fifo_idle_enabled(getenv("CV_FPS_TEST_60"),getenv("CV_RENDER_INTERPOLATION"),getenv("CV_FIFO_WAKE"))); }
     g_ps3_guest_caller = harness_guest_caller;
     {
         HANDLE fc = CreateThread(NULL, 4u * 1024 * 1024, frame_clock, NULL, 0, NULL);

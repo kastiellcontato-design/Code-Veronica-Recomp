@@ -198,6 +198,8 @@ struct Settings {
     int mode = 0;          /* 0 janela, 1 sem borda, 2 tela cheia */
     int res = 1;           /* index into k_res */
     int aa = 0;            /* anti-aliasing: 0 off, 1 FXAA, 2 SMAA */
+    int frame_generation = 0; /* opt-in FSR 3.1, restart required */
+    int pose_device = 0; /* CPU default; GPU compute requires restart, 60 FPS only */
     int fps = 0;           /* 0 original 30; 1 experimental 60 with render-only interpolation */
     int aniso = 0;         /* anisotropic filtering: 0 off, 1-4 = 2x/4x/8x/16x */
     int brightness = 0;   /* -80..80, zero leaves the image unchanged */
@@ -240,6 +242,10 @@ const char* k_mode_env[] = { "window", "borderless", "fullscreen" };
 std::wstring res_name(int i) { return i == 1 ? T(S_RES_NATIVE) : k_res[i].name; }
 std::wstring mode_name(int i) { return T(S_MODE_WINDOW + i); }
 std::wstring aa_name(int i) { return T(S_AA_OFF + i); }
+std::wstring pose_device_name(int i){return T(i?S_POSE_GPU:S_POSE_CPU);}
+std::wstring frame_generation_name(int i){return T(i?S_FRAME_GEN_ON:S_FRAME_GEN_OFF);}
+bool frame_generation_allowed(){const char* d=getenv("CV_FPS_DIAGNOSTIC"),*p=getenv("CV_FSR_DIAGNOSTIC");return !(d&&!strcmp(d,"1"))||(p&&!strcmp(p,"1"));}
+int pose_device_override(){const char* d=std::getenv("CV_FPS_DIAGNOSTIC"),*p=std::getenv("CV_POSE_COMPUTE");return d&&std::strcmp(d,"1")==0&&p?(std::strcmp(p,"1")==0?1:0):-1;}
 std::wstring fps_name(int i) { return T(i ? S_FPS_60_DIAG : S_FPS_ORIG); }
 std::wstring aniso_name(int i) { return i ? std::to_wstring(1 << i) + L"x" : T(S_AA_OFF); }
 std::wstring sharp_name(int i) { return i ? std::to_wstring(i * 10) + L"%" : T(S_AA_OFF); }
@@ -361,6 +367,9 @@ Settings load_settings()
     s.res    = _wtoi(ini_get(L"tela", L"resolucao", L"1").c_str());
     s.aa     = _wtoi(ini_get(L"tela", L"antialias", L"0").c_str());
     s.fps    = _wtoi(ini_get(L"tela", L"fps", L"0").c_str()) == 1;
+    s.pose_device=_wtoi(ini_get(L"tela",L"interpolacao_gpu",L"0").c_str())==1;
+    s.frame_generation=_wtoi(ini_get(L"tela",L"fsr_frame_generation",L"0").c_str())==1;
+    if(pose_device_override()>=0)s.pose_device=pose_device_override();
     if(opt30_comparison())s.fps=0;   // this process only; saved FPS choice is preserved
     s.aniso  = std::clamp(_wtoi(ini_get(L"tela", L"anisotropico", L"0").c_str()), 0, 4);
     s.brightness = _wtoi(ini_get(L"tela", L"brilho", L"0").c_str());
@@ -459,6 +468,8 @@ void save_settings(const Settings& s)
     ini_set(L"tela", L"resolucao", std::to_wstring(s.res));
     ini_set(L"tela", L"antialias", std::to_wstring(s.aa));
     if(!opt30_comparison())ini_set(L"tela", L"fps", std::to_wstring(s.fps));
+    if(pose_device_override()<0)ini_set(L"tela",L"interpolacao_gpu",std::to_wstring(s.pose_device));
+    ini_set(L"tela",L"fsr_frame_generation",std::to_wstring(s.frame_generation));
     ini_set(L"tela", L"anisotropico", std::to_wstring(s.aniso));
     ini_set(L"tela", L"brilho", std::to_wstring(s.brightness));
     ini_set(L"tela", L"contraste", std::to_wstring(s.contrast));
@@ -664,7 +675,7 @@ UI g;
 /* ids */
 enum {
     ID_NAV = 100,               /* + page */
-    ID_DD_MODE = 200, ID_DD_RES = 201, ID_DD_AA = 202, ID_DD_LANG = 203, ID_DD_FPS = 204, ID_DD_ANISO = 205, ID_DD_SHARP = 206, ID_DD_ITEM = 300,  /* + item index */
+    ID_DD_MODE = 200, ID_DD_RES = 201, ID_DD_AA = 202, ID_DD_LANG = 203, ID_DD_FPS = 204, ID_DD_ANISO = 205, ID_DD_SHARP = 206, ID_DD_POSE_DEVICE = 207, ID_DD_FRAME_GEN = 208, ID_DD_ITEM = 300,  /* + item index */
     ID_DD_UP = 390, ID_DD_DOWN = 391,
     ID_PLAY = 400, ID_RESUME, ID_QUIT,
     ID_GAME_BROWSE = 500, ID_GAME_OPEN, ID_RAP_BROWSE, ID_RAP_OPEN, ID_SAVE_BROWSE, ID_SAVE_OPEN, ID_SAVE_DEFAULT,
@@ -992,7 +1003,15 @@ void draw_inicio(Graphics& gr, const Font& head, const Font& body, const Font& c
     dropdown(gr, RectF(x + 210, y, 200, 30), aniso_name(g.s.aniso), g.running ? -1 : ID_DD_ANISO, body, !g.running);
     text(gr, T(S_SHARPNESS), x + 450, y, body, C_TEXT, StringAlignmentNear, 180, 30);   /* live */
     dropdown(gr, RectF(x + 630, y, 180, 30), sharp_name(g.s.sharpness / 10), ID_DD_SHARP, body);
-    y += 54;
+    y += 44;
+    if((g.s.fps==1||pose_device_override()>=0)&&!opt30_comparison()) {
+        text(gr,T(S_POSE_DEVICE),x,y,body,C_TEXT,StringAlignmentNear,205,30);
+        dropdown(gr,RectF(x+210,y,200,30),pose_device_name(g.s.pose_device),(g.running||pose_device_override()>=0)?-1:ID_DD_POSE_DEVICE,body,!g.running&&pose_device_override()<0);
+        text(gr,T(S_FRAME_GEN),x+450,y,body,C_TEXT,StringAlignmentNear,180,30);
+        dropdown(gr,RectF(x+630,y,180,30),frame_generation_name(frame_generation_allowed()?g.s.frame_generation:0),(g.running||!frame_generation_allowed())?-1:ID_DD_FRAME_GEN,body,!g.running&&frame_generation_allowed());
+        y+=44;
+    }
+    y+=10;
     bool o1, o2;
     std::wstring m1 = check_game(g.s.game, &o1), m2 = check_rap(g.s.rap, &o2);
     const std::wstring* ms[2] = { &m1, &m2 }; bool oks[2] = { o1, o2 };
@@ -1886,6 +1905,8 @@ void paint(HDC hdc)
         if (g.open_dd == ID_DD_MODE) { for (int i = 0; i < 3; i++) items.push_back(mode_name(i)); sel = g.s.mode; }
         else if (g.open_dd == ID_DD_RES) { for (int i = 0; i < 5; i++) items.push_back(res_name(i)); sel = g.s.res; }
         else if (g.open_dd == ID_DD_AA) { for (int i = 0; i < 3; i++) items.push_back(aa_name(i)); sel = g.s.aa; }
+        else if(g.open_dd==ID_DD_POSE_DEVICE){for(int i=0;i<2;i++)items.push_back(pose_device_name(i));sel=g.s.pose_device;}
+        else if(g.open_dd==ID_DD_FRAME_GEN){for(int i=0;i<2;i++)items.push_back(frame_generation_name(i));sel=g.s.frame_generation;}
         else if (g.open_dd == ID_DD_FPS) { for (int i = 0; i < 2; i++) items.push_back(fps_name(i)); sel = g.s.fps; }
         else if (g.open_dd == ID_DD_ANISO) { for (int i = 0; i < 5; i++) items.push_back(aniso_name(i)); sel = g.s.aniso; }
         else if (g.open_dd == ID_DD_SHARP) { for (int i = 0; i <= 10; i++) items.push_back(sharp_name(i)); sel = g.s.sharpness / 10; }
@@ -2155,6 +2176,8 @@ void click(int id)
             else if (g.open_dd == ID_DD_RES) g.s.res = i;
             else if (g.open_dd == ID_DD_AA) g.s.aa = i;
             else if (g.open_dd == ID_DD_FPS && !opt30_comparison()) g.s.fps = i;
+            else if(g.open_dd==ID_DD_POSE_DEVICE)g.s.pose_device=i;
+            else if(g.open_dd==ID_DD_FRAME_GEN)g.s.frame_generation=i;
             else if (g.open_dd == ID_DD_ANISO) g.s.aniso = i;
             else if (g.open_dd == ID_DD_SHARP) g.s.sharpness = i * 10;
             else if(g.open_dd==ID_DD_SRT_ENEMIES)g.s.srt_enemies=i==6?99:i;
@@ -2178,7 +2201,7 @@ void click(int id)
         if (g.page == P_MODS) g.tex_rep = -1;        /* count the textures again */
     }
     else if (id >= ID_PATCH && id < ID_PATCH + NPATCHES) { g.s.patch[id - ID_PATCH] ^= true; changed(); }
-    else if (id == ID_DD_MODE || id == ID_DD_RES || id == ID_DD_AA || id == ID_DD_FPS || id == ID_DD_ANISO || id == ID_DD_SHARP || id == ID_DD_LANG || id==ID_DD_SRT_ENEMIES || id==ID_DD_SRT_CORNER || id==ID_DD_SRT_LANGUAGE || id == ID_DD_OV_CORNER || id == ID_DD_OV_LAYOUT || id == ID_DD_SRT_INVPOS || id == ID_DD_SRT_WINDOW || id == ID_DD_SRT_BOSSBAR) {
+    else if (id == ID_DD_MODE || id == ID_DD_RES || id == ID_DD_AA || id == ID_DD_FPS || id == ID_DD_POSE_DEVICE || id == ID_DD_FRAME_GEN || id == ID_DD_ANISO || id == ID_DD_SHARP || id == ID_DD_LANG || id==ID_DD_SRT_ENEMIES || id==ID_DD_SRT_CORNER || id==ID_DD_SRT_LANGUAGE || id == ID_DD_OV_CORNER || id == ID_DD_OV_LAYOUT || id == ID_DD_SRT_INVPOS || id == ID_DD_SRT_WINDOW || id == ID_DD_SRT_BOSSBAR) {
         g.open_dd = id; g.dd_scroll = 0;
         if (id == ID_DD_LANG && g_lang_pick >= 0)   /* open with the chosen language in view */
             for (int i = 0; i < LANG_COUNT; i++)
@@ -2722,13 +2745,17 @@ void start_game()
     const bool fps_diagnostic=diagnostic_env&&std::strcmp(diagnostic_env,"1")==0;
     if(opt30_comparison() || (!fps_diagnostic && s.fps==0)) {
         set_env("CV_FPS_TEST_60", "");set_env("CV_FPS_BENCHMARK_RAW", "");
-        set_env("CV_RENDER_INTERPOLATION", "");set_env("VBLANK_HZ", "60");
+        set_env("CV_RENDER_INTERPOLATION", "");set_env("VBLANK_HZ", "60");set_env("CV_POSE_COMPUTE","");set_env("CV_FSR_FRAME_GENERATION","");
     } else if (s.fps == 1 || fps_diagnostic) {
         set_env("CV_FPS_TEST_60", "1");
         if(!fps_diagnostic)set_env("CV_FPS_BENCHMARK_RAW", "");
         if(!fps_diagnostic)set_env("CV_RENDER_INTERPOLATION", "1");
         set_env("VBLANK_HZ", "60");
-        if(!fps_diagnostic){set_env("CV_POSE_CPU_BLEND","1");set_env("CV_POSE_CPU","");}
+        if(!fps_diagnostic){set_env("CV_POSE_CPU_BLEND","1");set_env("CV_POSE_CPU","");set_env("CV_POSE_COMPUTE",s.pose_device?"1":"");}
+    }
+    if(!opt30_comparison()&&(s.fps==1||fps_diagnostic)){
+        /* Existing CPU/GPU benchmarks remain comparable after saving FSR on. */
+        set_env("CV_FSR_FRAME_GENERATION",s.frame_generation&&frame_generation_allowed()?"1":"");
     }
     if(!fps_diagnostic) {
         for(const char* name:{"CV_POSE_PROFILE","CV_POSE_SEARCH_PROFILE","CV_FRAME_PROFILE",

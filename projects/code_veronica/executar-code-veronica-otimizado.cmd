@@ -42,6 +42,8 @@ rem set "PS3_SAMPLE_SPU=1"
 rem Onde o jogo chama usleep, a cada 10 s:
 rem set "PS3_POLLTOP=10"
 set "GAME_EXE=%~dp0build-release\bin\MyGameRecomp.exe"
+if "%CV_POSE_COMPUTE_TEST%"=="1" set "GAME_EXE=%~dp0build-release\bin\MyGameRecomp_JP.exe"
+if "%CV_FSR_LAUNCHER_JP%"=="1" set "GAME_EXE=%~dp0build-release\bin\MyGameRecomp_JP.exe"
 set "GAME_ELF=%PS3_VFS_ROOT%\USRDIR\EBOOT.elf"
 set "GAME_LOG=%~dp0run-log-release.txt"
 rem DXC is the normal shader compiler (tested better than FXC). FXC stays
@@ -70,6 +72,8 @@ if "%CV_FPS_TEST_60%"=="1" (
 if "%CV_FPS_TEST_60%"=="1" if "%CV_FPS_BENCHMARK_RAW%"=="1" set "GAME_LOG=%~dp0run-log-benchmark60-acelerado.txt"
 if not "%CV_FPS_TEST_60%"=="1" set "CV_RENDER_INTERPOLATION="
 if "%CV_FPS_TEST_60%"=="1" if "%CV_RENDER_INTERPOLATION%"=="1" set "GAME_LOG=%~dp0run-log-fps60-interpolado.txt"
+if "%CV_POSE_COMPUTE_TEST%"=="1" if "%CV_POSE_COMPUTE%"=="1" set "GAME_LOG=%~dp0run-log-fps60-gpu-compute.txt"
+if "%CV_POSE_COMPUTE_TEST%"=="1" if "%CV_POSE_COMPUTE%"=="0" set "GAME_LOG=%~dp0run-log-fps60-cpu-referencia.txt"
 if "%CV_LIGHTER_PROBE%"=="1" set "GAME_LOG=%~dp0run-log-sombra-isqueiro.txt"
 rem Limpar opcoes de diagnostico que podem alterar o desenho.
 for /f "delims==" %%V in ('set FP_ 2^>nul') do set "%%V="

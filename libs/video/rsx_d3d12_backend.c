@@ -53,6 +53,10 @@
 
 /* We need these GUIDs â€” define them here to avoid uuid.lib dependency */
 #include <initguid.h>
+#include "rsx_pose_compute_d3d12.h"
+#include "rsx_fsr31.h"
+static int s_fsr_ready;
+static u32 s_fsr_depth_at=0xFFFFFFFFu,s_fsr_depth_w,s_fsr_depth_h;
 
 #include "rsx_getenv_cache.h"   /* getenv() per call site, cached: per-draw paths */
 static int s_vsync = 0, s_tearing = 0;   /* present mode, see the swap chain setup */
@@ -485,6 +489,16 @@ static D3D12State s_d3d;
 #define VF_ARENA_BYTES (48u << 20)
 #define VF_BASE_PARITY_BYTES (VF_ARENA_OFF + VF_ARENA_BYTES)
 #define VF_POSE_OFF VF_BASE_PARITY_BYTES
+static RsxPoseComputeD3D12 s_pose_compute;
+static RsxPoseComputePlan s_pose_compute_plan;
+static int s_pose_compute_failed,s_pose_compute_capture_ready;
+static const u8* s_pose_compute_capture;
+static int pose_compute_mode(void) {
+    static int requested=-1;
+    if(requested<0){const char *mode=getenv("CV_POSE_COMPUTE"),*fps=getenv("CV_FPS_TEST_60"),*ri=getenv("CV_RENDER_INTERPOLATION"),*raw=getenv("CV_FPS_BENCHMARK_RAW"),*cpu=getenv("CV_POSE_CPU"),*dxc=getenv("SHADER_COMPILER");
+        requested=mode&&!strcmp(mode,"1")&&fps&&!strcmp(fps,"1")&&ri&&!strcmp(ri,"1")&&!(raw&&*raw=='1')&&!(cpu&&*cpu=='1')&&dxc&&!_stricmp(dxc,"dxc");}
+    return requested&&!s_pose_compute_failed;
+}
 static ID3D12Resource* s_vf_buf;
 static u8* s_vf_mapped;
 static u32 s_vf_ndesc, s_vf_aused;
@@ -503,7 +517,7 @@ static int vf_pose_enabled(void) {
 }
 static u32 vf_pose_stride(void) {
     static u32 stride;
-    if(!stride){const char* cpu=getenv("CV_POSE_CPU_BLEND");stride=cpu&&*cpu=='0'?RSX_POSE_GPU_STRIDE:RSX_POSE_GPU_CPU_STRIDE;}
+    if(!stride){const char* cpu=getenv("CV_POSE_CPU_BLEND");stride=!pose_compute_mode()&&cpu&&*cpu=='0'?RSX_POSE_GPU_STRIDE:RSX_POSE_GPU_CPU_STRIDE;}
     return stride;
 }
 static u64 vf_parity_bytes(void) {
@@ -1053,16 +1067,52 @@ static void pose_init_recording(void) {
         fprintf(stderr,"[POSE] allocation failed; original drawing retained\n");return;
     }
     {const char* cpu=getenv("CV_POSE_CPU_BLEND");
-     s_pose_gpu_blend=s_vf_mapped&&cpu&&*cpu=='0';
+     s_pose_gpu_blend=!pose_compute_mode()&&s_vf_mapped&&cpu&&*cpu=='0';
      if(s_pose_gpu_blend)s_pose_recipes=(u64*)malloc((size_t)MAX_VERTICES*sizeof(u64));
      if(!s_pose_recipes)s_pose_gpu_blend=0;}
     {const char* disabled=getenv("CV_POSE_NOVERTEX_VALIDATION_CACHE");s_pose_history.vertex_validation_cache_disabled=disabled&&*disabled=='1';}
     {const char* cap=getenv("CV_POSE_CAP_PRECHECK");s_pose_history.cap_precheck_disabled=cap&&!strcmp(cap,"0");}
     {const char* off=getenv("CV_POSE_REPEAT_WORK");s_pose_history.repeat_work_disabled=off&&!strcmp(off,"0");}
-    s_pose_on=1;fprintf(stderr,"[POSE] v20 final position blend=%s; CPU matching/alias/seam safeguards; logic 30 Hz, target 60 Hz\n",s_pose_gpu_blend?"GPU":"CPU");
+    s_pose_on=1;
+    if(pose_compute_mode())fprintf(stderr,"[POSE-COMPUTE] v42 enabled; GPU geometry coherence/merge/alias/seams/output; CPU matching/topology/cameras; logic 30 Hz, target 60 Hz\n");
+    else fprintf(stderr,"[POSE] v20 final position blend=%s; CPU matching/alias/seam safeguards; logic 30 Hz, target 60 Hz\n",s_pose_gpu_blend?"GPU":"CPU");
 }
 static u64 pose_mix(u64 h,u32 x) {return (h^x)*1099511628211ull;}
+/* Topology and temporal identity stay on CPU; no geometry interpolation,
+ * proposal comparison or numerical seam resolution executes here. */
+static int pose_compute_prepare(const RsxPoseFrame* frame,u32* changed_cameras) {
+    if(!pose_compute_mode()||!s_pose_compute.ready)return 0;
+    if(!rsx_pose_cohere_ex(&s_pose_history,frame,1))return 0;
+    memset(s_pose_seen_vertices,0,MAX_VERTICES*sizeof(u32));
+    memset(s_pose_seen_cameras,0,MAX_DRAWS*sizeof(u32));
+    for(u32 i=0;i<s_rb.count&&i<MAX_DRAWS;i++) {
+        const D3D12DrawRecord* d=&s_rb.draws[i];if(s_pose_accepted[i]||!d->is_vp||d->is_clear||d->is_copy)continue;
+        if(d->vcb_slot<MAX_DRAWS&&(d->vs_idx<0||d->vs_idx>=s_d3d.vp_vs_n||s_d3d.vp_vs[d->vs_idx].uses_c03))s_pose_seen_cameras[d->vcb_slot]=2;
+        if(d->vb_byte_offset%256)continue;u32 first=d->vb_byte_offset/256;
+        if(first>frame->nv||d->vertex_count>frame->nv-first)continue;
+        for(u32 k=0;k<d->vertex_count;k++)s_pose_seen_vertices[first+k]=2;
+    }
+    if(!rsx_pose_compute_plan_build(&s_pose_compute_plan,&s_pose_history,frame,s_pose_seen_vertices)||
+       !pc_upload(&s_pose_compute,s_d3d.device,&s_pose_compute_plan))return 0;
+    /* Camera projections retain their existing CPU/light-bank protection. */
+    for(u32 i=0;i<frame->nd;i++) {
+        const RsxPoseDraw* d=frame->draws+i;if(s_pose_seen_cameras[d->cb]==2)continue;
+        float matrix[32];int32_t source=s_pose_history.camera_sources[i];
+        if(source>=0)rsx_pose_camera(&s_pose_history,(u32)source,matrix);else memcpy(matrix,frame->cameras+(size_t)d->cb*32,sizeof matrix);
+        rsx_pose_merge(s_pose_out_cameras+(size_t)d->cb*32,s_pose_seen_cameras+d->cb,matrix,32);
+    }
+    memset(s_pose_history.seeds,0,frame->nd*sizeof(int32_t));
+    for(u32 i=0;i<frame->nd;i++)if(s_pose_seen_cameras[frame->draws[i].cb]==2)s_pose_history.seeds[s_pose_history.camera_groups[i]]=1;
+    for(u32 i=0;i<frame->nd;i++)if(s_pose_history.seeds[s_pose_history.camera_groups[i]])s_pose_seen_cameras[frame->draws[i].cb]=2;
+    u8* cb=(u8*)s_d3d.vp_cb_mapped+(size_t)s_rb.parity*MAX_DRAWS*VP_CB_STRIDE;
+    for(u32 c=0;c<MAX_DRAWS;c++)if(s_pose_seen_cameras[c]==1&&memcmp(frame->cameras+(size_t)c*32,s_pose_out_cameras+(size_t)c*32,128)){
+        memcpy(cb+(size_t)c*VP_CB_STRIDE,s_pose_out_cameras+(size_t)c*32,128);(*changed_cameras)++;
+    }
+    return 1;
+}
+
 static void pose_interpolate_batch(void) {
+    s_pose_compute.active=0;
     if(!s_pose_on||!s_d3d.vp_vb_mapped||!s_d3d.vp_cb_mapped)return;
     /* A partial/readback batch is not a new displayed frame. */
     if(!s_rb.present)return;
@@ -1100,10 +1150,16 @@ static void pose_interpolate_batch(void) {
     double now=pose_time();if(s_pose_profile)phases[0]=pose_phase_elapsed(&phase);
     int apply=pose_prepare_profiled(&s_pose_history,&frame,now);
     if(s_pose_profile)phases[1]=pose_phase_elapsed(&phase);
-    if(apply&&!rsx_pose_cohere(&s_pose_history,&frame))apply=0;
-    if(s_pose_profile)phases[2]=pose_phase_elapsed(&phase);
     u32 moved=0,changed_cameras=0,conflicts=0,gpu_blended=0;
-    if(apply) {
+    const int compute_applied=apply&&pose_compute_prepare(&frame,&changed_cameras);
+    if(apply&&!compute_applied&&!rsx_pose_cohere(&s_pose_history,&frame))apply=0;
+    if(s_pose_profile)phases[2]=pose_phase_elapsed(&phase);
+    if(s_pose_profile&&pose_compute_mode()) {
+        static double at;static u64 frames,active,fallback;frames++;active+=compute_applied!=0;fallback+=apply&&!compute_applied;
+        if(now-at>=5.){fprintf(stderr,"[POSE-COMPUTE] v42 frames=%llu compute=%llu cpu_fallback=%llu input_kb=%.1f (GPU: cross-pass proposals/merge/alias/seams/output; CPU: temporal matching/topology/cameras; no frame readback)\n",
+            frames,active,fallback,s_pose_compute_plan.bytes/1024.0);at=now;frames=active=fallback=0;}
+    }
+    if(apply&&!compute_applied) {
         memset(s_pose_seen_vertices,0,MAX_VERTICES*sizeof(u32));memset(s_pose_seen_cameras,0,MAX_DRAWS*sizeof(u32));
         u8* vb=(u8*)s_d3d.vp_vb_mapped+(size_t)s_rb.parity*MAX_VERTICES*256;
         u8* cb=(u8*)s_d3d.vp_cb_mapped+(size_t)s_rb.parity*MAX_DRAWS*VP_CB_STRIDE;
@@ -1199,8 +1255,8 @@ static void pose_interpolate_batch(void) {
     static u32 reports=0,presents=0,subframes=0;static double reported_at=0;
     presents++;if(moved||changed_cameras)subframes++;
     if(reports++<8||now-reported_at>=5.0) {
-        fprintf(stderr,"[POSE] v20 scene=%08X eligible=%u matched=%u smooth=%u apply=%d vertices=%u cameras=%u conflicts=%u ambiguous=%u capped=%u coherent=%u coherence_conflicts=%u seams=%u seam_conflicts=%u shadow_draws=%u alpha=%.3f reason=%d subframes=%u/%u\n",
-            frame.scene,nd,s_pose_history.matched,s_pose_history.moving,apply,moved,changed_cameras,conflicts,s_pose_history.ambiguous,s_pose_history.capped,s_pose_history.coherent,s_pose_history.coherence_conflicts,s_pose_history.seams,s_pose_history.seam_conflicts,s_pose_shadow_draws,(double)s_pose_history.alpha,s_pose_history.reason,subframes,presents);
+        fprintf(stderr,"[POSE] v21 scene=%08X eligible=%u matched=%u smooth=%u apply=%d vertices=%u cameras=%u conflicts=%u ambiguous=%u capped=%u coherent=%u coherence_conflicts=%u seams=%u seam_conflicts=%u seam_components=%u seam_veto_vertices=%u shadow_draws=%u alpha=%.3f reason=%d subframes=%u/%u\n",
+            frame.scene,nd,s_pose_history.matched,s_pose_history.moving,apply,moved,changed_cameras,conflicts,s_pose_history.ambiguous,s_pose_history.capped,s_pose_history.coherent,s_pose_history.coherence_conflicts,s_pose_history.seams,s_pose_history.seam_conflicts,s_pose_history.seam_components,s_pose_history.seam_veto_vertices,s_pose_shadow_draws,(double)s_pose_history.alpha,s_pose_history.reason,subframes,presents);
         reported_at=now;presents=subframes=0;
     }
 }
@@ -1448,6 +1504,7 @@ static HWND s_backdrop;
 static u32  s_win_w = 1280, s_win_h = 720;   /* render size, for the framed window */
 void (*g_rsx_menu_hook)(void);               /* Insert: the title's options menu */
 void (*g_rsx_key_hook)(unsigned vk);         /* any other key pressed (not repeats): the title's hotkeys */
+static void mc_request(void);
 static volatile LONG s_shot_request;   /* F10 or a controller chord, taken by shot_record() */
 void rsx_d3d12_request_screenshot(void) { InterlockedExchange(&s_shot_request, 1); }
 
@@ -1539,6 +1596,7 @@ static LRESULT CALLBACK d3d12_wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         }
         break;
     case WM_KEYDOWN:
+        if(wp==VK_F9&&!(lp&(1<<30))){mc_request();return 0;}
         if (lighter_probe_key(wp, lp)) return 0;
         /* Esc no longer quits: the window's X or Alt+F4 does. */
         if (wp == VK_INSERT && !(lp & (1 << 30)) && g_rsx_menu_hook) g_rsx_menu_hook();
@@ -1742,7 +1800,8 @@ static int init_d3d12(u32 width, u32 height)
            (!s_vsync && s_tearing) ? ", tearing allowed" : "", 10);
 
     IDXGISwapChain1* swap_chain1 = NULL;
-    hr = factory->lpVtbl->CreateSwapChainForHwnd(
+    if(rsx_fsr31_swapchain(s_d3d.device,s_d3d.cmd_queue,factory,s_d3d.hwnd,&sc_desc,(void**)&swap_chain1))hr=S_OK;
+    else hr = factory->lpVtbl->CreateSwapChainForHwnd(
         factory, (IUnknown*)s_d3d.cmd_queue,
         s_d3d.hwnd, &sc_desc, NULL, NULL, &swap_chain1);
     if (FAILED(hr)) {
@@ -2262,7 +2321,9 @@ static int init_d3d12(u32 width, u32 height)
         vtex_range.BaseShaderRegister = 16;
         vtex_range.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
-        D3D12_ROOT_PARAMETER rp[6] = {0};
+        if(vf_enabled()&&pose_compute_mode()&&!pc_init(&s_pose_compute,s_d3d.device,MAX_VERTICES,MAX_DRAWS)){
+            s_pose_compute_failed=1;fprintf(stderr,"[POSE-COMPUTE] initialization failed; using CPU path\n");}
+        D3D12_ROOT_PARAMETER rp[7] = {0};
         rp[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;   /* b0 = vp_c bank */
         rp[0].Descriptor.ShaderRegister = 0;
         rp[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
@@ -2323,7 +2384,9 @@ static int init_d3d12(u32 width, u32 height)
         rp[5].Constants.Num32BitValues = 1;
         rp[5].ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
         D3D12_ROOT_SIGNATURE_DESC rd = {0};
-        rd.NumParameters = vf_enabled() ? 6 : 4; rd.pParameters = rp;
+        rp[6].ParameterType=D3D12_ROOT_PARAMETER_TYPE_SRV;rp[6].Descriptor.ShaderRegister=25;
+        rp[6].ShaderVisibility=D3D12_SHADER_VISIBILITY_VERTEX;
+        rd.NumParameters = vf_enabled() ? (pose_compute_mode()?7:6) : 4; rd.pParameters = rp;
         rd.NumStaticSamplers = FP_TEX_UNITS + 5; rd.pStaticSamplers = samp;
         rd.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
 
@@ -2393,6 +2456,7 @@ static int init_d3d12(u32 width, u32 height)
                (void*)s_d3d.vp_root_sig, (void*)s_d3d.vp_vb, (void*)s_d3d.vp_cb);
     }
 
+    if(pose_compute_mode()&&!s_vf_mapped){s_pose_compute_failed=1;pc_release(&s_pose_compute);}
     pose_init_recording();
 
     printf("[D3D12] Initialization complete (%ux%u, %u buffers, pipeline=%s)\n",
@@ -2979,6 +3043,73 @@ static void shot_finish(void)
     if (!ok) { free(px); free(j); perf_overlay_toast(L"Screenshot failed", 0); }
 }
 
+
+#include "rsx_motion_capture.h"
+/* A versioned little-endian diagnostic snapshot, copied only during F9.
+ * Source positions and the actual CPU/VF recipe result share each vertex ID.
+ * GPU-compute mode is explicitly flagged: final positions unavailable here. */
+static void motion_capture_record(ID3D12Resource* image,u32 w,u32 h)
+{
+    if(!s_rb.present||!mc_wants())return;
+    const RsxPoseHistory* hist=&s_pose_history;const RsxPoseSnapshot* cur=&hist->cur;
+    const u32 nv=s_pose_on?s_rb.pose_nv:0,nd=s_pose_on&&hist->have_cur&&hist->reason!=RSX_POSE_INVALID&&cur->scene==s_rb.pose_scene?cur->nd:0;
+    const u32 packed=nd?cur->nv:0,ops=s_rb.count<MAX_DRAWS?s_rb.count:MAX_DRAWS;const int compute=s_pose_on&&s_pose_compute.active;
+    size_t bytes=64+(size_t)nv*(sizeof(RsxPoseVertex)+3*sizeof(float))+
+        (size_t)nd*(2*sizeof(RsxPoseDraw)+sizeof(RsxPoseTrack)+2*sizeof(int32_t)+3*32*sizeof(float))+
+        (size_t)packed*6*sizeof(float)+(size_t)ops*320;
+    unsigned char* blob=bytes<=64u*1024*1024?(unsigned char*)malloc(bytes):NULL;
+    u32 bad=0,jumps=0;float max_delta=0;
+    if(blob){
+        u32 head[16]={0x4d435031u,1,nv,nd,packed,(u32)(compute?2:s_pose_gpu_blend?1:0),s_rb.parity,s_rb.pose_scene,s_rb.pose_stamp,s_d3d.frame_count,
+            sizeof(RsxPoseVertex),sizeof(RsxPoseDraw),sizeof(RsxPoseTrack),32,ops,320};
+        memcpy(blob,head,64);unsigned char* at=blob+64;
+        const RsxPoseVertex* original=nv?s_pose_vertices+(size_t)s_rb.parity*MAX_VERTICES:NULL;
+        if(nv)memcpy(at,original,(size_t)nv*sizeof(*original));at+=(size_t)nv*sizeof(RsxPoseVertex);
+        float* result=(float*)at;
+        for(u32 v=0;v<nv;v++){
+            float* out=result+(size_t)v*3;memcpy(out,original[v].xyz,12);
+            if(!compute){
+                if(vf_pose_enabled()&&s_vf_mapped){
+                    const u8* rec=s_vf_mapped+(u64)s_rb.parity*vf_parity_bytes()+VF_POSE_OFF+(size_t)v*vf_pose_stride();rsx_pose_gpu_read(rec,out);
+                }else if(s_d3d.vp_vb_mapped)memcpy(out,(const u8*)s_d3d.vp_vb_mapped+((size_t)s_rb.parity*MAX_VERTICES+v)*256,12);
+            }
+            if(original[v].stamp==s_rb.pose_stamp){
+                float distance=0;for(int k=0;k<3;k++){float d=out[k]-original[v].xyz[k];distance+=d*d;if(!isfinite(out[k]))bad++;}
+                if(isfinite(distance)){float d=sqrtf(distance);if(d>max_delta)max_delta=d;if(d>8)jumps++;}
+            }
+        }
+        at+=(size_t)nv*3*sizeof(float);
+#define MC_APPEND(ptr,n) do{size_t count_=(n);if(count_)memcpy(at,(ptr),count_);at+=count_;}while(0)
+        MC_APPEND(cur->draws,(size_t)nd*sizeof(RsxPoseDraw));
+        MC_APPEND(s_pose_draws,(size_t)nd*sizeof(RsxPoseDraw));
+        MC_APPEND(cur->tracks,(size_t)nd*sizeof(RsxPoseTrack));
+        MC_APPEND(hist->vertex_sources,(size_t)nd*sizeof(int32_t));MC_APPEND(hist->camera_sources,(size_t)nd*sizeof(int32_t));
+        MC_APPEND(cur->old_xyz,(size_t)packed*3*sizeof(float));MC_APPEND(cur->xyz,(size_t)packed*3*sizeof(float));
+        MC_APPEND(cur->old_cameras,(size_t)nd*32*sizeof(float));MC_APPEND(cur->cameras,(size_t)nd*32*sizeof(float));
+        for(u32 d=0;d<nd;d++){
+            const u32 cb=s_pose_draws[d].cb;
+            if(cb<MAX_DRAWS)memcpy(at,(const u8*)s_d3d.vp_cb_mapped+((size_t)s_rb.parity*MAX_DRAWS+cb)*VP_CB_STRIDE,32*sizeof(float));
+            else memset(at,0,32*sizeof(float));at+=32*sizeof(float);
+        }
+        for(u32 op=0;op<ops;op++){
+            const D3D12DrawRecord* d=s_rb.draws+op;u32 info[16]={op,fp_snap_code(d),d->vs_idx>=0&&d->vs_idx<s_d3d.vp_vs_n?s_d3d.vp_vs[d->vs_idx].hash:0,d->vcb_slot,d->rt_off,d->rt_w,d->rt_h,d->vp_w,d->vp_h,s_pose_accepted[op],d->blend,d->dtest,0,0,d->is_clear,d->is_copy};
+            memset(at,0,320);const u8* snap=fp_snap_ptr(d);
+            if(snap&&info[1]&&d->fp_bytes<=16384){
+                u32 tail[4];memcpy(tail,snap+d->fp_bytes+16,16);
+                if(tail[0]<=256){info[12]=tail[0]<16?tail[0]:16;info[13]=tail[1];memcpy(at+64,snap+d->fp_bytes+32,(size_t)info[12]*16);}
+            }
+            memcpy(at,info,64);at+=320;
+        }
+#undef MC_APPEND
+        if((size_t)(at-blob)!=bytes){free(blob);blob=NULL;}
+    }
+    LARGE_INTEGER tick,freq;QueryPerformanceCounter(&tick);QueryPerformanceFrequency(&freq);
+    char json[4096];snprintf(json,sizeof json,
+        "{\"frame\":%u,\"qpc\":%llu,\"qpc_frequency\":%llu,\"width\":%u,\"height\":%u,\"scene\":%u,\"stamp\":%u,\"draws\":%u,\"pose_enabled\":%d,\"reason\":%d,\"alpha\":%.6f,\"matched\":%u,\"moving\":%u,\"coherent\":%u,\"coherence_conflicts\":%u,\"seams\":%u,\"seam_conflicts\":%u,\"seam_components\":%u,\"seam_veto_vertices\":%u,\"shadow_draws\":%u,\"compute_mode\":%d,\"final_positions_available\":%s,\"nonfinite_components\":%u,\"displacements_over_8\":%u,\"max_displacement\":%.6f,\"pose_bytes\":%zu,\"fsr_requested\":%d,\"image\":\"real_render_before_port_overlays\"}\n",
+        s_d3d.frame_count,(unsigned long long)tick.QuadPart,(unsigned long long)freq.QuadPart,w,h,s_rb.pose_scene,s_rb.pose_stamp,s_dbg_last_draws,s_pose_on,hist->reason,hist->alpha,hist->matched,hist->moving,hist->coherent,hist->coherence_conflicts,hist->seams,hist->seam_conflicts,hist->seam_components,hist->seam_veto_vertices,s_pose_shadow_draws,compute,blob&&!compute?"true":"false",bad,jumps,max_delta,blob?bytes:0,rsx_fsr31_requested());
+    if(!mc_record(s_d3d.device,s_d3d.cmd_list,image,w,h,json,blob,blob?bytes:0))free(blob);
+}
+
 /* Optional, bounded GPU instrumentation for the image investigation. */
 static ID3D12QueryHeap* s_cv_query_heap;
 static ID3D12Resource* s_cv_query_readback;
@@ -3004,6 +3135,10 @@ static void cap_steps_free(void)
 
 static void rsx_capture_frame(u32 fi, u32 ndraws, u32 capidx)
 {
+    if(pose_compute_mode()&&s_pose_compute_capture_ready&&s_pose_compute.capture){
+        wait_for_gpu();D3D12_RANGE range={0,(SIZE_T)s_rb.pose_nv*16};void* mapped=NULL;
+        if(SUCCEEDED(s_pose_compute.capture->lpVtbl->Map(s_pose_compute.capture,0,&range,&mapped)))s_pose_compute_capture=(const u8*)mapped;
+    }
     char dir[300]; const char* base = getenv("RSX_CAP_DIR");
     if (!base || !*base) base = "rsxcap";
     CreateDirectoryA(base, NULL);
@@ -3319,6 +3454,8 @@ static void rsx_capture_frame(u32 fi, u32 ndraws, u32 capidx)
     }
     printf("[RSXCAP] frame %llu -> %s (%u ops)\n",
            (unsigned long long)s_d3d.frame_count, dir, ndraws);
+    if(s_pose_compute_capture){D3D12_RANGE nr={0,0};s_pose_compute.capture->lpVtbl->Unmap(s_pose_compute.capture,0,&nr);s_pose_compute_capture=NULL;}
+
 }
 
 /* On-disk shader cache. FXC takes tens of milliseconds per translated
@@ -3405,7 +3542,7 @@ static const char* shader_cache_dir(void)
     if (vf_enabled()) {
         static char dir[160]; static volatile LONG made;
         if (!made) {
-            const char* suffix=vf_pose_enabled()?"vfetch-pose1":"vfetch";
+            const char* suffix=pose_compute_mode()?"vfetch-pose-compute42":(vf_pose_enabled()?"vfetch-pose1":"vfetch");
             if (!strcmp(s_shader_cache_dir, "shader_cache")) snprintf(dir, sizeof dir, "shader_cache/%s",suffix);
             else snprintf(dir, sizeof dir, "%s-%s", s_shader_cache_dir,suffix);
             InterlockedExchange(&made, 1);
@@ -4031,8 +4168,8 @@ static int vf_wrap_vs(char* hlsl, size_t cap)
         "}\n";
     char* at = strstr(hlsl, entry);
     if (!at || strstr(at + 1, entry)) return 0;
-    char define[192];
-    snprintf(define, sizeof define, "#define VF_DESC_OFF_U %lluu\n#define VF_POSE_OFF_U %lluu\n#define VF_POSE_ENABLED %d\n#define VF_POSE_STRIDE_U %uu\n", (unsigned long long)VF_DESC_OFF,(unsigned long long)VF_POSE_OFF,vf_pose_enabled(),vf_pose_stride());
+    char define[320];
+    snprintf(define, sizeof define, "#define VF_DESC_OFF_U %lluu\n#define VF_POSE_OFF_U %lluu\n#define VF_POSE_ENABLED %d\n#define VF_POSE_STRIDE_U %uu\n#define VF_POSE_COMPUTE_ENABLED %d\n", (unsigned long long)VF_DESC_OFF,(unsigned long long)VF_POSE_OFF,vf_pose_enabled(),vf_pose_stride(),pose_compute_mode());
     const size_t len = strlen(hlsl), head = (size_t)(at - hlsl), rest = len - head - (sizeof entry - 1);
     const size_t need = len + strlen(define) + sizeof pull + sizeof renamed + sizeof tail;
     if (need > cap) return 0;
@@ -9365,6 +9502,7 @@ static void fsr_backbuffer(u32 fi)
 static void display_resize(u32 w, u32 h)
 {
     wait_for_gpu();
+    rsx_fsr31_wait();
     for (u32 i = 0; i < FRAME_COUNT; i++)
         if (s_disp_bufs[i]) { s_disp_bufs[i]->lpVtbl->Release(s_disp_bufs[i]); s_disp_bufs[i] = NULL; }
     HRESULT hr = s_d3d.swap_chain->lpVtbl->ResizeBuffers(s_d3d.swap_chain, FRAME_COUNT, w, h,
@@ -9431,9 +9569,12 @@ static void display_present(u32 fi)
         aa_barrier(game, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_PRESENT);
         aa_barrier(out, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_RENDER_TARGET);
     }
+    if(s_fsr_ready)rsx_fsr31_hudless(cl,out,D3D12_RESOURCE_STATE_RENDER_TARGET);
+    motion_capture_record(out,w,h);
     shot_record(out, w, h);   /* the shown image, before the port's overlays */
     s_qb_display = 1; s_qb_rtv = rtv; s_qb_w = w; s_qb_h = h;
     perf_overlay_draw(fi);
+    if(s_fsr_ready)rsx_fsr31_present_color(cl,out,D3D12_RESOURCE_STATE_RENDER_TARGET);
     s_qb_display = 0;
     aa_barrier(out, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
 }
@@ -9739,7 +9880,7 @@ static int frame_profile_on(void) {
     if(on<0) {
         const char *e=getenv("CV_FRAME_PROFILE"),*fps=getenv("CV_FPS_TEST_60"),*interp=getenv("CV_RENDER_INTERPOLATION");
         on=e&&!strcmp(e,"1")&&fps&&!strcmp(fps,"1")&&interp&&!strcmp(interp,"1");
-        if(on)fprintf(stderr,"[FRAME-PROFILE] v37 sampled GPU timestamps (1/30 presents), optional classified ranges; no extra waits\n");
+        if(on)fprintf(stderr,"[FRAME-PROFILE] v38 sampled GPU timestamps (1/30 presents), optional classified ranges; no extra waits\n");
     }
     return on;
 }
@@ -10244,6 +10385,21 @@ static void render_frame_impl(void)
       if (perf_on()) s_perf_gpu += perf_now() - _tw; }
     frame_profile_mark(FP_ENTRY);
     pose_interpolate_batch();
+    s_fsr_ready=0;s_fsr_depth_at=0xFFFFFFFFu;
+    if(s_rb.present&&rsx_fsr31_requested()) {
+        s_fsr_ready=rsx_fsr31_begin(s_d3d.device,s_display?s_disp_w:rs_dim(s_d3d.width,s_rs),
+            s_display?s_disp_h:rs_dim(s_d3d.height,s_rs),s_rb.pose_scene,
+            s_pose_history.reason==RSX_POSE_CUT||s_pose_history.reason==RSX_POSE_LAYOUT);
+        /* Snapshot the shared DSV after the final full-size camera geometry,
+         * before fullscreen/postprocess/shadow work can overwrite its bank. */
+        if(s_fsr_ready)for(u32 i=0;i<s_rb.count&&i<MAX_DRAWS;i++){
+            const D3D12DrawRecord* d=&s_rb.draws[i];
+            if(!d->is_vp||d->is_clear||d->is_copy||!d->dtest||d->vs_idx<0||d->vs_idx>=s_d3d.vp_vs_n||
+               !s_d3d.vp_vs[d->vs_idx].uses_c03||d->rt_w!=s_d3d.width||d->rt_h!=s_d3d.height||
+               (rsx_pose_fragment_flags(fp_snap_code(d))&RSX_POSE_CURRENT_LIGHT_CAMERA))continue;
+            s_fsr_depth_at=i+1;s_fsr_depth_w=rs_dim(d->rt_w,s_rs);s_fsr_depth_h=rs_dim(d->rt_h,s_rs);
+        }
+    }
     frame_profile_mark(FP_POSE);
     { double _m0 = perf_on() ? perf_now() : 0.0;
     s_vtex_frame++;       /* ages the vertex-texture cache */
@@ -10321,6 +10477,9 @@ static void render_frame_impl(void)
     gc_frame();
     ts_begin(fi);
     frame_profile_gpu_begin(fi);
+    s_pose_compute_capture_ready=0;
+    if(pose_compute_mode()&&s_pose_compute.ready)pc_record(&s_pose_compute,s_d3d.cmd_list,&s_pose_compute_plan,s_vf_buf,
+        (u64)s_rb.parity*vf_parity_bytes()+VF_POSE_OFF,s_rb.pose_nv);
     texrep_frame();       /* texture mods: upload what finished decoding */
 
     /* Upload the bound font atlas into an R8_UNORM texture and create its SRV.
@@ -10763,6 +10922,7 @@ static void render_frame_impl(void)
             if (s_vf_buf)   /* RSX_GPU_VFETCH: this batch's records, descriptors and bytes */
                 s_d3d.cmd_list->lpVtbl->SetGraphicsRootShaderResourceView(s_d3d.cmd_list, 4,
                     s_vf_buf->lpVtbl->GetGPUVirtualAddress(s_vf_buf) + (u64)s_rb.parity * vf_parity_bytes());
+                if(pose_compute_mode()&&s_pose_compute.ready)s_d3d.cmd_list->lpVtbl->SetGraphicsRootShaderResourceView(s_d3d.cmd_list,6,s_pose_compute.output->lpVtbl->GetGPUVirtualAddress(s_pose_compute.output)+s_pose_compute.final_offset);
             ID3D12DescriptorHeap* heaps[] = { s_d3d.srv_heap };
             s_d3d.cmd_list->lpVtbl->SetDescriptorHeaps(s_d3d.cmd_list, 1, heaps);
             D3D12_GPU_DESCRIPTOR_HANDLE gh;
@@ -10816,6 +10976,7 @@ static void render_frame_impl(void)
                     if (s_vf_buf)
                         cl->lpVtbl->SetGraphicsRootShaderResourceView(cl, 4,
                             s_vf_buf->lpVtbl->GetGPUVirtualAddress(s_vf_buf) + (u64)s_rb.parity * vf_parity_bytes());
+                if(pose_compute_mode()&&s_pose_compute.ready)cl->lpVtbl->SetGraphicsRootShaderResourceView(cl,6,s_pose_compute.output->lpVtbl->GetGPUVirtualAddress(s_pose_compute.output)+s_pose_compute.final_offset);
                     ID3D12DescriptorHeap* heaps[] = { s_d3d.srv_heap };
                     cl->lpVtbl->SetDescriptorHeaps(cl, 1, heaps);
                     cl->lpVtbl->SetGraphicsRootDescriptorTable(cl, 1, gh_base);
@@ -10835,6 +10996,12 @@ static void render_frame_impl(void)
                         draw_wait_left -= perf_now() - tw;
                         fp_async_drain();
                     }
+                }
+                if(s_fsr_ready&&d==s_fsr_depth_at){
+                    rsx_fsr31_depth(s_d3d.cmd_list,s_d3d.depth_buffer,s_fsr_depth_w,s_fsr_depth_h);
+                    ID3D12DescriptorHeap* fg_heaps[]={s_d3d.srv_heap};
+                    s_d3d.cmd_list->lpVtbl->SetDescriptorHeaps(s_d3d.cmd_list,1,fg_heaps);
+                    last_pso=NULL;bound_srv=0;bound_cb0=bound_cb2=0;
                 }
                 int zc_now = (d == s_zconv_at);
                 for (int k = 0; k < s_zconv_nmore && !zc_now; k++) zc_now = (d == s_zconv_more[k]);
@@ -11234,7 +11401,7 @@ static void render_frame_impl(void)
                      * Never cross a scheduled depth-conversion operation. */
                     for(u32 next=d+1;next<s_rb.count&&next<MAX_DRAWS&&next<pp_done;next++) {
                         if(split_n&&next-split_last>=(u32)split_n)break;
-                        int boundary=next==s_zconv_at;
+                        int boundary=next==s_zconv_at||(s_fsr_ready&&next==s_fsr_depth_at);
                         for(int k=0;k<s_zconv_nmore&&!boundary;k++)boundary=next==s_zconv_more[k];
                         if(boundary)break;
                         const D3D12DrawRecord* nd=&s_rb.draws[next];
@@ -11623,8 +11790,13 @@ skip_dump_consider: ;
     if (s_rb.present) ui_batch_draw(fi);
     if (s_rb.present) aa_apply(fi);   /* anti-aliasing on the finished frame */
     if (s_rb.present && !s_display) fsr_backbuffer(fi);   /* FSR 1 RCAS, after AA */
+    if (s_rb.present && !s_display) motion_capture_record(s_d3d.render_targets[fi],rs_dim(s_d3d.width,s_rs),rs_dim(s_d3d.height,s_rs));
     if (s_rb.present && !s_display) shot_record(s_d3d.render_targets[fi], rs_dim(s_d3d.width, s_rs), rs_dim(s_d3d.height, s_rs));
-    if (s_rb.present && !s_display) perf_overlay_draw(fi);
+    if(s_fsr_ready&&s_rb.present&&!s_display)rsx_fsr31_hudless(s_d3d.cmd_list,s_d3d.render_targets[fi],D3D12_RESOURCE_STATE_RENDER_TARGET);
+    if (s_rb.present && !s_display) {
+        perf_overlay_draw(fi);
+        if(s_fsr_ready)rsx_fsr31_present_color(s_d3d.cmd_list,s_d3d.render_targets[fi],D3D12_RESOURCE_STATE_RENDER_TARGET);
+    }
     int dumping = (s_d3d.dump_frames_left > 0 && s_d3d.readback_buf
                    && s_d3d.dump_skip_left == 0);
     { static int mind2 = -1;
@@ -11678,10 +11850,26 @@ skip_dump_consider: ;
         barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PRESENT;
         s_d3d.cmd_list->lpVtbl->ResourceBarrier(s_d3d.cmd_list, 1, &barrier);
     }
+    if(s_fsr_ready&&s_fsr_depth_at==s_rb.count)
+        rsx_fsr31_depth(s_d3d.cmd_list,s_d3d.depth_buffer,s_fsr_depth_w,s_fsr_depth_h);
     if (s_rb.present && s_display) display_present(fi);
+    if(s_rb.present){
+        if(g_rsx_cap_request&&s_fsr_ready)rsx_fsr31_capture_next();
+        int fg_menu=0;
+        if(s_fsr_ready){
+            AcquireSRWLockShared(&s_ui_lock);
+            int ui_slot=rsx_ui_select_batch(s_ui_render_flip,s_ui_frame,s_ui_valid,UI_SLOTS,ui_interpolated()?3u:0u);
+            fg_menu=ui_slot>=0&&s_ui_count[ui_slot]!=0;
+            ReleaseSRWLockShared(&s_ui_lock);
+        }
+        rsx_fsr31_frame(s_d3d.cmd_list,s_d3d.swap_chain,
+            s_fsr_ready&&s_fsr_depth_at!=0xFFFFFFFFu&&!s_cap_steps_on&&!fg_menu);
+    }
 
     off_rt_writeback_record();
 
+    if(pose_compute_mode()&&s_pose_compute.ready&&s_cap_steps_on)
+        s_pose_compute_capture_ready=pc_record_capture(&s_pose_compute,s_d3d.device,s_d3d.cmd_list,s_rb.pose_nv);
     ts_end(fi);
     frame_detail_end_record();
     frame_profile_mark(FP_BUILD);
@@ -11691,6 +11879,7 @@ skip_dump_consider: ;
     s_d3d.cmd_list->lpVtbl->Close(s_d3d.cmd_list);
     ID3D12CommandList* cmd_lists[] = {(ID3D12CommandList*)s_d3d.cmd_list};
     s_d3d.cmd_queue->lpVtbl->ExecuteCommandLists(s_d3d.cmd_queue, 1, cmd_lists);
+    mc_submit(s_d3d.cmd_queue);
     shot_finish();
     frame_profile_mark(FP_SUBMIT);
 
@@ -11836,12 +12025,16 @@ skip_dump_consider: ;
             if (run >= 5 && s_cap_nsteps > 0) { fired = 1; g_rsx_cap_request = 1; }
             s_autocap_arm = !fired && (run >= 4);
         } }
-      if (g_rsx_cap_request && s_dbg_last_draws > 0 && s_key_caps < 10) {
+      if (g_rsx_cap_request && s_dbg_last_draws > 0 && s_key_caps < 10 && (!pose_compute_mode()||s_pose_compute_capture_ready)) {
           g_rsx_cap_request = 0;
           rsx_capture_frame(fi, s_dbg_last_draws, 90 + s_key_caps++);
           fprintf(stderr, "[RSXCAP] F12 capture %u written (%u draws)%c",
                   s_key_caps, s_dbg_last_draws, 10);
-      } }
+      }
+      /* FSR diagnostics can continue after the legacy real-frame cap limit.
+       * Do not leave the request latched, which would suspend FG forever. */
+      if(g_rsx_cap_request&&s_key_caps>=10&&rsx_fsr31_requested())g_rsx_cap_request=0;
+    }
     { const char* cap = getenv("RSX_CAP");
       if (cap) {
         static int s_cap_parsed = 0;
@@ -12576,7 +12769,7 @@ static void vf_capture_vertex(u32 parity,u32 vertex,float out[16][4]) {
         }
     }
     if(vf_pose_enabled()) {
-        const u8* pose=base+VF_POSE_OFF+(size_t)vertex*vf_pose_stride();
+        const u8* pose=s_pose_compute_capture?s_pose_compute_capture+(size_t)vertex*16:base+VF_POSE_OFF+(size_t)vertex*vf_pose_stride();
         rsx_pose_gpu_read(pose,out[0]);
     }
 }
@@ -14218,6 +14411,9 @@ void rsx_d3d12_backend_shutdown(void)
     render_wait_idle();
     wait_for_gpu();
     plib_save();   /* pipelines built since the last periodic save */
+    mc_shutdown();
+    rsx_fsr31_shutdown();
+    pc_release(&s_pose_compute);rsx_pose_compute_plan_destroy(&s_pose_compute_plan);
     rsx_frame_gpu_destroy(&s_frame_gpu);s_frame_gpu_init=0;
 
     /* Release D3D12 resources */

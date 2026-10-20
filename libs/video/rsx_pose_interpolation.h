@@ -106,11 +106,11 @@ typedef struct {
     int vertex_validation_cache_disabled;
     int have_cur,have_prev,reason;
     double last_at; float alpha;
-    uint32_t matched,moving,ambiguous,capped,coherent,coherence_conflicts,seams,seam_conflicts;
+    uint32_t matched,moving,ambiguous,capped,coherent,coherence_conflicts,seams,seam_conflicts,seam_components,seam_veto_vertices;
 } RsxPoseHistory;
 enum {RSX_POSE_OFF,RSX_POSE_WARMUP,RSX_POSE_NEW,RSX_POSE_REPEAT,RSX_POSE_LAYOUT,RSX_POSE_CUT,RSX_POSE_INVALID};
 static inline void rsx_pose_reset(RsxPoseHistory* h) {
-    h->have_cur=h->have_prev=0;h->matched=h->moving=h->ambiguous=h->capped=0;h->coherent=h->coherence_conflicts=h->seams=h->seam_conflicts=0;h->alpha=1;
+    h->have_cur=h->have_prev=0;h->matched=h->moving=h->ambiguous=h->capped=0;h->coherent=h->coherence_conflicts=h->seams=h->seam_conflicts=h->seam_components=h->seam_veto_vertices=0;h->alpha=1;
 }
 static inline void rsx_pose_destroy(RsxPoseHistory* h) {
     RsxPoseSnapshot* s[2]={&h->cur,&h->prev};
@@ -522,7 +522,7 @@ static inline int rsx_pose_prepare(RsxPoseHistory* h,const RsxPoseFrame* f,doubl
     h->camera_hits=h->camera_misses=h->camera_uncached=0;h->camera_memo_disabled=0;
     h->position_hits=h->position_misses=h->position_uncached=0;h->position_memo_disabled=0;
     h->search_candidates=h->search_pruned=h->sample_groups_reused=h->search_blocks_pruned=0;
-    h->matched=h->moving=h->ambiguous=h->capped=0;h->coherent=h->coherence_conflicts=h->seams=h->seam_conflicts=0;h->alpha=1;
+    h->matched=h->moving=h->ambiguous=h->capped=0;h->coherent=h->coherence_conflicts=h->seams=h->seam_conflicts=h->seam_components=h->seam_veto_vertices=0;h->alpha=1;
     if(!f->scene||!f->nd){rsx_pose_reset(h);h->reason=RSX_POSE_OFF;return 0;}
     int valid=isfinite(now)&&rsx_pose_frame_valid(h,f);
     rsx_pose_profile_section(profile,RSX_POSE_P_VALIDATE,&profile_mark);
@@ -672,7 +672,7 @@ static inline int rsx_pose_same_geometry(const RsxPoseFrame* f,uint32_t a,uint32
  * Cameras are grouped separately: all geometry using one original camera
  * receives the same camera, including newly appeared objects.
  */
-static inline int rsx_pose_cohere(RsxPoseHistory* h,const RsxPoseFrame* f) {
+static inline int rsx_pose_cohere_ex(RsxPoseHistory* h,const RsxPoseFrame* f,int geometry_on_gpu) {
     h->coherent=h->coherence_conflicts=0;
     memset(h->vertex_sources,0xFF,(size_t)f->nd*sizeof(int32_t));
     memset(h->camera_sources,0xFF,(size_t)f->nd*sizeof(int32_t));
@@ -702,6 +702,9 @@ static inline int rsx_pose_cohere(RsxPoseHistory* h,const RsxPoseFrame* f) {
              * light, retain this projection collectively, including copies
              * with no temporal history. Geometry may still interpolate. */
             if(!geometry&&(d->flags&RSX_POSE_CURRENT_LIGHT_CAMERA)){h->seeds[group]=-2;continue;}
+            /* Compute mode builds exact groups here; numerical geometry
+             * proposals/conflicts are resolved collectively by GPU passes. */
+            if(geometry&&geometry_on_gpu)continue;
             if(!rsx_pose_draw_ready(h,i)||h->seeds[group]==-2)continue;
             int32_t seed=h->seeds[group];int changed=0,conflict=0;
             if(geometry) {
@@ -728,6 +731,9 @@ overflow:
     memset(h->vertex_sources,0xFF,(size_t)f->nd*sizeof(int32_t));
     memset(h->camera_sources,0xFF,(size_t)f->nd*sizeof(int32_t));
     h->coherent=0;h->coherence_conflicts++;return 0;
+}
+static inline int rsx_pose_cohere(RsxPoseHistory* h,const RsxPoseFrame* f) {
+    return rsx_pose_cohere_ex(h,f,0);
 }
 static inline int32_t rsx_pose_component(RsxPoseHistory* h,int32_t i) {
     int32_t root=i;while(h->next[root]!=root)root=h->next[root];
@@ -772,6 +778,21 @@ static inline uint32_t rsx_pose_point_component(RsxPoseHistory* h,uint32_t v) {
     uint32_t root=v;while(h->vertex_groups[root]!=root+1)root=h->vertex_groups[root]-1;
     while(v!=root){uint32_t next=h->vertex_groups[v]-1;h->vertex_groups[v]=root+1;v=next;}return root;
 }
+/* Same upload or exact point/camera joins draws into a surface component.
+ * Scratch is no longer needed by the completed point hash at this stage.
+ * Used by CPU resolve and GPU plan construction; no positional tolerance. */
+static inline void rsx_pose_mesh_components(RsxPoseHistory* h,const RsxPoseFrame* f) {
+    memset(h->vertex_cameras,0,(size_t)f->nv*sizeof(uint32_t));
+    for(uint32_t i=0;i<f->nd;i++)h->next[i]=(int32_t)i;
+    for(uint32_t i=0;i<f->nd;i++) {
+        const RsxPoseDraw* d=f->draws+i;
+        for(uint32_t k=0;k<d->count;k++) {
+            uint32_t owner=h->vertex_owners[d->first+k];if(!owner)continue;
+            uint32_t* draw=h->vertex_cameras+owner-1;
+            if(*draw)rsx_pose_join(h,(int32_t)i,(int32_t)(*draw-1));else *draw=i+1;
+        }
+    }
+}
 /* Whole-draw coherence is insufficient at a UV/material boundary: two
  * adjacent, differently-shaped draws duplicate their common edge. Their
  * histories may have different phases or one may be newly visible.
@@ -784,7 +805,7 @@ static inline uint32_t rsx_pose_point_component(RsxPoseHistory* h,uint32_t v) {
  * UINT64_MAX means retain the CPU result. No recipe changes before graph
  * validation, so the bounded/atomic failure behavior is identical. */
 static inline int rsx_pose_weld_recipe(RsxPoseHistory* h,const RsxPoseFrame* f,float* output,uint32_t* states,uint64_t* recipes) {
-    h->seams=h->seam_conflicts=0;
+    h->seams=h->seam_conflicts=h->seam_components=h->seam_veto_vertices=0;
     memset(h->vertex_groups,0,(size_t)f->nv*sizeof(uint32_t));
     memset(h->heads,0xFF,(size_t)h->buckets*sizeof(int32_t));
     uint32_t nodes=0;
@@ -827,9 +848,33 @@ static inline int rsx_pose_weld_recipe(RsxPoseHistory* h,const RsxPoseFrame* f,f
         if(!*state){memcpy(output+(size_t)root*3,output+(size_t)v*3,3*sizeof(float));if(recipes)recipes[root]=recipes[v];*state=1;}
         else if(!rsx_pose_floats_equal(output+(size_t)root*3,output+(size_t)v*3,3)){*state=3;h->seam_conflicts++;}
     }
+    /* A point-only snap mixes current and intermediate vertices within one
+     * triangle. Replay of JP F9 frame_033 stretched an edge 24.4x this way.
+     * Spread conflict/alias fallbacks over the connected surface BEFORE any
+     * final writes. Clean, disconnected surfaces keep their interpolation. */
+    int blocked=0;
+    for(uint32_t v=0;v<f->nv&&!blocked;v++)if(h->vertex_owners[v]) {
+        int32_t state=h->vertex_next[h->vertex_owners[v]-1];blocked=state==2||state==3;
+    }
+    if(blocked) {
+        rsx_pose_mesh_components(h,f);memset(h->seeds,0,(size_t)f->nd*sizeof(int32_t));
+        for(uint32_t v=0;v<f->nv;v++)if(h->vertex_owners[v]) {
+            uint32_t root=h->vertex_owners[v]-1;int32_t state=h->vertex_next[root];
+            if(state==2||state==3)h->seeds[rsx_pose_component(h,(int32_t)h->vertex_cameras[root]-1)]=1;
+        }
+        for(uint32_t i=0;i<f->nd;i++) {
+            int32_t group=rsx_pose_component(h,(int32_t)i);if(!h->seeds[group])continue;
+            if(h->seeds[group]==1){h->seam_components++;h->seeds[group]=2;}
+            const RsxPoseDraw* d=f->draws+i;
+            for(uint32_t k=0;k<d->count;k++) {
+                uint32_t owner=h->vertex_owners[d->first+k];if(owner)h->vertex_next[owner-1]=2;
+            }
+        }
+    }
     for(uint32_t v=0;v<f->nv;v++) {
         if(!h->vertex_owners[v])continue;
         uint32_t root=h->vertex_owners[v]-1;int32_t state=h->vertex_next[root];
+        if(state==2&&!rsx_pose_floats_equal(output+(size_t)v*3,f->vertices[v].xyz,3))h->seam_veto_vertices++;
         const float* value=state==1?output+(size_t)root*3:f->vertices[v].xyz;
         if(!rsx_pose_floats_equal(output+(size_t)v*3,value,3))h->seams++;
         memcpy(output+(size_t)v*3,value,3*sizeof(float));

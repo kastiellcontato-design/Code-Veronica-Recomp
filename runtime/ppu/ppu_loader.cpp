@@ -1662,6 +1662,14 @@ static inline int vm_coh_reserved(uint32_t a)
     return (s_coh_bitmap[line >> 3] >> (line & 7)) & 1u;
 }
 extern "C" void cellGcm_ref_on_poll(void);
+/* Installed once before guest threads start, otherwise zero. This observer
+ * runs AFTER a complete guest 32-bit store, never before command publication. */
+extern "C" uint32_t g_gcm_notify_put_addr;
+extern "C" void cellGcm_fifo_notify_put(void);
+static inline void vm_fifo_published(uint32_t addr) {
+    if(__builtin_expect(addr==g_gcm_notify_put_addr && addr!=0,0))cellGcm_fifo_notify_put();
+}
+
 static inline void vm_refpoll(uint32_t ea)
 {
     if (ea != (VM_HLE_INJECT_BASE + 0x2008u)) return;
@@ -2193,6 +2201,7 @@ void vm_write32(uint64_t a, uint32_t v) {
         if (vm_oob((uint32_t)a,4) || vm_null_store((uint32_t)a, v, 4, __builtin_return_address(0))) return;
         uint32_t _v = __builtin_bswap32(v); VM_WRITE_COH(a, &_v, 4);
         if (spu_raw_is_reg((uint32_t)a)) spu_raw_reg_store((uint32_t)a, v, 4);
+        vm_fifo_published((uint32_t)a);
         return; }
     barrier_watch_hit((uint32_t)a, v, 4, __builtin_return_address(0)); if (vm_oob((uint32_t)a,4) || vm_null_store((uint32_t)a, v, 4, __builtin_return_address(0))) return;
 #ifdef _WIN32
@@ -2205,7 +2214,8 @@ void vm_write32(uint64_t a, uint32_t v) {
       /* Raw SPU problem state: run control, mailboxes and signal notification
        * have side effects. The plain store above still happens -- the registers
        * are guest memory and the PPU reads most of them straight back. */
-      if (spu_raw_is_reg((uint32_t)a)) spu_raw_reg_store((uint32_t)a, _v, 4); } }
+      if (spu_raw_is_reg((uint32_t)a)) spu_raw_reg_store((uint32_t)a, _v, 4);
+      vm_fifo_published((uint32_t)a); } }
 void vm_write64(uint64_t a, uint64_t v) {
     if (__builtin_expect(!vm_diag(), 1)) {
         if (vm_oob((uint32_t)a,8) || vm_null_store((uint32_t)a, (uint32_t)(v >> 32), 8, __builtin_return_address(0))) return;

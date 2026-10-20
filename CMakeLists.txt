@@ -55,6 +55,7 @@ endif()
 # library everywhere. See the "Guest shaders on Metal" section below.
 list(APPEND HLE_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/libs/video/rsx_shader_msl.cpp")
 list(APPEND HLE_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/libs/video/rsx_dxc.cpp")
+list(APPEND HLE_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/libs/video/rsx_fsr31.cpp")
 # cellAtrac decodes with FFmpeg's ATRAC3plus decoder as extracted by PPSSPP
 # (LGPL-2.1, kept separate in third_party/at3_standalone -- see its README).
 file(GLOB AT3_SOURCES "third_party/at3_standalone/*.cpp")

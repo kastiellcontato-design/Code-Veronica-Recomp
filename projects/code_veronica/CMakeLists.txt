@@ -454,6 +454,7 @@ endif()
 
 if(WIN32)
     add_executable(code_veronica_menu_tests EXCLUDE_FROM_ALL tests/test_pc_menu.cpp)
+    set_target_properties(code_veronica_menu_tests PROPERTIES OUTPUT_NAME "code_veronica_menu_tests_${CV_REGION_LC}")
     target_include_directories(code_veronica_menu_tests PRIVATE "${RECOMP_DIR}")
     target_compile_options(code_veronica_menu_tests PRIVATE /UNDEBUG)
     target_link_libraries(code_veronica_menu_tests PRIVATE gdi32 user32)
@@ -506,6 +507,13 @@ if(WIN32)
 endif()
 
 # CPU-only checks for render interpolation. No game assets or GPU required.
+add_executable(code_veronica_pose_replay_tests EXCLUDE_FROM_ALL tests/test_pose_capture_replay.cpp)
+target_include_directories(code_veronica_pose_replay_tests PRIVATE "${PS3RECOMP_DIR}/libs/video")
+if(MSVC)
+    target_compile_options(code_veronica_pose_replay_tests PRIVATE /UNDEBUG)
+else()
+    target_compile_options(code_veronica_pose_replay_tests PRIVATE -UNDEBUG)
+endif()
 add_executable(code_veronica_pose_tests EXCLUDE_FROM_ALL tests/test_pose_interpolation.cpp)
 target_include_directories(code_veronica_pose_tests PRIVATE "${PS3RECOMP_DIR}/libs/video")
 if(MSVC)
@@ -605,4 +613,55 @@ if(WIN32)
     target_include_directories(code_veronica_texture_export_tests PRIVATE "${PS3RECOMP_DIR}/include")
     target_compile_options(code_veronica_texture_export_tests PRIVATE /UNDEBUG)
     target_link_libraries(code_veronica_texture_export_tests PRIVATE gdiplus ole32)
+endif()
+
+# Bounded FIFO event wake with real Windows synchronization, no game assets.
+if(WIN32)
+    add_executable(code_veronica_fifo_idle_tests EXCLUDE_FROM_ALL tests/test_fifo_idle.cpp)
+    target_compile_options(code_veronica_fifo_idle_tests PRIVATE /UNDEBUG)
+    target_include_directories(code_veronica_fifo_idle_tests PRIVATE "${PS3RECOMP_DIR}/runtime/platform")
+endif()
+
+# Production coherence registry regression, host wake edges stubbed only.
+if(WIN32)
+    add_executable(code_veronica_spu_coherence_tests EXCLUDE_FROM_ALL tests/test_spu_coherency_registry.c)
+    target_compile_options(code_veronica_spu_coherence_tests PRIVATE /UNDEBUG)
+endif()
+
+# GPU compute interpolation: production six-pass shaders vs CPU on WARP and hardware.
+if(WIN32)
+    add_executable(code_veronica_pose_compute_tests EXCLUDE_FROM_ALL tests/test_pose_compute.cpp
+        "${PS3RECOMP_DIR}/libs/video/rsx_dxc.cpp")
+    target_include_directories(code_veronica_pose_compute_tests PRIVATE "${PS3RECOMP_DIR}/libs/video")
+    target_compile_options(code_veronica_pose_compute_tests PRIVATE /UNDEBUG)
+    target_link_libraries(code_veronica_pose_compute_tests PRIVATE d3d12 dxgi dxguid d3dcompiler)
+endif()
+
+# Optional official analytical FSR 3.1.6. Native/disabled mode never loads it.
+if(WIN32)
+    set(CV_FSR31_DIR "${PS3RECOMP_DIR}/third_party/amd_fsr31")
+    if(EXISTS "${CV_FSR31_DIR}/bin/amd_fidelityfx_framegeneration_dx12.dll")
+        add_custom_command(TARGET MyGameRecomp POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${CV_FSR31_DIR}/bin/amd_fidelityfx_framegeneration_dx12.dll"
+                "$<TARGET_FILE_DIR:MyGameRecomp>/amd_fidelityfx_framegeneration_dx12.dll"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${CV_FSR31_DIR}/LICENSE.md"
+                "$<TARGET_FILE_DIR:MyGameRecomp>/AMD-FSR-LICENSE.md")
+    endif()
+    add_executable(code_veronica_motion_capture_tests EXCLUDE_FROM_ALL tests/test_motion_capture.c)
+    target_include_directories(code_veronica_motion_capture_tests PRIVATE "${PS3RECOMP_DIR}/libs/video")
+    target_compile_options(code_veronica_motion_capture_tests PRIVATE /UNDEBUG)
+    target_link_libraries(code_veronica_motion_capture_tests PRIVATE d3d12 dxgi dxguid user32)
+    add_executable(code_veronica_fsr31_tests EXCLUDE_FROM_ALL tests/test_fsr31.cpp
+        "${PS3RECOMP_DIR}/libs/video/rsx_fsr31.cpp" "${PS3RECOMP_DIR}/libs/video/rsx_dxc.cpp")
+    target_include_directories(code_veronica_fsr31_tests PRIVATE "${PS3RECOMP_DIR}/libs/video")
+    target_compile_options(code_veronica_fsr31_tests PRIVATE /UNDEBUG)
+    target_link_libraries(code_veronica_fsr31_tests PRIVATE d3d12 dxgi dxguid d3dcompiler user32)
+    if(EXISTS "${CV_FSR31_DIR}/bin/amd_fidelityfx_framegeneration_dx12.dll")
+        add_custom_command(TARGET code_veronica_fsr31_tests POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${CV_FSR31_DIR}/bin/amd_fidelityfx_framegeneration_dx12.dll"
+                "$<TARGET_FILE_DIR:code_veronica_fsr31_tests>/amd_fidelityfx_framegeneration_dx12.dll")
+    endif()
 endif()

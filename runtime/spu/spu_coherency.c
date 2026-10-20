@@ -99,8 +99,8 @@ int s_coh_armed;
  * budget of one audio mixer round. */
 #define SPU_COH_MAX_CTX 64
 static spu_context* s_coh_ctxs[SPU_COH_MAX_CTX];
-/* One past the highest slot ever used; walkers scan only that far. Raised
- * under the lock-line lock, never lowered. */
+/* One past the last occupied slot; trim trailing holes at release so walkers
+ * do not keep scanning an old high-water mark. Lock-line lock protects it. */
 static volatile int s_coh_n = 0;
 
 unsigned long g_spu_lr_raise = 0;
@@ -112,14 +112,16 @@ void spu_coh_reserve(spu_context* ctx, uint32_t ea)
     s_coh_armed = 1;
 
     if (!ctx) return;
-    for (int i = 0; i < SPU_COH_MAX_CTX; i++) {
-        if (s_coh_ctxs[i] == ctx) return;
-        if (s_coh_ctxs[i] == NULL) {
-            s_coh_ctxs[i] = ctx;
-            if (i >= s_coh_n) s_coh_n = i + 1;
-            return;
-        }
+    /* Search the whole live extent before reusing a hole: inserting at the
+     * first hole duplicated a context already present later in the table.
+     * All callers hold the lock-line lock. */
+    int hole=-1;
+    for(int i=0;i<s_coh_n;i++) {
+        if(s_coh_ctxs[i]==ctx)return;
+        if(!s_coh_ctxs[i] && hole<0)hole=i;
     }
+    if(hole<0 && s_coh_n<SPU_COH_MAX_CTX)hole=s_coh_n++;
+    if(hole>=0) { s_coh_ctxs[hole]=ctx;return; }
     /* More live SPU contexts than the registry holds. The ones already in it
      * still get their events; this one would silently never wake, so say so. */
     { static int warned = 0;
@@ -128,6 +130,16 @@ void spu_coh_reserve(spu_context* ctx, uint32_t ea)
                           "spu=0x%X will not receive lock-line events\n",
                   SPU_COH_MAX_CTX, ctx->spu_id);
           fflush(stderr); } }
+}
+
+/* Route stores to this line through the existing coherent-store barrier.
+ * This marks no context and creates no SPU reservation or synthetic event.
+ * Used by the optional RSX publication observer to cover lifted inline stores. */
+void spu_coh_watch_line(uint32_t ea)
+{
+    spu_lockline_lock();
+    spu_coh_reserve(NULL,ea);
+    spu_lockline_unlock();
 }
 
 /* Drop a context from the reserving set.
@@ -156,7 +168,8 @@ void spu_coh_unregister(spu_context* ctx)
      * spu_coh_notify_write, reading a freed thread stack. */
     spu_lockline_lock();
     for (int i = 0, n = s_coh_n; i < n; i++)
-        if (s_coh_ctxs[i] == ctx) { s_coh_ctxs[i] = NULL; break; }
+        if (s_coh_ctxs[i] == ctx) s_coh_ctxs[i] = NULL;
+    while(s_coh_n>0 && !s_coh_ctxs[s_coh_n-1])--s_coh_n;
     spu_lockline_unlock();
 }
 
@@ -180,6 +193,7 @@ void spu_coh_forget_range(uintptr_t lo, uintptr_t hi)
             s_coh_ctxs[i] = NULL;
         }
     }
+    while(s_coh_n>0 && !s_coh_ctxs[s_coh_n-1])--s_coh_n;
     spu_lockline_unlock();
 }
 

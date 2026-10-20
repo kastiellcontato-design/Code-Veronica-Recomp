@@ -40,6 +40,10 @@ static inline int rsx_pose_gpu_read(const void* record,float xyz[3]) {
     return 0;
 }
 #define RSX_POSE_GPU_HLSL \
+    "#if VF_POSE_COMPUTE_ENABLED\n" \
+    "ByteAddressBuffer vf_pose_computed:register(t25);\n" \
+    "float4 vf_pose_position(uint index,float4 original){uint4 p=vf_pose_computed.Load4(index*16u);return p.w==1u?float4(asfloat(p.xyz),original.w):original;}\n" \
+    "#else\n" \
     "#ifndef VF_POSE_STRIDE_U\n#define VF_POSE_STRIDE_U 32u\n#endif\n" \
     "float4 vf_pose_position(uint index,float4 original) {\n" \
     " uint offset=VF_POSE_OFF_U+index*VF_POSE_STRIDE_U;\n" \
@@ -55,5 +59,6 @@ static inline int rsx_pose_gpu_read(const void* record,float xyz[3]) {
     " }\n" \
     "#endif\n" \
     " return original;\n" \
-    "}\n"
+    "}\n" \
+    "#endif\n"
 #endif

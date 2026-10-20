@@ -1,3 +1,363 @@
+# v48 — promoção para o launcher normal EU / US / JP
+
+Por solicitação do usuário em 20/10/2026, o estado v47/pose v21 e FSR v4 foi
+promovido aos três executáveis normais: MyGameRecomp.exe (EU), MyGameRecomp_US.exe,
+MyGameRecomp_JP.exe. Todos usam o mesmo código de renderização/launcher, DXC por
+padrão, 30 FPS nativos como seleção inicial e FSR desligado inicialmente.
+As preferências já salvas pelo usuário são respeitadas. Não é necessário abrir
+os CMDs de diagnóstico para usar 60 FPS/FSR. executar-code-veronica-jogar.cmd
+abre o launcher principal, que seleciona o executável da região escolhida.
+
+Inclui as otimizações de fila/FIFO, interpolação GPU opcional, FSR oficial,
+overlay real/total e sua preservação nos quadros gerados, captura F9 e fallback
+coletivo contra deformação de triângulos. Histórico detalhado abaixo.
+
+O usuário confirmou melhora importante e aprovou a entrega, mas relatou bugs
+residuais. Não tratar como imagem perfeita nem como 60 FPS garantidos. Em
+conflitos temporais, um componente pode repetir a pose atual. Luz/sombras ainda
+precisam de refinamento. Gameplay observado principalmente na versão japonesa;
+EU/US têm build e testes regionais, sem alegar playthrough completo.
+
+O commit contém código, documentação, testes, headers oficiais AMD e runtime
+redistribuível assinado com licença/proveniência. Saves, material do jogo,
+shaders extraídos, fotos F9/F12 e código recompilado do jogo ficam fora do Git.
+
+---
+
+# v47 / pose v21 — conflitos de vértices sem triângulos mistos (JP)
+
+Relato: tronco/braços esticam durante corrida com câmera em movimento, FSR OFF.
+Reprodução concreta: sessão F9 session_25412_46268125/frame_033, draw 1217,
+source 2812, alpha=.5. Dois pontos estavam no midpoint e o terceiro no endpoint
+atual. Aresta 24.4139x maior que o maior comprimento nos endpoints do histórico.
+Replay do código anterior reproduziu TODAS as posições do arquivo, bit a bit,
+sem precisar supor aliases de passes não aceitos nesse quadro.
+
+Causa: rsx_pose_weld_recipe resolvia conflito de candidatos com um snap somente
+no ponto compartilhado. Os demais vértices do triângulo continuavam interpolados.
+Agora conflito de ponto ou veto de alias mantém a pose atual em TODO o componente
+conectado de draws (mesmo upload ou pontos/câmeras exatamente iguais). Superfícies
+separadas permanecem interpoladas. Não há weld por distância, movimentação inventada,
+alteração de UV, shader de iluminação, lógica ou relógio nativo de 30 FPS.
+
+É um fallback conservador: trechos conflitantes podem repetir a pose atual naquele
+instante, reduzindo a suavidade local até melhorar a correspondência temporal.
+Não alegar interpolação perfeita em todo quadro nem correção completa da luz.
+Apenas CPU camera matching/projeções de luz continua com a política anterior.
+
+CPU/VF: propaga o veto antes de escrever posições/receitas. O caso sem bloqueio
+mantém o caminho anterior. Usa scratch existente, sem nova alocação por frame.
+GPU compute opcional: constrói a MESMA topologia estática, faz uma redução adicional
+de vetos por componente antes da saída; seis passes com barreiras UAV, sem readback
+normal. Plan, offsets e tamanho do buffer atualizados conjuntamente.
+Log [POSE] v21 e F9 JSON acrescentam seam_components / seam_veto_vertices.
+
+Validação:
+- CPU: 10.000 frames de estabilidade, velocidade 30 Hz/cadência 60 Hz, limites,
+  aliases, costuras, receitas; teste de conflito pontual/alias em cadeia, ordem
+  invertida e malha desconectada que conserva o midpoint.
+- Replay dos 108 snapshots das 3 sessões F9: zero draws com veto parcial depois;
+  15.580 ocorrências de arestas >2x antes e zero depois, contando as cópias de
+  passes. Maior razão após=1.00013 (tolerância numérica), não 24x. Os arquivos
+  de captura originais permaneceram inalterados.
+- GPU compute: 512 frames WARP + 512 hardware comparados bit a bit com CPU,
+  conflitos/aliases/recuperação/consumidor de vértices real, zero erros D3D12.
+- Executável japonês reconstruído. EU/US não reconstruídos nesta rodada.
+
+Reprodução: code_veronica_pose_replay_tests <arquivo.pose> -1 [saida.xyz]
+Esse replay inspeciona posições/triângulos, não renderiza a iluminação completa.
+Gameplay pós-fix e relato de sombras no rosto ainda precisam de novo teste F9.
+
+---
+
+# v46 — overlay FSR estável e captura de movimento F9 (JP)
+
+O guard de imagem preserva pixels do overlay comparando snapshots antes/depois
+do painel, eliminando seu apagamento nos outputs gerados. Sem mudança no pose
+matching, nas posições, iluminação ou relógio nativo de 30 FPS nesta rodada.
+F9 salva 36 amostras opt-in com BMP, QPC, geometria CPU/VF, matrizes e constantes
+FP congeladas para localizar defeitos da interpolação durante corrida.
+Quatro slots e gravação em threads; sem wait extra de GPU; fila cheia registrada.
+MOTION-CAPTURE.md documenta uso, formato e limitações.
+Defeitos de geometria/iluminação relatados continuam aguardando captura no jogo;
+não foram declarados corrigidos só por adicionar instrumentação.
+
+---
+
+# v45 — FPS real / total com FSR no overlay (JP)
+
+Painel exibe `FPS 60 / 120` quando o swapchain FSR está ativo: renderização
+real à esquerda, total medido por GetLastPresentCount à direita. Tempo em ms
+continua real. Sem FSR, formato anterior. Layouts linha/coluna medem a largura
+do texto; nenhuma alteração nos cálculos de imagem ou na interpolação.
+Teste SDK 1080p: 36 reais + 35 gerados = 71 apresentações, inclusive pausa e
+resize; QA do painel cobre pausa, indisponibilidade, wrap e reset.
+Usuário confirmou que a proteção v44 corrigiu os artefatos visuais relatados.
+Ver FSR-FRAME-GENERATION.md para limitações de medição.
+
+---
+
+# v44 — correção experimental de mosaicos no FSR (JP)
+
+Movimento subpixel/confiança, reconstrução com bordas de profundidade,
+entradas motion/depth em resolução de exibição e proteção conservadora
+pós-SDK para estruturas estáticas/textos. F12 passa a salvar também
+quadros SDK reais gerados e campos de diagnóstico em fsr-captures.
+Teste 1080p: três saídas geradas preservam exatamente pixels estáticos e
+traços brancos/verdes; sem erros D3D12. Ver FSR-FRAME-GENERATION.md.
+Validação da Claire em movimento pelo usuário ainda pendente.
+
+---
+
+# v43 — FSR Frame Generation 3.1.6 experimental (JP)
+
+Integração oficial AMD, botão default-off no launcher JP e apresentação
+via SDK. 30 FPS excluído por gates do launcher/runtime; CPU/GPU v42
+continuam independentes. Ver FSR-FRAME-GENERATION.md para código, origem,
+entradas estimadas de imagem/profundidade, limitações de câmera/UI,
+validação e teste pendente de gameplay. Não afirmar ganho medido ainda.
+
+Atalho normal JP: executar-code-veronica-japones.cmd. Selecionar 60 FPS e
+Geração de quadros > FSR 3.1 (Experimental). Atalhos antigos CPU/GPU de
+benchmark mantêm FSR desligado para preservar as comparações anteriores.
+
+---
+
+# v42 — interpolação compute na GPU, opt-in JP/DXC
+
+Pedido: migrar em conjunto o trabalho numérico pesado da interpolação,
+com retorno à CPU, preservando o modo nativo de 30 FPS.
+
+## Escopo entregue
+
+- Cinco passes compute DXC/SM6: seleção coerente de poses por geometria;
+  propostas/combinação por vértice; veto coletivo de aliases; resolução
+  numérica das costuras; saída final compartilhada por todos os draws.
+- CPU mantém captura/histórico, busca temporal, identificação exata das
+  geometrias, construção dos grafos e câmera/projeções de iluminação.
+  Portanto não é skinning inteiramente na GPU nem busca temporal na GPU.
+- No caminho compute não se calcula primeiro o resultado geométrico na CPU
+  para depois repetir na GPU. O vertex shader consome t25 diretamente.
+  Nenhum readback é necessário nos quadros normais. F12 copia a saída GPU
+  apenas para diagnóstico; não medir os quadros de captura.
+- Upload reutilizado, entradas copiadas para memória local da GPU, cinco
+  dispatches com barreiras UAV, saída em estado SRV. Fences existentes
+  protegem reutilização e realocação; nenhum novo fence por quadro normal.
+- Caches de shaders e pipelines separados: `vfetch-pose-compute42`.
+- Falha de inicialização retorna ao caminho CPU. Dados fora da faixa
+  numérica segura, grafo incompleto/limites ou falha de preparação/upload
+  usam a resolução CPU naquele quadro. O shader compute recebe índices
+  limitados inclusive em expressões especulativas e listas limitadas.
+
+## Uso e comparação
+
+Somente `MyGameRecomp_JP.exe` foi recompilado nesta rodada. EU/US mantêm
+os hashes da entrega v37. GPU é experimental e desativada por padrão.
+No launcher JP, selecionar 60 FPS revela Interpolação: CPU/GPU; mudar com
+jogo fechado e reiniciar. O caminho 30 FPS não inicializa nem despacha
+compute, mesmo se a preferência GPU estiver salva; relógio/patches 30 Hz
+não foram alterados nesta rodada.
+
+Atalhos JP equivalentes para medir a mesma cena a 1080p:
+`executar-code-veronica-60fps-gpu-compute.cmd` e
+`executar-code-veronica-60fps-cpu-referencia.cmd`.
+Ambos desativam o experimento FIFO_NOTIFY/WAKE v41 para não confundir a
+comparação e usam os mesmos probes leves. Logs separados
+`run-log-fps60-gpu-compute.txt` e `run-log-fps60-cpu-referencia.txt`.
+Não garantem nem forçam a resolução: conferir 1920x1080 no launcher.
+O primeiro uso GPU pode compilar shaders; comparar após aquecimento.
+Os atalhos de diagnóstico fixam CPU/GPU pelo ambiente naquela execução;
+o seletor persistente é usado na inicialização normal do launcher JP.
+
+## Validação e limite da conclusão
+
+Build JP/DXC e alvo `code_veronica_pose_compute_tests` concluídos.
+512 quadros WARP + 512 na GPU física comparados bit a bit à resolução CPU,
+com 8–86 draws, múltiplos grupos de dispatch, conflitos entre passes,
+sobreposições, veto coletivo, costuras, poses paradas, alternância para
+fallback CPU/retorno compute e readback F12. Shader consumidor t25
+compilado no DXC. Testes CPU de interpolação (10.000 quadros), busca,
+vértex-fetch e caminho GPU anterior passaram, inclusive AddressSanitizer
+no conjunto CPU e no novo teste compute (incluindo topologia, câmeras
+distintas e recusas de faixa/limites). Isso não substitui validação visual
+no jogo nem prova
+que haverá ganho de FPS: upload/topologia e trabalho restante na CPU
+podem limitar o benefício. Medida comparativa de gameplay ainda pendente.
+
+---
+
+# v41 — cobertura do PUT inline usando barreira existente, JP
+
+Resultado v40: 11 janelas/2690 presents,7071 ops,1080p,apos F12 sem captura:
+48,80FPS/20,492ms; pose3,877ms vs v39~4,849, build5,053ms vs4,660.
+Nao houve ganho global. Aviso de64 contextos nao reapareceu nesta sessao.
+Notificacao habilitada, mas ZERO publicacoes/sinais: PPU_VM_INLINE usa
+ppu_st32 que grava diretamente e pula o vm_write32 externo. O teste v40
+validava somente o observer no writer externo, faltava cobertura integrada.
+
+v41 marca apenas a linha128bytes que contem o PUT no bitmap da barreira
+coerente existente, antes de iniciar threads, somente CV_FIFO_NOTIFY=1.
+Novo spu_coh_watch_line faz reserve(NULL,addr) sob lock: marca a linha sem
+registrar contexto e sem criar reserva SPU ou emitir evento ficticio.
+O ppu_vm_store_plain ja existente ve o bit e encaminha estes stores ao
+runtime. Assim o PUT32 real passa pelo observer apos store. GET/ref na mesma
+linha tambem passam pela serializacao coerente, mas nao acionam o observer.
+Enderecos normais continuam inline; nenhuma mudanca no gerador ou nos
+milhoes de stores do resto do jogo. O custo extra da linha e do despertar
+precisa ser medido; pode nao compensar. Timeout1ms permanece e parks nao
+sao pulados. Sem raw diagnostics, busy-loop ou mudar semantica dos comandos.
+
+Modo30 ou notificacao desativada nao chama watch_line. Bit nao e desmarcado
+no mesmo processo, assim como todas as linhas do bitmap existente; alternar
+modo continua exigindo reinicio. Patches de park sem nova publicacao PUT
+continuam usando timeout. Nao afirmar ganho antes do reteste.
+
+Validacao integrada: extraidos ppu_vm_store_plain e ppu_st32 do JP gerado e
+vm_write32/observer do fonte instalado: sem bit store passa inline sem aviso;
+com bit passa ao writer e avisa apos commit; outra linha continua inline.
+Fast/diag,disabled,OOB/null e byte-order tambem verificados. PASS.
+Teste real de registro SPU acrescenta watch_line sem contexto/evento,
+limites128bytes e os16000 ciclos concorrentes. Demais testes de evento
+limitado/coalescencia mantidos. Build: fps60-v41-jp-build.log.
+
+Usar o MESMO executar-code-veronica-60fps-publicacao.cmd, japonesa1080p,
+segundo save,30s,F12 uma vez,mais5s. Perfil de inicio agora v41 enabled=1.
+Referencias e binarios EU/US permanecem inalterados.
+
+# v40 — registro SPU sem duplicatas + aviso apos publicacao, teste JP
+
+Duas mudancas concretas nesta rodada:
+
+1. spu_coh_reserve inseria no primeiro buraco antes de procurar o mesmo
+   contexto no resto da tabela. A remocao de A antes de B seguida de nova
+   reserva de B duplicava B; unregister apagava so uma copia. Corrigido:
+   procurar existencia em toda a extensao viva antes de reutilizar buraco.
+   unregister apaga todas as copias defensivamente e corta vagas ao final;
+   forget_range tambem corta o final vazio. Limite64 e semantica de eventos,
+   locks, reservas e notificacoes preservados. Nao aumentar limite cegamente.
+   Isso corrige um erro real compativel com o aviso observado; nao prova que
+   todo excesso de64 contextos vinha somente de duplicacao.
+
+2. CV_FIFO_NOTIFY=1, somente 60 interpolado e CV_FIFO_WAKE!=0, instala o
+   endereco observado antes de iniciar threads guest/frame. vm_write32
+   externo PPU sinaliza APOS o store completo (fast e diagnostico). DMA SPU
+   pelo hook ja existente so sinaliza quando contem a palavra PUT completa.
+   Nao sinalizar por texturas/vertices no mesmo mapeamento. Evento auto-reset
+   coalesce sinais e retém sinal anterior ao wait. Timeout de1ms fica igual;
+   o walker original continua verificando PUT e decidindo comandos/parks.
+   Sem executar RSX em thread guest/SPU, sem publicar fence artificialmente,
+   sem mudar relogio, vblank, qualidade, interpolacao ou ordem de flip.
+   Patches isolados de self-jump sem PUT continuam no timeout; stores PPU de
+   outros tamanhos e HLE inline nao sao observados nesta primeira etapa.
+
+CMD unico de teste: executar-code-veronica-60fps-publicacao.cmd. Japonesa,
+1080p, segundo save, mesma camera,30s,F12 uma vez,mais5s. Perfil registra
+[FIFO-NOTIFY] v40 enabled=1,put_addr e put_publications por janela, junto
+com sinais/timeouts FRAME-IDLE e estados FIFO-DELIVERY. Contagens de sinais
+nao sao contagens de frames nem milissegundos. Compare com v39 sem afirmar
+que os7ms de espera sejam recuperaveis. Notificacao pode ter custo maior
+que o beneficio; teste pendente antes de ativar em jogo normal.
+
+Referencia da notificacao: executar-code-veronica-60fps-perfil-fila.cmd
+sem CV_FIFO_NOTIFY (ou CV_FIFO_NOTIFY=0). A correcao SPU permanece nesta
+referencia, permitindo isolar o aviso sem reintroduzir o erro de registro.
+CMD jogar limpa CV_FIFO_NOTIFY; modo30 nao instala observador. O writer
+PPU32 tem uma comparacao adicional de endereco mesmo com observador zero;
+nao afirmar custo zero nem ganho automatico para30 sem medir. Correcao do
+registro e compartilhada no codigo, mas apenas binario JP foi recompilado.
+US/EU mantidos em v37 ate validar.
+
+Validacao:
+- Teste incluido com codigo real spu_coherency.c e apenas bordas MFC/wake
+  stubadas: buraco antes de existente,64 contextos unicos,64 wakes corretos,
+  remocao de copias,limpeza de faixa,16000 ciclos concorrentes: PASS.
+- Writer PPU32 extraido diretamente do fonte final: store antes de callback,
+  fast/diag,off,store nao observado e rejeitado: PASS.
+- Teste existente de evento real (retencao/coalescencia, thread concorrente,
+  timeout/fallback) e limites do intervalo DMA: PASS.
+- Build JP e testes compilados: fps60-v40-jp-build.log.
+Nenhum ganho FPS alegado antes da medicao do usuario.
+
+# v39 — diagnostico de entrega da fila, JP somente
+
+v38 nao confirmou ganho: primeiras cinco janelas limpas apos F12 53,08 FPS
+vs 51,63 FPS v37; trecho completo limpo 49,88 FPS. ZERO sinais em 29514
+esperas apos captura. Nao propagar como ganho comprovado. Dados preservados
+no workspace performance-v38-crates-room, com todas as janelas e exclusoes.
+
+CV_FIFO_PROFILE=1 + CV_PRODUCER_PROFILE=1 + modo 60 interpolado habilitam
+snapshots read-only antes/depois da espera, agregados a cada cinco segundos.
+Novo CMD executar-code-veronica-60fps-perfil-fila.cmd: JP,1080p,CPU/DXC,
+sala das caixas/escadas, mesma camera 30s, F12 uma vez, mais 5s.
+
+[FIFO-DELIVERY] classifica antes da espera: inactive, empty, park (self-jump),
+semaphore_header (candidato, nao prova de bloqueio), pending_other, unmapped,
+probe_busy. Registra mudancas PUT, patch do header com mesmo GET, transicao
+empty_to_pending com GET estavel, pending_unchanged e GET alterado por outro
+caminho (ex. reciclagem). Contagens se sobrepoem; nao somar como categorias.
+[FIFO-DELIVERY-WAIT] totais de espera por categoria na janela; sobrepoem
+FRAME-IDLE/TL, nao somar ao custo do frame. probe_ms explicita custo observado
+das sondas; snapshots nao registram instante exato de publicacao de comandos.
+
+API cellGcm_fifo_probe_snapshot usa TryAcquireSRWLockShared, sem bloquear
+atras de reciclagem. Nao escreve memoria guest, nao publica referencias,
+nao executa comandos. Snapshots sao observacionais, nao atomicidade entre
+produtor guest e todas as palavras. Nao confundir PUT pendente com trabalho
+executavel, nem um DMA em memoria visivel com comandos publicados.
+
+Esta rodada nao muda Sleep/event timeout, sincronizacao SPU, vblank,
+interpolacao, shaders ou ordem de apresentacao. Perfil desligado em jogo
+normal; executar-code-veronica-jogar.cmd limpa CV_FIFO_PROFILE. Modo nativo
+30 nao habilita sonda mesmo que a variavel seja herdada. Pode diagnosticar
+a referencia CV_FIFO_WAKE=0 sem trocar o instrumento.
+
+Validacao: teste de classificacao com formato real do walker (vazia,
+unmapped,self-jump vs jump normal, semaphore inc/NI, subcanal diferente,
+count zero, RET, patch e snapshots invalidos); testes existentes de wake,
+coalescencia, timeout e fallback passaram. Build JP e target de testes
+compilados com sucesso; binarios US/EU mantidos em v37 (SHA256 conferidos).
+Nao ha ganho de FPS alegado: proximo passo depende destas contagens.
+
+# v38 — acordar FIFO por evento existente, teste JP
+
+Nova referencia sala caixas/escada scene80071001,1080p,v37:5janelas1297presents,
+51.63FPS/19.37ms;producerwall19.31ms,CPU11.50ms,renderwall11.60ms,
+pose4.93(history2.32),build4.75,GPUlistas3.72ms. Timeline~7.2msfc-sleep e
+apenas~0.1msfc-sleep-behind. Espera comeca normalmente fila vazia;nao assumir
+7.2ms recuperaveis,pois trabalhoPPU/SPU ainda pode nao estar pronto.
+
+frame_clock usava Sleep1apesar de cellGcm_fifo_kick_wait ja existir noSDK
+(usado no boot_main). Pollreader de referencias sinaliza evento auto-reset
+quando fila dereferencias seca,com rate maximo existente~5000/s. V38 apenas
+conecta esse evento ao idle noCodeVeronica60+interpolacao;30permaneceSleep1.
+CV_FIFO_WAKE=0 restaura Sleep1. Semsinal,timeout1ms;semhandle/WAIT_FAILED,
+Sleep1fallback. Nao mexeremclock,vblank,deadline,labels,refpublish,ordemFIFO,
+catchup,pump,pause,prioridade ouworkbusywait. Nao e aviso de TODOput/SPU:
+apenas caminho de pollreferencia existente. Sinais coalescem(auto-reset).
+
+cellGcm_fifo_kick_wait_result retorna status,wrappervoidanterior preservado.
+Helper rsx_fifo_idle.h usa shim multiplataforma existente. Perfilprodutor
+inclui FRAME-IDLE agregadocada5s com sinais/timeouts/fallback/duracao;sem
+perfil nao coletaQPCextra. Medida sobrepoetimeline,nao somar. Pode ter mais
+passagens/consumoCPU poracordarantes:medir trabalho,SPU eframetime no jogo;
+nao prometerganho so por trocarSleep. Originalrefpoll/200us naoalterado.
+
+NovoCMD60fps-espera-referencia chama mesmo perfilcomCV_FIFO_WAKE=0.
+Teste realAPI:policy30/60,pre-signal/coalescing,produtor20ms acordaespera
+2s,timeout ehandleNULL. WAIT_FAILEDinjetado(testehandlesinvalidados levanta
+STATUS_INVALID_HANDLE noambiente,nao simular comoensaioperformance).
+Sem jogo/dados,testecodigohelperreal. Proximopasso medir mesmacamera1080
+30s/F12/5s,somentebinarioJP atualizadoparaprimeiroteste. EU/USv37preservados.
+Semcommit/push novo nesta etapa.
+
+Validacaofinal:JPbuildsaida0,fps60-v38-jp-build.log. TesteFIFOcompilado
+passou comAPIreal e falhainjetada. DiferenciaisEU/UShashcontra v37iguais;
+naocompilaroutrasregioes aindaparaAB. gitdiffcheckpassou;semcommit/push.
+Primeiratentativadebuild falhoupelo includepathdoSDK,corrigidohelperpara
+caminhorelativodo shim;rebuildsemerror. Nenhum ensaiodeFPSreal ainda.
+
+---
+
 # v37 — Recomp Settings e modo normal30/60,JP/EU/US
 
 Escopo autorizado mudou:usuario quer pacote atual e correcao tambemUS/EU.

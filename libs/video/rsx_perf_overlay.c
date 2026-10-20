@@ -8,6 +8,7 @@
  * tens of milliseconds.
  */
 #include "rsx_perf_overlay.h"
+#include "rsx_fsr31.h"
 #include <windows.h>
 #include <psapi.h>
 #include <pdh.h>
@@ -42,10 +43,16 @@ static unsigned overlay_items(void)
 /* ---- the numbers -------------------------------------------------------- */
 static LARGE_INTEGER s_qpf, s_win_start;
 static unsigned s_win_frames;
+static unsigned s_present_start;
+static int s_present_valid;
+
 
 void perf_overlay_frame(void)
 {
-    if (!s_qpf.QuadPart) { QueryPerformanceFrequency(&s_qpf); QueryPerformanceCounter(&s_win_start); }
+    if (!s_qpf.QuadPart) {
+        QueryPerformanceFrequency(&s_qpf); QueryPerformanceCounter(&s_win_start);
+        s_present_valid = rsx_fsr31_present_count(&s_present_start) == 1;
+    }
     s_win_frames++;
 }
 
@@ -542,9 +549,18 @@ const rsx_ui_quad* perf_overlay_quads(uint32_t w, uint32_t h, uint32_t* count)
         if (items != last_items || corner != last_corner || column != last_column || w != last_w || h != last_h || now - last_build >= 500) {
             LARGE_INTEGER t; QueryPerformanceCounter(&t);
             const double secs = (double)(t.QuadPart - s_win_start.QuadPart) / (double)s_qpf.QuadPart;
-            static double fps, ms;
+            static double fps, ms, total_fps;
+            static int total_valid;
+            unsigned presents = 0;
+            const int fsr = rsx_fsr31_present_count(&presents);
             if (s_win_frames && secs > 0.2) {
                 fps = s_win_frames / secs; ms = secs * 1000.0 / s_win_frames;
+                const unsigned delta = presents - s_present_start;
+                // Discard a discontinuity (e.g. a DXGI counter reset). The
+                // next window starts from the new baseline; never fake 2x.
+                total_valid = fsr == 1 && s_present_valid && delta <= s_win_frames * 4ull + 8;
+                if (total_valid) total_fps = delta / secs;
+                s_present_start = presents; s_present_valid = fsr == 1;
                 s_win_frames = 0; s_win_start = t;
             }
             static int cpu = -1;
@@ -552,8 +568,12 @@ const rsx_ui_quad* perf_overlay_quads(uint32_t w, uint32_t h, uint32_t* count)
             if (c >= 0) cpu = c;
             Seg segs[6]; int n = 0;
             memset(segs, 0, sizeof segs);
-            /* FPS carries the frame time after it, in grey: "FPS 30 33.3 ms" */
-            if (items & OV_FPS) { wcscpy(segs[n].label, L"FPS"); swprintf(segs[n].value, 24, L"%.0f", fps);
+            /* Left: real renders. Right: measured real+generated Presents. Frame
+             * time remains the real render interval, never the generated one. */
+            if (items & OV_FPS) { wcscpy(segs[n].label, L"FPS");
+                                  if (fsr == 1 && total_valid) swprintf(segs[n].value, 24, L"%.0f / %.0f", fps, total_fps);
+                                  else if (fsr) swprintf(segs[n].value, 24, L"%.0f / --", fps);
+                                  else swprintf(segs[n].value, 24, L"%.0f", fps);
                                   swprintf(segs[n].extra, 24, L"%.1f ms", ms); n++; }
             if (items & OV_CPU) { wcscpy(segs[n].label, L"CPU"); if (cpu >= 0) swprintf(segs[n].value, 24, L"%d%%", cpu); else wcscpy(segs[n].value, L"-"); n++; }
             if (items & OV_GPU) { const LONG g = s_gpu_pct; wcscpy(segs[n].label, L"GPU");

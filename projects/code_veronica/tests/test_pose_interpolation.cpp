@@ -249,16 +249,38 @@ static void shared_animation_edges() {
     assert(a.h.seam_conflicts==1&&!memcmp(output+1*3,output+3*3,3*sizeof(float)));
     assert(near(output[1*3],a.v[1].xyz[0]));
     // A protected duplicate remains original everywhere, including its seam.
-    memcpy(output,baseline,sizeof output);states[3]=2;
+    memcpy(output,baseline,sizeof output);for(auto& state:states)state=1;states[3]=2;
     assert(rsx_pose_weld(&a.h,&a.f,output,states));
     assert(states[1]==2&&states[3]==2&&!memcmp(output+1*3,output+3*3,3*sizeof(float)));
     // Nearby points are NOT welded; neither are the same points in a different camera.
-    states[1]=states[3]=1;a.v[3].xyz[0]+=.0001f;
+    for(auto& state:states)state=1;a.v[3].xyz[0]+=.0001f;
     memcpy(output,baseline,sizeof output);assert(rsx_pose_weld(&a.h,&a.f,output,states));
     assert(!near(output[1*3],output[3*3]));a.v[3].xyz[0]-=.0001f;
     a.matrices[32+28]=30;rsx_pose_prepare(&a.h,&a.f,.04);assert(rsx_pose_cohere(&a.h,&a.f));
-    memcpy(output,baseline,sizeof output);assert(rsx_pose_weld(&a.h,&a.f,output,states));
+    for(auto& state:states)state=1;memcpy(output,baseline,sizeof output);assert(rsx_pose_weld(&a.h,&a.f,output,states));
     assert(!near(output[1*3],output[3*3]));
+}
+static void connected_seam_fallback_preserves_triangles() {
+    for(bool reverse:{false,true})for(bool alias:{false,true}) {
+        Fixture a;a.f.nd=3;a.f.nv=9;
+        a.d[0]={1,0,3,0,0};a.d[1]={2,3,3,0,0};a.d[2]={3,6,3,0,0};
+        if(reverse){auto d=a.d[0];a.d[0]=a.d[2];a.d[2]=d;}
+        const float xyz[9][3]={{0,0,2},{1,0,2},{0,1,2},{1,0,2},{1,1,2},{0,1,2},
+                              {10,0,2},{11,0,2},{10,1,2}};
+        for(unsigned v=0;v<9;v++)memcpy(a.v[v].xyz,xyz[v],12);
+        rsx_pose_prepare(&a.h,&a.f,0);for(unsigned v=0;v<9;v++)a.v[v].xyz[0]+=1;
+        assert(rsx_pose_prepare(&a.h,&a.f,1./30));assert(rsx_pose_cohere(&a.h,&a.f));
+        float out[27];uint32_t states[9];uint64_t recipes[9];
+        for(unsigned v=0;v<9;v++){memcpy(out+v*3,a.v[v].xyz,12);out[v*3]-=.5f;states[v]=1;recipes[v]=UINT64_MAX;}
+        if(alias)states[3]=2;else out[3*3]-=.25f;
+        assert(rsx_pose_weld_recipe(&a.h,&a.f,out,states,recipes));
+        assert(a.h.seam_components==1&&a.h.seam_veto_vertices>0);
+        // A conflicting point must not leave its triangle half interpolated.
+        for(unsigned v=0;v<6;v++){assert(states[v]==2);assert(!memcmp(out+v*3,a.v[v].xyz,12));assert(recipes[v]==UINT64_MAX);}
+        // A disconnected mesh keeps its exact midpoint and native state intact.
+        for(unsigned v=6;v<9;v++){assert(states[v]==1);assert(near(out[v*3],a.v[v].xyz[0]-.5f));}
+        for(unsigned v=0;v<9;v++)assert(near(a.v[v].xyz[0],xyz[v][0]+1));
+    }
 }
 static void shared_upload_across_cameras(bool reverse) {
     // One uploaded triangle is reused in two views (for example a shadow).
@@ -719,7 +741,7 @@ int main() {
     assert(!rsx_pose_shader_inputs_known("VSOutput main(VSInput input) { return rsx_vtex0.SampleLevel(s,uv,0); }"));
     cadence_and_relocation();partial_lists_and_independent_tracks();nearest_instances_and_ambiguity();
     discontinuities_and_invalid_input();aliases_and_budgets();captured_camera_layout();coherent_multipass();shared_animation_edges();
-    shared_upload_across_cameras(false);shared_upload_across_cameras(true);weld_limits_leave_proposals_untouched();lighter_projection_matches_current_light();animated_normals_are_not_identity();
+    connected_seam_fallback_preserves_triangles();shared_upload_across_cameras(false);shared_upload_across_cameras(true);weld_limits_leave_proposals_untouched();lighter_projection_matches_current_light();animated_normals_are_not_identity();
     projection_axis_discontinuities();malformed_ranges_and_numeric_limits();bounded_motion_soak();workload();
-    std::puts("PASS pose v20: conservative best-score block rejection; once-per-upload vertex validation and invalidation; GPU recipe provenance across seam propagation and conflicts; validated camera reuse, canonical hash reuse, numerical vector equality; exact position/matrix-pair memo, collision verification, epoch invalidation and prepared samples; bounded search, exhaustive jump checks, lighting policy, shared-view seams, 60 Hz cadence and 30 Hz speed");
+    std::puts("PASS pose v21: connected seam/alias fallback preserves whole triangles and disconnected interpolation; conservative best-score block rejection; once-per-upload vertex validation and invalidation; GPU recipe provenance across seam propagation and conflicts; validated camera reuse, canonical hash reuse, numerical vector equality; exact position/matrix-pair memo, collision verification, epoch invalidation and prepared samples; bounded search, exhaustive jump checks, lighting policy, shared-view seams, 60 Hz cadence and 30 Hz speed");
 }
