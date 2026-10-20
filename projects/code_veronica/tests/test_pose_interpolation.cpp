@@ -282,6 +282,57 @@ static void connected_seam_fallback_preserves_triangles() {
         for(unsigned v=0;v<9;v++)assert(near(a.v[v].xyz[0],xyz[v][0]+1));
     }
 }
+static void enclosed_face_parts_follow_fallback() {
+    for(bool reverse:{false,true})for(bool animated_container:{false,true}) {
+        RsxPoseHistory h{};assert(rsx_pose_init(&h,64,8));
+        RsxPoseVertex vertices[33]{};float cameras[64]{};camera(cameras);camera(cameras+32);cameras[60]=10;
+        RsxPoseDraw draws[4]={{1,0,24,0,0},{2,24,3,0,0},{3,27,3,0,0},{4,30,3,1,0}};
+        for(unsigned v=0;v<24;v++)for(unsigned a=0;a<3;a++)vertices[v].xyz[a]=((v>>a)&1)?2.f:-2.f;
+        for(unsigned k=0;k<3;k++){
+            vertices[24+k].xyz[0]=float(k)*.1f;vertices[24+k].xyz[1]=float(k%2)*.1f;
+            vertices[27+k]=vertices[24+k];vertices[27+k].xyz[0]=2.1f+float(k)*.1f;
+            vertices[30+k]=vertices[24+k];
+        }
+        for(auto& v:vertices){v.stamp=1;v.uv=1;}
+        if(reverse){auto tmp=draws[0];draws[0]=draws[3];draws[3]=tmp;}
+        RsxPoseFrame f{vertices,cameras,draws,33,4,1,1};rsx_pose_prepare(&h,&f,0);
+        for(unsigned v=0;v<33;v++)if(v>=24||animated_container)vertices[v].xyz[0]+=1;
+        assert(rsx_pose_prepare(&h,&f,1./30));assert(rsx_pose_cohere(&h,&f));
+        float out[99];uint32_t states[33];uint64_t recipes[33];
+        for(unsigned v=0;v<33;v++){memcpy(out+v*3,vertices[v].xyz,12);out[v*3]-=.5f;states[v]=1;recipes[v]=0;}
+        states[0]=2;assert(rsx_pose_weld_recipe(&h,&f,out,states,recipes));
+        for(unsigned v=0;v<24;v++)assert(states[v]==2);
+        for(unsigned v=24;v<27;v++){
+            assert(states[v]==(animated_container?2u:1u));
+            assert(near(out[v*3],vertices[v].xyz[0]-(animated_container?0.f:.5f)));
+            if(animated_container)assert(recipes[v]==UINT64_MAX);
+        }
+        // Outside object and coincident geometry in another camera stay smooth.
+        for(unsigned v=27;v<33;v++)assert(states[v]==1&&near(out[v*3],vertices[v].xyz[0]-.5f));
+        rsx_pose_destroy(&h);
+    }
+    puts("PASS enclosed face fallback: detached parts, outside geometry, other cameras, static containers, order and VF recipe veto");
+}
+static void overlapping_containers_are_ambiguous() {
+    RsxPoseHistory h{};assert(rsx_pose_init(&h,64,8));
+    RsxPoseVertex vertices[51]{};float matrices[32];camera(matrices);
+    RsxPoseDraw draws[3]={{1,0,24,0,0},{2,24,24,0,0},{3,48,3,0,0}};
+    for(unsigned v=0;v<24;v++)for(unsigned a=0;a<3;a++){
+        vertices[v].xyz[a]=((v>>a)&1)?2.f:-2.f;
+        vertices[v+24].xyz[a]=vertices[v].xyz[a]+(a==0?1.f:0.f);
+    }
+    for(unsigned k=0;k<3;k++){vertices[48+k].xyz[0]=float(k)*.1f;vertices[48+k].xyz[1]=float(k%2)*.1f;}
+    for(auto& v:vertices){v.stamp=1;v.uv=1;}
+    RsxPoseFrame f{vertices,matrices,draws,51,3,1,1};rsx_pose_prepare(&h,&f,0);
+    for(auto& v:vertices)v.xyz[0]+=1;
+    assert(rsx_pose_prepare(&h,&f,1./30));assert(rsx_pose_cohere(&h,&f));
+    float out[153];uint32_t states[51];
+    for(unsigned v=0;v<51;v++){memcpy(out+v*3,vertices[v].xyz,12);out[v*3]-=.5f;states[v]=1;}
+    states[0]=2;assert(rsx_pose_weld(&h,&f,out,states));
+    for(unsigned v=0;v<24;v++)assert(states[v]==2);
+    for(unsigned v=24;v<51;v++)assert(states[v]==1&&near(out[v*3],vertices[v].xyz[0]-.5f));
+    rsx_pose_destroy(&h);puts("PASS overlapping animated containers: ambiguous detail never links independent bodies");
+}
 static void shared_upload_across_cameras(bool reverse) {
     // One uploaded triangle is reused in two views (for example a shadow).
     // Adjacent patches have separate uploads in each view and lost history.
@@ -721,7 +772,131 @@ static void capped_bucket_precheck() {
     }
     puts("PASS capped buckets: boundary128, colliding keys, exact fallback, disable switch and scene invalidation");
 }
+static void material_identity_prevents_false_motion() {
+    const uint64_t base=0x1d07b11d6462a11bull;
+    const uint32_t wheel_fp=0xbff5fa66u,other_fp=0x7835a34bu;
+    assert(rsx_pose_material_key(base,wheel_fp)!=rsx_pose_material_key(base,other_fp));
+    // Same VP/UV/topology, neighboring material; the true old draw is absent.
+    // Without fragment-program identity, a static reappearance invents motion.
+    for(bool protected_key:{false,true}){
+        Fixture f;f.d[0].key=protected_key?rsx_pose_material_key(base,other_fp):base;
+        for(unsigned k=0;k<3;k++)f.v[k].xyz[0]=float(k)*.1f+.428f;
+        rsx_pose_prepare(&f.h,&f.f,0);
+        f.d[0].key=protected_key?rsx_pose_material_key(base,wheel_fp):base;
+        for(unsigned k=0;k<3;k++)f.v[k].xyz[0]-=.428f;
+        int apply=rsx_pose_prepare(&f.h,&f.f,1./30);
+        if(protected_key)assert(!apply&&f.h.matched==0&&!rsx_pose_draw_ready(&f.h,0));
+        else assert(apply&&f.h.matched==1&&near(f.x(),.214f));
+    }
+    // Genuine animation with the same program keeps its midpoint/cadence.
+    Fixture animated;animated.d[0].key=rsx_pose_material_key(base,wheel_fp);
+    rsx_pose_prepare(&animated.h,&animated.f,0);animated.move(0,1);
+    assert(rsx_pose_prepare(&animated.h,&animated.f,1./30)&&near(animated.x(),.5f));
+    rsx_pose_prepare(&animated.h,&animated.f,1./20);assert(near(animated.x(),1));
+    // Exact geometry coherence still crosses materials in depth/light copies.
+    Fixture passes;passes.f.nd=2;passes.d[0].key=rsx_pose_material_key(base,wheel_fp);
+    passes.d[1]={rsx_pose_material_key(base,other_fp),4,3,0,0};
+    for(unsigned k=0;k<3;k++)passes.v[k+4]=passes.v[k];
+    rsx_pose_prepare(&passes.h,&passes.f,0);passes.move(0,1);passes.move(4,1);
+    assert(rsx_pose_prepare(&passes.h,&passes.f,1./30));assert(rsx_pose_cohere(&passes.h,&passes.f));
+    assert(passes.h.groups[0]==passes.h.groups[1]);
+    float a[3],b[3];rsx_pose_vertex(&passes.h,passes.h.vertex_sources[0],0,a);rsx_pose_vertex(&passes.h,passes.h.vertex_sources[1],0,b);
+    assert(!memcmp(a,b,sizeof a)&&near(a[0],.5f));
+    puts("PASS material identity: captured wheel collision rejected; missing old draw, native cadence and cross-material exact coherence");
+}
+static void source_vertices_disambiguate_repeated_uvs() {
+    float attributes[16][4]{};attributes[0][0]=1;attributes[0][1]=2;attributes[0][2]=3;
+    attributes[8][0]=.25f;attributes[15][1]=.75f;
+    RsxPoseVertex a,b,c;rsx_pose_record_source_vertex(&a,attributes,1,0x12345678);
+    attributes[14][0]=.9f;attributes[0][0]+=1;
+    rsx_pose_record_source_vertex(&b,attributes,2,0x12345678);
+    assert(a.uv==b.uv&&a.xyz[0]!=b.xyz[0]&&b.stamp==2);
+    rsx_pose_record_source_vertex(&c,attributes,2,0x12345679);assert(b.uv!=c.uv);
+    // Same material/UV/shape, but different source triangles. They must not
+    // become one temporal candidate when the old matching triangle is absent.
+    Fixture f;f.d[0].key=a.uv;rsx_pose_prepare(&f.h,&f.f,0);
+    f.d[0].key=c.uv;f.move(0,1);assert(!rsx_pose_prepare(&f.h,&f.f,1./30)&&f.h.matched==0);
+    // The quad expansion repeats source 2/0 in its two output triangles.
+    const unsigned order[6]={0,1,2,0,2,3};RsxPoseVertex expanded[6];
+    for(unsigned i=0;i<6;i++)rsx_pose_record_source_vertex(expanded+i,attributes,3,100+order[i]);
+    assert(expanded[0].uv==expanded[3].uv&&expanded[2].uv==expanded[4].uv);
+    assert(expanded[0].uv!=expanded[1].uv&&expanded[1].uv!=expanded[2].uv);
+    puts("PASS source identity: repeated UVs separated, full 32-bit indices, animated normals/positions excluded, quad winding aliases preserved");
+}
+static void stationary_surfaces_reject_shared_point_motion() {
+    for(bool new_surface:{false,true}){
+        Fixture a;a.f.nd=3;a.f.nv=9;
+        a.d[0]={1,0,3,0,0};a.d[1]={2,3,3,0,0};a.d[2]={3,6,3,0,0};
+        const float points[9][3]={{0,0,2},{1,0,2},{0,1,2},{1,0,2},{1,1,2},{0,1,2},{10,0,2},{11,0,2},{10,1,2}};
+        for(unsigned v=0;v<9;v++){memcpy(a.v[v].xyz,points[v],12);if(v>=3)a.v[v].xyz[0]+=.5f;}
+        if(new_surface)for(unsigned v=0;v<3;v++)a.v[v].xyz[0]+=4;
+        rsx_pose_prepare(&a.h,&a.f,0);
+        for(unsigned v=3;v<9;v++)a.v[v].xyz[0]-=.5f;
+        if(new_surface){a.d[0].key=99;for(unsigned v=0;v<3;v++)a.v[v].xyz[0]-=4;}
+        assert(rsx_pose_prepare(&a.h,&a.f,1./30));assert(a.h.stationary_draws[0]==!new_surface);
+        assert(!a.h.stationary_draws[1]&&!a.h.stationary_draws[2]);assert(rsx_pose_cohere(&a.h,&a.f));
+        float out[27]{};uint32_t states[9]{},cameras[8]{};
+        for(unsigned d=0;d<3;d++)for(unsigned k=0;k<3;k++){
+            unsigned v=a.d[d].first+k;float value[3];int source=a.h.vertex_sources[d];
+            if(source>=0)rsx_pose_vertex(&a.h,(unsigned)source,k,value);else memcpy(value,a.v[v].xyz,12);
+            rsx_pose_merge(out+v*3,states+v,value,3);
+        }
+        rsx_pose_protect_aliases(&a.h,&a.f,states,cameras);assert(rsx_pose_weld(&a.h,&a.f,out,states));
+        if(!new_surface)for(unsigned v=0;v<6;v++)assert(states[v]==2&&!memcmp(out+v*3,a.v[v].xyz,12));
+        else assert(states[3]==1&&near(out[9],1.25f));
+        for(unsigned v=6;v<9;v++)assert(states[v]==1&&near(out[v*3],a.v[v].xyz[0]+.25f));
+    }
+    for(bool other_camera:{false,true}){
+        Fixture a;float original[9];for(unsigned k=0;k<3;k++)memcpy(original+k*3,a.v[k].xyz,12);
+        rsx_pose_prepare(&a.h,&a.f,0);rsx_pose_prepare(&a.h,&a.f,1./30);assert(a.h.stationary_draws[0]);
+        a.d[0].key=2;a.move(0,5);rsx_pose_prepare(&a.h,&a.f,2./30);assert(!a.h.stationary_draws[0]);
+        for(unsigned k=0;k<3;k++)memcpy(a.v[k].xyz,original+k*3,12);a.d[0].key=3;
+        if(other_camera)a.matrices[28]+=1;
+        rsx_pose_prepare(&a.h,&a.f,3./30);assert(a.h.stationary_draws[0]==!other_camera);
+        a.f.scene=2;rsx_pose_prepare(&a.h,&a.f,4./30);assert(!a.h.stationary_draws[0]);
+    }
+    puts("PASS stationary anchors: contradictory seam motion blocked; independent animation kept; unmatched draws not pinned; two-frame exact reappearance, camera and scene invalidation");
+}
+static void stationary_world_shadows_cross_only_known_spaces() {
+    assert(rsx_pose_program_flags(0x7ea4c4e7,0x6a970abf)==3);
+    assert(rsx_pose_program_flags(0x7ea4c4e7,123)==1);
+    assert(rsx_pose_program_flags(123,0x6a970abf)==2);
+    assert(rsx_pose_program_flags(123,123)==0);
+    for(bool rotated_view:{false,true})for(unsigned source_flags:{0u,2u,3u}) {
+        Fixture a;a.f.nd=3;a.f.nv=12;
+        a.d[0]={1,0,6,0,source_flags};a.d[1]={2,6,3,1,3};a.d[2]={3,9,3,2,0};
+        const float base[6][3]={{0,0,2},{1,0,2},{0,1,2},{1,0,2},{1,1,2},{0,1,2}};
+        for(unsigned v=0;v<6;v++)memcpy(a.v[v].xyz,base[v],12);
+        for(unsigned v=6;v<12;v++){memcpy(a.v[v].xyz,base[v%3],12);a.v[v].xyz[0]+=.5f;}
+        a.matrices[32+28]=2;a.matrices[64+28]=4;
+        if(rotated_view){a.matrices[32]=0;a.matrices[34]=-1;a.matrices[40]=1;a.matrices[42]=0;}
+        rsx_pose_prepare(&a.h,&a.f,0);for(unsigned v=6;v<12;v++)a.v[v].xyz[0]-=.5f;
+        assert(rsx_pose_prepare(&a.h,&a.f,1./30));assert(a.h.stationary_draws[0]&&!a.h.stationary_draws[1]);
+        assert(rsx_pose_cohere(&a.h,&a.f));float out[36]{};uint32_t states[12]{},cameras[8]{};
+        for(unsigned d=0;d<3;d++)for(unsigned k=0;k<a.d[d].count;k++){
+            unsigned v=a.d[d].first+k;float val[3];int source=a.h.vertex_sources[d];
+            if(source>=0)rsx_pose_vertex(&a.h,(unsigned)source,k,val);else memcpy(val,a.v[v].xyz,12);
+            rsx_pose_merge(out+v*3,states+v,val,3);
+        }
+        rsx_pose_protect_aliases(&a.h,&a.f,states,cameras);assert(rsx_pose_weld(&a.h,&a.f,out,states));
+        for(unsigned v=0;v<6;v++)assert(states[v]==1&&!memcmp(out+v*3,a.v[v].xyz,12));
+        for(unsigned v=6;v<9;v++){
+            if(source_flags&2)assert(states[v]==2&&!memcmp(out+v*3,a.v[v].xyz,12));
+            else assert(states[v]==1&&near(out[v*3],a.v[v].xyz[0]+.25f));
+        }
+        // Unknown/local-space programs do not inherit another projection's stationary points.
+        for(unsigned v=9;v<12;v++)assert(states[v]==1&&near(out[v*3],a.v[v].xyz[0]+.25f));
+    }
+    float a[3]={1,2,3},b[3]={1+5e-6f,2,3};assert(rsx_pose_stationary_endpoints(a,b,3));b[0]=1+.001f;assert(!rsx_pose_stationary_endpoints(a,b,3));
+    puts("PASS known world shadows: different projections/views and draw splits share exact stationary points; unknown programs excluded; numerical-noise bound");
+}
 int main() {
+    stationary_world_shadows_cross_only_known_spaces();
+    stationary_surfaces_reject_shared_point_motion();
+    source_vertices_disambiguate_repeated_uvs();
+    material_identity_prevents_false_motion();
+    overlapping_containers_are_ambiguous();
+    enclosed_face_parts_follow_fallback();
     capped_bucket_precheck();
     block_score_lower_bounds();
     reused_vertex_validation();
@@ -743,5 +918,5 @@ int main() {
     discontinuities_and_invalid_input();aliases_and_budgets();captured_camera_layout();coherent_multipass();shared_animation_edges();
     connected_seam_fallback_preserves_triangles();shared_upload_across_cameras(false);shared_upload_across_cameras(true);weld_limits_leave_proposals_untouched();lighter_projection_matches_current_light();animated_normals_are_not_identity();
     projection_axis_discontinuities();malformed_ranges_and_numeric_limits();bounded_motion_soak();workload();
-    std::puts("PASS pose v21: connected seam/alias fallback preserves whole triangles and disconnected interpolation; conservative best-score block rejection; once-per-upload vertex validation and invalidation; GPU recipe provenance across seam propagation and conflicts; validated camera reuse, canonical hash reuse, numerical vector equality; exact position/matrix-pair memo, collision verification, epoch invalidation and prepared samples; bounded search, exhaustive jump checks, lighting policy, shared-view seams, 60 Hz cadence and 30 Hz speed");
+    std::puts("PASS pose v25: stationary point constraints; source-vertex identity; frozen fragment-program temporal identity; enclosed animated detail fallback; connected seam/alias fallback preserves whole triangles and disconnected interpolation; conservative best-score block rejection; once-per-upload vertex validation and invalidation; GPU recipe provenance across seam propagation and conflicts; validated camera reuse, canonical hash reuse, numerical vector equality; exact position/matrix-pair memo, collision verification, epoch invalidation and prepared samples; bounded search, exhaustive jump checks, lighting policy, shared-view seams, 60 Hz cadence and 30 Hz speed");
 }

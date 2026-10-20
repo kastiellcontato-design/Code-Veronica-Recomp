@@ -1139,10 +1139,15 @@ static void pose_interpolate_batch(void) {
         int recorded=1;
         for(u32 k=0;k<n;k++){const RsxPoseVertex* v=vertices+first+k;if(v->stamp!=s_rb.pose_stamp){recorded=0;break;}key=pose_mix(key,v->uv);}
         if(!recorded)continue;
+        const u32 fragment_code=fp_snap_code(d);
+        /* Missing frozen identity cannot establish a safe temporal material
+         * match. Existing unaccepted-upload protection keeps these original. */
+        if(!fragment_code)continue;
+        key=rsx_pose_material_key(key,fragment_code);
         RsxPoseDraw* out=s_pose_draws+nd++;out->key=key;out->first=first;out->count=n;out->cb=d->vcb_slot;
         /* Read the cached code hash from THIS frozen batch, not the guest
          * address (programs rotate), and never the recording thread's arena. */
-        out->flags=rsx_pose_fragment_flags(fp_snap_code(d));
+        out->flags=rsx_pose_program_flags(fragment_code,vs->hash);
         if(out->flags&RSX_POSE_CURRENT_LIGHT_CAMERA)s_pose_shadow_draws++;
         s_pose_accepted[i]=1;
     }
@@ -1255,7 +1260,7 @@ static void pose_interpolate_batch(void) {
     static u32 reports=0,presents=0,subframes=0;static double reported_at=0;
     presents++;if(moved||changed_cameras)subframes++;
     if(reports++<8||now-reported_at>=5.0) {
-        fprintf(stderr,"[POSE] v21 scene=%08X eligible=%u matched=%u smooth=%u apply=%d vertices=%u cameras=%u conflicts=%u ambiguous=%u capped=%u coherent=%u coherence_conflicts=%u seams=%u seam_conflicts=%u seam_components=%u seam_veto_vertices=%u shadow_draws=%u alpha=%.3f reason=%d subframes=%u/%u\n",
+        fprintf(stderr,"[POSE] v25 scene=%08X eligible=%u matched=%u smooth=%u apply=%d vertices=%u cameras=%u conflicts=%u ambiguous=%u capped=%u coherent=%u coherence_conflicts=%u seams=%u seam_conflicts=%u seam_components=%u seam_veto_vertices=%u shadow_draws=%u alpha=%.3f reason=%d subframes=%u/%u\n",
             frame.scene,nd,s_pose_history.matched,s_pose_history.moving,apply,moved,changed_cameras,conflicts,s_pose_history.ambiguous,s_pose_history.capped,s_pose_history.coherent,s_pose_history.coherence_conflicts,s_pose_history.seams,s_pose_history.seam_conflicts,s_pose_history.seam_components,s_pose_history.seam_veto_vertices,s_pose_shadow_draws,(double)s_pose_history.alpha,s_pose_history.reason,subframes,presents);
         reported_at=now;presents=subframes=0;
     }
@@ -3053,15 +3058,31 @@ static void motion_capture_record(ID3D12Resource* image,u32 w,u32 h)
     if(!s_rb.present||!mc_wants())return;
     const RsxPoseHistory* hist=&s_pose_history;const RsxPoseSnapshot* cur=&hist->cur;
     const u32 nv=s_pose_on?s_rb.pose_nv:0,nd=s_pose_on&&hist->have_cur&&hist->reason!=RSX_POSE_INVALID&&cur->scene==s_rb.pose_scene?cur->nd:0;
-    const u32 packed=nd?cur->nv:0,ops=s_rb.count<MAX_DRAWS?s_rb.count:MAX_DRAWS;const int compute=s_pose_on&&s_pose_compute.active;
+    const u32 packed=nd?cur->nv:0,ops=s_dbg_last_draws<MAX_DRAWS?s_dbg_last_draws:MAX_DRAWS;const int compute=s_pose_on&&s_pose_compute.active;
+    /* render_frame already reset s_rb.count; s_dbg_last_draws freezes THIS
+     * completed batch's count before that reset. Otherwise every F9 silently
+     * omitted its draw/FP records. Capture full banks too: c8+ may animate
+     * local-space face parts even when their recorded xyz never change. */
+    u8 seen_cb[MAX_DRAWS]={0},seen_vs[VP_VS_CACHE]={0};
+    u32 banks=0,programs=0;size_t program_bytes=0;
+    for(u32 op=0;op<ops;op++) {
+        const D3D12DrawRecord* d=s_rb.draws+op;
+        if(!d->is_vp||d->is_clear||d->is_copy)continue;
+        if(d->vcb_slot<MAX_DRAWS&&!seen_cb[d->vcb_slot]){seen_cb[d->vcb_slot]=1;banks++;}
+        if(d->vs_idx>=0&&d->vs_idx<s_d3d.vp_vs_n&&!seen_vs[d->vs_idx]&&s_d3d.vp_vs[d->vs_idx].hlsl){
+            seen_vs[d->vs_idx]=1;programs++;program_bytes+=8+strlen(s_d3d.vp_vs[d->vs_idx].hlsl);
+        }
+    }
     size_t bytes=64+(size_t)nv*(sizeof(RsxPoseVertex)+3*sizeof(float))+
         (size_t)nd*(2*sizeof(RsxPoseDraw)+sizeof(RsxPoseTrack)+2*sizeof(int32_t)+3*32*sizeof(float))+
-        (size_t)packed*6*sizeof(float)+(size_t)ops*320;
+        (size_t)packed*6*sizeof(float)+(size_t)ops*336+16+
+        (size_t)banks*(4+RSX_MAX_VERTEX_CONSTANTS*16)+program_bytes;
     unsigned char* blob=bytes<=64u*1024*1024?(unsigned char*)malloc(bytes):NULL;
+    u32 stationary=0;for(u32 d=0;d<nd;d++)stationary+=hist->stationary_draws[d]!=0;
     u32 bad=0,jumps=0;float max_delta=0;
     if(blob){
-        u32 head[16]={0x4d435031u,1,nv,nd,packed,(u32)(compute?2:s_pose_gpu_blend?1:0),s_rb.parity,s_rb.pose_scene,s_rb.pose_stamp,s_d3d.frame_count,
-            sizeof(RsxPoseVertex),sizeof(RsxPoseDraw),sizeof(RsxPoseTrack),32,ops,320};
+        u32 head[16]={0x4d435031u,2,nv,nd,packed,(u32)(compute?2:s_pose_gpu_blend?1:0),s_rb.parity,s_rb.pose_scene,s_rb.pose_stamp,s_d3d.frame_count,
+            sizeof(RsxPoseVertex),sizeof(RsxPoseDraw),sizeof(RsxPoseTrack),32,ops,336};
         memcpy(blob,head,64);unsigned char* at=blob+64;
         const RsxPoseVertex* original=nv?s_pose_vertices+(size_t)s_rb.parity*MAX_VERTICES:NULL;
         if(nv)memcpy(at,original,(size_t)nv*sizeof(*original));at+=(size_t)nv*sizeof(RsxPoseVertex);
@@ -3080,7 +3101,11 @@ static void motion_capture_record(ID3D12Resource* image,u32 w,u32 h)
         }
         at+=(size_t)nv*3*sizeof(float);
 #define MC_APPEND(ptr,n) do{size_t count_=(n);if(count_)memcpy(at,(ptr),count_);at+=count_;}while(0)
-        MC_APPEND(cur->draws,(size_t)nd*sizeof(RsxPoseDraw));
+        for(u32 d=0;d<nd;d++){
+            RsxPoseDraw captured=cur->draws[d];
+            if(hist->stationary_draws[d])captured.flags|=RSX_POSE_CAPTURE_STATIONARY;
+            MC_APPEND(&captured,sizeof captured);
+        }
         MC_APPEND(s_pose_draws,(size_t)nd*sizeof(RsxPoseDraw));
         MC_APPEND(cur->tracks,(size_t)nd*sizeof(RsxPoseTrack));
         MC_APPEND(hist->vertex_sources,(size_t)nd*sizeof(int32_t));MC_APPEND(hist->camera_sources,(size_t)nd*sizeof(int32_t));
@@ -3098,15 +3123,27 @@ static void motion_capture_record(ID3D12Resource* image,u32 w,u32 h)
                 u32 tail[4];memcpy(tail,snap+d->fp_bytes+16,16);
                 if(tail[0]<=256){info[12]=tail[0]<16?tail[0]:16;info[13]=tail[1];memcpy(at+64,snap+d->fp_bytes+32,(size_t)info[12]*16);}
             }
-            memcpy(at,info,64);at+=320;
+            memcpy(at,info,64);
+            u32 geometry[4]={d->vb_byte_offset/256,d->vertex_count,d->topology,d->is_vp};
+            memcpy(at+320,geometry,16);at+=336;
+        }
+        u32 extra[4]={0x3256434du,banks,programs,RSX_MAX_VERTEX_CONSTANTS};
+        MC_APPEND(extra,sizeof extra);
+        for(u32 cb=0;cb<MAX_DRAWS;cb++)if(seen_cb[cb]){
+            MC_APPEND(&cb,4);
+            MC_APPEND((const u8*)s_d3d.vp_cb_mapped+((size_t)s_rb.parity*MAX_DRAWS+cb)*VP_CB_STRIDE,RSX_MAX_VERTEX_CONSTANTS*16);
+        }
+        for(int vs=0;vs<s_d3d.vp_vs_n;vs++)if(seen_vs[vs]){
+            const VPVSEntry* shader=s_d3d.vp_vs+vs;u32 program[2]={shader->hash,(u32)strlen(shader->hlsl)};
+            MC_APPEND(program,sizeof program);MC_APPEND(shader->hlsl,program[1]);
         }
 #undef MC_APPEND
         if((size_t)(at-blob)!=bytes){free(blob);blob=NULL;}
     }
     LARGE_INTEGER tick,freq;QueryPerformanceCounter(&tick);QueryPerformanceFrequency(&freq);
     char json[4096];snprintf(json,sizeof json,
-        "{\"frame\":%u,\"qpc\":%llu,\"qpc_frequency\":%llu,\"width\":%u,\"height\":%u,\"scene\":%u,\"stamp\":%u,\"draws\":%u,\"pose_enabled\":%d,\"reason\":%d,\"alpha\":%.6f,\"matched\":%u,\"moving\":%u,\"coherent\":%u,\"coherence_conflicts\":%u,\"seams\":%u,\"seam_conflicts\":%u,\"seam_components\":%u,\"seam_veto_vertices\":%u,\"shadow_draws\":%u,\"compute_mode\":%d,\"final_positions_available\":%s,\"nonfinite_components\":%u,\"displacements_over_8\":%u,\"max_displacement\":%.6f,\"pose_bytes\":%zu,\"fsr_requested\":%d,\"image\":\"real_render_before_port_overlays\"}\n",
-        s_d3d.frame_count,(unsigned long long)tick.QuadPart,(unsigned long long)freq.QuadPart,w,h,s_rb.pose_scene,s_rb.pose_stamp,s_dbg_last_draws,s_pose_on,hist->reason,hist->alpha,hist->matched,hist->moving,hist->coherent,hist->coherence_conflicts,hist->seams,hist->seam_conflicts,hist->seam_components,hist->seam_veto_vertices,s_pose_shadow_draws,compute,blob&&!compute?"true":"false",bad,jumps,max_delta,blob?bytes:0,rsx_fsr31_requested());
+        "{\"pose_schema\":2,\"stationary_draws\":%u,\"vertex_identity\":\"uv_source_index\",\"captured_ops\":%u,\"captured_vp_banks\":%u,\"captured_vp_programs\":%u,\"frame\":%u,\"qpc\":%llu,\"qpc_frequency\":%llu,\"width\":%u,\"height\":%u,\"scene\":%u,\"stamp\":%u,\"draws\":%u,\"pose_enabled\":%d,\"reason\":%d,\"alpha\":%.6f,\"matched\":%u,\"moving\":%u,\"coherent\":%u,\"coherence_conflicts\":%u,\"seams\":%u,\"seam_conflicts\":%u,\"seam_components\":%u,\"seam_veto_vertices\":%u,\"shadow_draws\":%u,\"compute_mode\":%d,\"final_positions_available\":%s,\"nonfinite_components\":%u,\"displacements_over_8\":%u,\"max_displacement\":%.6f,\"pose_bytes\":%zu,\"fsr_requested\":%d,\"image\":\"real_render_before_port_overlays\"}\n",
+        stationary,ops,banks,programs,s_d3d.frame_count,(unsigned long long)tick.QuadPart,(unsigned long long)freq.QuadPart,w,h,s_rb.pose_scene,s_rb.pose_stamp,s_dbg_last_draws,s_pose_on,hist->reason,hist->alpha,hist->matched,hist->moving,hist->coherent,hist->coherence_conflicts,hist->seams,hist->seam_conflicts,hist->seam_components,hist->seam_veto_vertices,s_pose_shadow_draws,compute,blob&&!compute?"true":"false",bad,jumps,max_delta,blob?bytes:0,rsx_fsr31_requested());
     if(!mc_record(s_d3d.device,s_d3d.cmd_list,image,w,h,json,blob,blob?bytes:0))free(blob);
 }
 
@@ -12863,12 +12900,12 @@ static void vf_flush(void)
     vf_check(plan, cur, desc);
 }
 
-static void pose_note_vertex(const VPSlot* dst,const VPSlot* src) {
+static void pose_note_vertex(const VPSlot* dst,const VPSlot* src,u32 source_index) {
     if(!s_pose_on)return;
     uintptr_t at=(uintptr_t)dst,base=(uintptr_t)s_d3d.vp_vb_mapped;
     if(at<base||at-base>=(size_t)MAX_VERTICES*2*256||(at-base)%256)return;
     RsxPoseVertex* v=s_pose_vertices+(at-base)/256;
-    rsx_pose_record_vertex(v,(const float (*)[4])src,s_pose_stamp);
+    rsx_pose_record_source_vertex(v,(const float (*)[4])src,s_pose_stamp,source_index);
 }
 static int pose_fetch_fast_on(void) {
     static int on=-1;
@@ -12886,7 +12923,7 @@ static void pose_note_raw_vertex(const rsx_state* state,VPSlot* dst,u32 vi) {
         else {rsx_fetch_attrib(state,0,vi,c[0].v);rsx_fetch_attrib(state,8,vi,c[8].v);rsx_fetch_attrib(state,15,vi,c[15].v);}
         s_vmemo_tag[h]=s_vmemo_gen;s_vmemo_key[h]=vi;
     }
-    pose_note_vertex(dst,c);
+    pose_note_vertex(dst,c,vi);
 }
 static void read_vp_vertex(const rsx_state* state, u32 vi, VPSlot* out16)
 {
@@ -12897,7 +12934,7 @@ static void read_vp_vertex(const rsx_state* state, u32 vi, VPSlot* out16)
     VPSlot* c = s_vmemo[h];
     if (!nomemo && s_vmemo_tag[h] == s_vmemo_gen && s_vmemo_key[h] == vi) {
         s_vmemo_hits++;
-        pose_note_vertex(out16,c);
+        pose_note_vertex(out16,c,vi);
         memcpy(out16, c, 16 * sizeof(VPSlot));
         return;
     }
@@ -12914,15 +12951,15 @@ static void read_vp_vertex(const rsx_state* state, u32 vi, VPSlot* out16)
       u32 n = a->size ? a->size : 4; if (n > 4) n = 4;
       rsx_vtx_pos_dbg(state, c[0].v, n); }
     s_vmemo_tag[h] = s_vmemo_gen; s_vmemo_key[h] = vi;
-    pose_note_vertex(out16,c);
+    pose_note_vertex(out16,c,vi);
     memcpy(out16, c, 16 * sizeof(VPSlot));
 }
 
 /* Place a vertex read into a local copy (quads) at its output slot. */
-static void vp_put(VPSlot* dst, const VPSlot* src, const rsx_state* state)
+static void vp_put(VPSlot* dst, const VPSlot* src, const rsx_state* state,u32 source_index)
 {
-    if (s_vf_mapped) { u32 vi; memcpy(&vi, src, 4); vf_note(state, dst, vi); return; }
-    pose_note_vertex(dst, src);
+    if (s_vf_mapped) { vf_note(state, dst, source_index); return; }
+    pose_note_vertex(dst, src,source_index);
     memcpy(dst, src, 16 * sizeof(VPSlot));
 }
 
@@ -13067,7 +13104,7 @@ static u32 upload_quads_vp(const rsx_state* state, u32 first, u32 count)
             read_vp_vertex(state, first + q*4 + k, c[k]);
         /* quad -> two triangles (perimeter winding) */
         static const int idx[6] = {0,1,2, 0,2,3};
-        for (int t = 0; t < 6; t++) { vp_put(&out[o*16], c[idx[t]], state); o++; }
+        for (int t = 0; t < 6; t++) { vp_put(&out[o*16], c[idx[t]], state,first+q*4+(u32)idx[t]); o++; }
         if (getenv("VTX_DUMP")) { static int _n=0; if (_n++ < 4) {
             FILE* f = fopen("vtx_dump.txt", _n==1 ? "w" : "a");
             if (f) { for (u32 k = 0; k < 4; k++)
@@ -13214,11 +13251,13 @@ static u32 upload_quads_vp_indexed(const rsx_state* state, u32 first, u32 count)
         + (u64)s_d3d.vp_parity * MAX_VERTICES * VP_VERT_STRIDE + s_d3d.vp_vb_offset);
     u32 o = 0;
     for (u32 q = 0; q < quads; q++) {
-        VPSlot c[4][16];
-        for (u32 k = 0; k < 4; k++)
-            read_vp_vertex(state, read_guest_index(state, first + q*4 + k), c[k]);
+        VPSlot c[4][16];u32 source_indices[4];
+        for (u32 k = 0; k < 4; k++) {
+            source_indices[k]=read_guest_index(state,first+q*4+k);
+            read_vp_vertex(state,source_indices[k],c[k]);
+        }
         static const int idx[6] = {0,1,2, 0,2,3};
-        for (int t = 0; t < 6; t++) { vp_put(&out[o*16], c[idx[t]], state); o++; }
+        for (int t = 0; t < 6; t++) { vp_put(&out[o*16], c[idx[t]], state,source_indices[idx[t]]); o++; }
         if (getenv("VTX_DUMP")) { static int _n=0; if (_n++ < 6) {
             FILE* f = fopen("vtx_dump.txt", _n==1 ? "w" : "a");
             if (f) {

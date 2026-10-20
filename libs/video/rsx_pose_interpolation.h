@@ -33,12 +33,37 @@ static inline void rsx_pose_record_vertex(RsxPoseVertex* v,const float attribute
     uint32_t hash=2166136261u;for(int i=0;i<4;i++)hash=(hash^uv[i])*16777619u;
     v->uv=hash;v->stamp=stamp;
 }
-enum { RSX_POSE_CURRENT_LIGHT_CAMERA=1u };
+/* Ordered UVs alone are not topology identity: untextured/mechanical parts
+ * often have identical coordinates but refer to different source vertices.
+ * Record the guest vertex index, never an upload slot or a rotating address.
+ * All fetch/expansion paths must pass the SAME index that fetched attribute 0.
+ * The xyz/uv/stamp capture ABI remains unchanged; uv is now a UV/source hash. */
+static inline void rsx_pose_record_source_vertex(RsxPoseVertex* v,const float attributes[16][4],uint32_t stamp,uint32_t source_index) {
+    rsx_pose_record_vertex(v,attributes,stamp);
+    v->uv=(v->uv^source_index)*16777619u;
+}
+enum { RSX_POSE_CURRENT_LIGHT_CAMERA=1u,RSX_POSE_WORLD_LIGHT_GEOMETRY=2u,RSX_POSE_CAPTURE_STATIONARY=4u };
 /* This captured program writes packed shadow moments using CURRENT FP
  * light constants. Moving just its VP projection would give the atlas a
  * different origin than its readers and the palette-skinned casters. */
 static inline uint32_t rsx_pose_fragment_flags(uint32_t code) {
     return code==0x7EA4C4E7u?RSX_POSE_CURRENT_LIGHT_CAMERA:0u;
+}
+/* Temporal identity must include the frozen fragment PROGRAM, not its guest
+ * address or animated inline constants. Different materials can share VP,
+ * UVs and target layout; matching them invents movement in static scenery.
+ * Exact geometry coherence remains independent of material identity. */
+static inline uint64_t rsx_pose_material_key(uint64_t geometry_key,uint32_t fragment_code) {
+    return (geometry_key^fragment_code)*1099511628211ull;
+}
+/* Captured world-space a0 consumers: shadow, depth and material variants.
+ * Only these verified programs may establish a cross-projection constraint.
+ * Unknown/local-space programs retain full-camera isolation. */
+static inline uint32_t rsx_pose_program_flags(uint32_t fragment,uint32_t vertex) {
+    uint32_t flags=rsx_pose_fragment_flags(fragment);
+    if(vertex==0x6a970abfu||vertex==0x8cb38bc1u||vertex==0xe985b049u||vertex==0xcaa490eau||vertex==0xf830c5dau)
+        flags|=RSX_POSE_WORLD_LIGHT_GEOMETRY;
+    return flags;
 }
 typedef struct { uint64_t key; uint32_t first,count,cb,flags; } RsxPoseDraw;
 typedef struct {
@@ -52,6 +77,7 @@ typedef struct {
     RsxPoseTrack* tracks;
     uint32_t* camera_ids; /* exact matrix equivalence, local to this snapshot */
     uint32_t* sample_ids; /* exact sampled-position equivalence; never an object identity */
+    uint8_t* stationary; /* confirmed current-position constraints, retained with snapshot */
     uint32_t nv,nd,scene;
 } RsxPoseSnapshot;
 /* Consecutive candidates in the EXISTING hash chain. Bounds contain their
@@ -81,7 +107,7 @@ typedef struct {
     RsxPoseSearchProfile* search_profile;
     uint32_t maxv,maxd,buckets;
     int32_t *heads,*next,*groups,*camera_groups,*seeds,*vertex_sources,*camera_sources;
-    uint32_t *vertex_owners,*vertex_cameras,*vertex_groups; int32_t* vertex_next; uint8_t* used;
+    uint32_t *vertex_owners,*vertex_cameras,*vertex_groups; int32_t* vertex_next; uint8_t *used,*stationary_draws,*stationary_vertices;
     RsxPoseBlock* blocks;
     int32_t *memo_heads,*memo_next,*memo_ids;
     uint64_t* memo_hashes;
@@ -116,10 +142,10 @@ static inline void rsx_pose_destroy(RsxPoseHistory* h) {
     RsxPoseSnapshot* s[2]={&h->cur,&h->prev};
     for(int i=0;i<2;i++) {
         free(s[i]->xyz);free(s[i]->old_xyz);free(s[i]->cameras);free(s[i]->old_cameras);
-        free(s[i]->draws);free(s[i]->tracks);free(s[i]->camera_ids);free(s[i]->sample_ids);
+        free(s[i]->draws);free(s[i]->tracks);free(s[i]->camera_ids);free(s[i]->sample_ids);free(s[i]->stationary);
     }
     free(h->heads);free(h->next);free(h->groups);free(h->camera_groups);free(h->vertex_owners);free(h->vertex_cameras);free(h->vertex_groups);free(h->vertex_next);free(h->seeds);
-    free(h->vertex_sources);free(h->camera_sources);free(h->used);free(h->blocks);
+    free(h->vertex_sources);free(h->camera_sources);free(h->used);free(h->stationary_draws);free(h->stationary_vertices);free(h->blocks);
     free(h->memo_heads);free(h->memo_next);free(h->memo_ids);free(h->memo_hashes);free(h->camera_memo);
     free(h->sample_heads);free(h->sample_next);free(h->sample_hashes);free(h->position_memo);
     free(h->search_samples);free(h->search_epochs);free(h->bucket_capped);free(h->camera_checked);free(h->coherence_hashes);free(h->weld_hashes);
@@ -139,12 +165,14 @@ static inline int rsx_pose_init(RsxPoseHistory* h,uint32_t maxv,uint32_t maxd) {
         s[i]->tracks=(RsxPoseTrack*)calloc(maxd,sizeof(RsxPoseTrack));
         s[i]->camera_ids=(uint32_t*)calloc(maxd,sizeof(uint32_t));
         s[i]->sample_ids=(uint32_t*)calloc(maxd,sizeof(uint32_t));
-        if(!s[i]->xyz||!s[i]->old_xyz||!s[i]->cameras||!s[i]->old_cameras||!s[i]->draws||!s[i]->tracks||!s[i]->camera_ids||!s[i]->sample_ids) {
+        s[i]->stationary=(uint8_t*)calloc(maxd,1);
+        if(!s[i]->xyz||!s[i]->old_xyz||!s[i]->cameras||!s[i]->old_cameras||!s[i]->draws||!s[i]->tracks||!s[i]->camera_ids||!s[i]->sample_ids||!s[i]->stationary) {
             rsx_pose_destroy(h);return 0;
         }
     }
     h->heads=(int32_t*)malloc((size_t)h->buckets*sizeof(int32_t));
     h->next=(int32_t*)malloc((size_t)maxd*sizeof(int32_t));h->used=(uint8_t*)calloc(maxd,1);
+    h->stationary_draws=(uint8_t*)calloc(maxd,1);h->stationary_vertices=(uint8_t*)calloc(maxv,1);
     h->groups=(int32_t*)malloc((size_t)maxd*sizeof(int32_t));h->seeds=(int32_t*)malloc((size_t)maxd*sizeof(int32_t));
     h->camera_groups=(int32_t*)malloc((size_t)maxd*sizeof(int32_t));h->vertex_owners=(uint32_t*)calloc(maxv,sizeof(uint32_t));
     h->vertex_cameras=(uint32_t*)calloc(maxv,sizeof(uint32_t));h->vertex_next=(int32_t*)malloc((size_t)maxv*sizeof(int32_t));
@@ -167,7 +195,7 @@ static inline int rsx_pose_init(RsxPoseHistory* h,uint32_t maxv,uint32_t maxd) {
     h->camera_checked=(uint8_t*)calloc(maxd,1);
     h->coherence_hashes=(uint64_t*)malloc((size_t)maxd*sizeof(uint64_t));
     h->weld_hashes=(uint64_t*)malloc((size_t)maxv*sizeof(uint64_t));
-    if(!h->heads||!h->next||!h->used||!h->groups||!h->camera_groups||!h->vertex_owners||!h->vertex_cameras||!h->vertex_groups||!h->vertex_next||!h->seeds||!h->vertex_sources||!h->camera_sources||!h->blocks||!h->memo_heads||!h->memo_next||!h->memo_ids||!h->memo_hashes||!h->camera_memo||!h->sample_heads||!h->sample_next||!h->sample_hashes||!h->position_memo||!h->search_samples||!h->search_epochs||!h->bucket_capped||!h->camera_checked||!h->coherence_hashes||!h->weld_hashes){rsx_pose_destroy(h);return 0;}return 1;
+    if(!h->heads||!h->next||!h->used||!h->stationary_draws||!h->stationary_vertices||!h->groups||!h->camera_groups||!h->vertex_owners||!h->vertex_cameras||!h->vertex_groups||!h->vertex_next||!h->seeds||!h->vertex_sources||!h->camera_sources||!h->blocks||!h->memo_heads||!h->memo_next||!h->memo_ids||!h->memo_hashes||!h->camera_memo||!h->sample_heads||!h->sample_next||!h->sample_hashes||!h->position_memo||!h->search_samples||!h->search_epochs||!h->bucket_capped||!h->camera_checked||!h->coherence_hashes||!h->weld_hashes){rsx_pose_destroy(h);return 0;}return 1;
 }
 /* Observed Code Veronica VP layout: c0..c3 orthonormal orientation,
  * c4..c7 projection/translation. Unknown layouts (including UI) are skipped. */
@@ -514,6 +542,62 @@ static inline int rsx_pose_block_cannot_win_bounded(const RsxPoseBlock* block,co
 static inline int rsx_pose_block_cannot_win(const RsxPoseBlock* block,const float* xyz,uint32_t samples,float best_score) {
     return rsx_pose_block_cannot_win_bounded(block,xyz,samples,rsx_pose_sum_bound(samples,best_score));
 }
+/* Reappearance may miss the immediately preceding list (culling/light-pass
+ * changes). Carry ONLY exact stationary geometry from the last two snapshots,
+ * with the same complete camera. Not a proximity test or a temporal source.
+ * A verified match is a current-position constraint, never an invented pose.
+ * Hash/chain storage is rebuilt by the ordinary matcher immediately after. */
+static inline int rsx_pose_stationary_endpoints(const float* a,const float* b,uint32_t count) {
+    for(uint32_t k=0;k<count;k++)if(fabsf(a[k]-b[k])>1e-5f)return 0;return 1;
+}
+static inline uint64_t rsx_pose_anchor_hash(uint32_t count,const float* point) {
+    uint32_t bits[3];memcpy(bits,point,12);uint64_t hash=count;
+    for(int a=0;a<3;a++)hash=(hash^bits[a])*1099511628211ull;return hash;
+}
+static inline void rsx_pose_carry_stationary(RsxPoseHistory* h,const RsxPoseFrame* f) {
+    const RsxPoseSnapshot* snapshots[2]={&h->cur,&h->prev};
+    for(int frame=0;frame<2;frame++) {
+        const RsxPoseSnapshot* old=snapshots[frame];if(old->scene!=f->scene)continue;
+        memset(h->heads,0xFF,(size_t)h->buckets*sizeof(int32_t));
+        for(uint32_t i=0;i<old->nd;i++)if(old->draws[i].count&&
+            (old->stationary[i]||rsx_pose_stationary_endpoints(old->xyz+(size_t)old->draws[i].first*3,
+                old->old_xyz+(size_t)old->draws[i].first*3,old->draws[i].count*3))) {
+            const RsxPoseDraw* d=old->draws+i;
+            uint32_t bucket=rsx_pose_bucket(h,rsx_pose_anchor_hash(d->count,old->xyz+(size_t)d->first*3));
+            h->next[i]=h->heads[bucket];h->heads[bucket]=(int32_t)i;
+        }
+        for(uint32_t i=0;i<f->nd;i++)if(!h->stationary_draws[i]) {
+            const RsxPoseDraw* d=f->draws+i;
+            uint32_t bucket=rsx_pose_bucket(h,rsx_pose_anchor_hash(d->count,f->vertices[d->first].xyz)),visits=0;
+            for(int32_t j=h->heads[bucket];j>=0&&visits++<128;j=h->next[j]) {
+                const RsxPoseDraw* previous=old->draws+j;
+                if(previous->count!=d->count||memcmp(f->cameras+(size_t)d->cb*32,old->cameras+(size_t)j*32,128))continue;
+                uint32_t k=0;for(;k<d->count;k++)if(memcmp(f->vertices[d->first+k].xyz,old->xyz+(size_t)(previous->first+k)*3,12))break;
+                if(k==d->count){h->stationary_draws[i]=1;break;}
+            }
+        }
+    }
+}
+/* A static world-space caster remains static in every light projection.
+ * Share the constraint only between the whitelisted world-space shadow VP,
+ * with exact full geometry in the verified common world input space.
+ * Only shadow targets inherit it; never share interpolated values/cameras. */
+static inline void rsx_pose_share_world_stationary(RsxPoseHistory* h,const RsxPoseFrame* f) {
+    memset(h->heads,0xFF,(size_t)h->buckets*sizeof(int32_t));
+    for(uint32_t i=0;i<f->nd;i++)if(h->stationary_draws[i]&&(f->draws[i].flags&RSX_POSE_WORLD_LIGHT_GEOMETRY)) {
+        const RsxPoseDraw* d=f->draws+i;uint32_t bucket=rsx_pose_bucket(h,rsx_pose_anchor_hash(d->count,f->vertices[d->first].xyz));
+        h->next[i]=h->heads[bucket];h->heads[bucket]=(int32_t)i;
+    }
+    for(uint32_t i=0;i<f->nd;i++)if(!h->stationary_draws[i]&&((f->draws[i].flags&3u)==3u)) {
+        const RsxPoseDraw* d=f->draws+i;uint32_t visits=0,bucket=rsx_pose_bucket(h,rsx_pose_anchor_hash(d->count,f->vertices[d->first].xyz));
+        for(int32_t j=h->heads[bucket];j>=0&&visits++<128;j=h->next[j]) {
+            const RsxPoseDraw* other=f->draws+j;
+            if(d->count!=other->count)continue;
+            uint32_t k=0;for(;k<d->count;k++)if(memcmp(f->vertices[d->first+k].xyz,f->vertices[other->first+k].xyz,12))break;
+            if(k==d->count){h->stationary_draws[i]=h->cur.stationary[i]=1;break;}
+        }
+    }
+}
 static inline int rsx_pose_prepare(RsxPoseHistory* h,const RsxPoseFrame* f,double now) {
     RsxPoseSearchProfile* profile=h->search_profile;
     double profile_mark=profile?profile->clock():0;
@@ -523,14 +607,17 @@ static inline int rsx_pose_prepare(RsxPoseHistory* h,const RsxPoseFrame* f,doubl
     h->position_hits=h->position_misses=h->position_uncached=0;h->position_memo_disabled=0;
     h->search_candidates=h->search_pruned=h->sample_groups_reused=h->search_blocks_pruned=0;
     h->matched=h->moving=h->ambiguous=h->capped=0;h->coherent=h->coherence_conflicts=h->seams=h->seam_conflicts=h->seam_components=h->seam_veto_vertices=0;h->alpha=1;
+    memset(h->stationary_draws,0,h->maxd);
     if(!f->scene||!f->nd){rsx_pose_reset(h);h->reason=RSX_POSE_OFF;return 0;}
     int valid=isfinite(now)&&rsx_pose_frame_valid(h,f);
     rsx_pose_profile_section(profile,RSX_POSE_P_VALIDATE,&profile_mark);
     if(!valid){rsx_pose_reset(h);h->reason=RSX_POSE_INVALID;return 0;}
     int warm=!h->have_cur;
     int reset=warm||f->scene!=h->cur.scene||now<h->last_at||now-h->last_at>.25;
+    if(!reset)rsx_pose_carry_stationary(h,f);
     RsxPoseSnapshot tmp=h->prev;h->prev=h->cur;h->cur=tmp;
     RsxPoseSnapshot *s=&h->prev,*out=&h->cur;
+    memset(out->stationary,0,h->maxd);
     out->nd=f->nd;out->scene=f->scene;out->nv=0;
     memset(h->heads,0xFF,(size_t)h->buckets*sizeof(int32_t));memset(h->used,0,h->maxd);
     memset(h->bucket_capped,0,h->buckets);
@@ -546,7 +633,7 @@ static inline int rsx_pose_prepare(RsxPoseHistory* h,const RsxPoseFrame* f,doubl
     int any_new=0,apply=0;
     for(uint32_t j=0;j<f->nd;j++) {
         const RsxPoseDraw* b=f->draws+j;RsxPoseDraw* d=out->draws+j;
-        *d=*b;d->first=out->nv;
+        *d=*b;d->first=out->nv;out->stationary[j]=h->stationary_draws[j];
         RsxPoseTrack* tr=out->tracks+j;tr->changed_at=now;tr->alpha=1;tr->active=0;
         if(b->count>h->maxv-out->nv){d->count=0;h->capped++;rsx_pose_profile_section(profile,RSX_POSE_P_SETUP,&profile_mark);continue;}
         float *xyz=out->xyz+(size_t)d->first*3,*old=out->old_xyz+(size_t)d->first*3;
@@ -621,6 +708,11 @@ static inline int rsx_pose_prepare(RsxPoseHistory* h,const RsxPoseFrame* f,doubl
             memcpy(old,s->old_xyz+(size_t)a->first*3,(size_t)b->count*3*sizeof(float));
             memcpy(oldcam,s->old_cameras+(size_t)best*32,32*sizeof(float));*tr=s->tracks[best];
         }
+        /* Only a successful temporal match can establish a stationary
+         * surface. Unmatched/newly-visible draws with old==new are NOT proof.
+         * A repeated animated midpoint still has old!=new, so is not pinned. */
+        h->stationary_draws[j]|=(uint8_t)rsx_pose_stationary_endpoints(old,xyz,b->count*3);
+        out->stationary[j]=h->stationary_draws[j];
         if(tr->active) {
             /* Midpoint on arrival, endpoint after one 60 Hz refresh. Real
              * elapsed time handles jitter without touching the game clock. */
@@ -630,6 +722,7 @@ static inline int rsx_pose_prepare(RsxPoseHistory* h,const RsxPoseFrame* f,doubl
         }
         rsx_pose_profile_section(profile,RSX_POSE_P_RESOLVE,&profile_mark);
     }
+    rsx_pose_share_world_stationary(h,f);
     h->have_cur=1;h->have_prev=apply;h->last_at=now;
     h->reason=reset?(warm?RSX_POSE_WARMUP:RSX_POSE_LAYOUT):!h->matched?RSX_POSE_CUT:any_new?RSX_POSE_NEW:RSX_POSE_REPEAT;
     return apply;
@@ -792,6 +885,60 @@ static inline void rsx_pose_mesh_components(RsxPoseHistory* h,const RsxPoseFrame
             if(*draw)rsx_pose_join(h,(int32_t)i,(int32_t)(*draw-1));else *draw=i+1;
         }
     }
+    /* Eyes, mouth inserts and translucent lashes need not share a vertex
+     * with the skin. If their enclosing animated surface is retained, they
+     * must retain the same current pose. This is ONLY a conservative fallback
+     * relation: it never welds nearby points or invents an interpolated pose.
+     * Require exact camera identity, full bounds containment, substantially
+     * larger geometry/volume, and real positional animation in the container.
+     * Unrelated objects outside these bounds keep their interpolation.
+     * Search scratch is dead after prepare and rebuilt on the next prepare. */
+    memset(h->blocks,0,(size_t)f->nd*sizeof(RsxPoseBlock));
+    memset(h->used,0,f->nd);
+    for(uint32_t i=0;i<f->nd;i++) {
+        uint32_t root=(uint32_t)rsx_pose_component(h,(int32_t)i);
+        RsxPoseBlock* box=h->blocks+root;const RsxPoseDraw* d=f->draws+i;
+        if(!box->count){box->after=h->camera_groups[i];for(int a=0;a<3;a++){box->lo[a]=INFINITY;box->hi[a]=-INFINITY;}}
+        else if(box->after!=h->camera_groups[i])box->after=-2;
+        box->count=UINT32_MAX-box->count<d->count?UINT32_MAX:box->count+d->count;
+        for(uint32_t k=0;k<d->count;k++)for(int a=0;a<3;a++) {
+            float v=f->vertices[d->first+k].xyz[a];if(v<box->lo[a])box->lo[a]=v;if(v>box->hi[a])box->hi[a]=v;
+        }
+        if(!h->used[root]&&rsx_pose_draw_ready(h,i)) {
+            const RsxPoseDraw* old=h->cur.draws+i;
+            for(uint32_t k=0;k<old->count*3;k++)if(fabsf(h->cur.xyz[(size_t)old->first*3+k]-h->cur.old_xyz[(size_t)old->first*3+k])>1e-5f){h->used[root]=1;break;}
+        }
+    }
+    uint32_t parents=0;
+    for(uint32_t i=0;i<f->nd;i++)if(h->blocks[i].count>=24&&h->blocks[i].after>=0&&h->used[i]) {
+        /* Too many potential containers: omit optional enclosure grouping.
+         * Exact seam/alias protection remains intact; no quadratic scan. */
+        if(parents==128)return;h->heads[parents++]=(int32_t)i;
+    }
+    for(uint32_t i=0;i<f->nd;i++) {
+        const RsxPoseBlock* child=h->blocks+i;if(!child->count||child->after<0)continue;
+        int32_t container=-1;int ambiguous=0;
+        for(uint32_t k=0;k<parents;k++) {
+            uint32_t j=(uint32_t)h->heads[k];const RsxPoseBlock* parent=h->blocks+j;
+            if(i==j||child->after!=parent->after||child->count>parent->count/4)continue;
+            int contains=1;double cv=1,pv=1;
+            for(int a=0;a<3;a++) {
+                if(child->lo[a]<parent->lo[a]||child->hi[a]>parent->hi[a]){contains=0;break;}
+                cv*=child->hi[a]-child->lo[a];pv*=parent->hi[a]-parent->lo[a];
+            }
+            if(!contains||pv<=0||pv<cv*8)continue;
+            if(container<0){container=(int32_t)j;continue;}
+            const RsxPoseBlock* chosen=h->blocks+container;int inside=1,outside=1;
+            for(int a=0;a<3;a++){
+                if(parent->lo[a]<chosen->lo[a]||parent->hi[a]>chosen->hi[a])inside=0;
+                if(chosen->lo[a]<parent->lo[a]||chosen->hi[a]>parent->hi[a])outside=0;
+            }
+            // Nested containers form one hierarchy. Overlapping unrelated
+            // containers are ambiguous: never tie two characters together.
+            if(inside)container=(int32_t)j;else if(!outside){ambiguous=1;break;}
+        }
+        if(container>=0&&!ambiguous)rsx_pose_join(h,(int32_t)i,container);
+    }
 }
 /* Whole-draw coherence is insufficient at a UV/material boundary: two
  * adjacent, differently-shaped draws duplicate their common edge. Their
@@ -804,8 +951,41 @@ static inline void rsx_pose_mesh_components(RsxPoseHistory* h,const RsxPoseFrame
 /* Optional recipe follows exactly the same winning proposal as output.
  * UINT64_MAX means retain the CPU result. No recipe changes before graph
  * validation, so the bounded/atomic failure behavior is identical. */
+/* Per-upload constraints, including exact world-space shadow copies with
+ * different draw splits. Hashes are hints; verify exact world xyz. Only
+ * verified world-space programs establish this constraint for shadow targets.
+ * Temporary hash storage is rebuilt by weld/compute topology afterwards. */
+static inline void rsx_pose_stationary_vertices(RsxPoseHistory* h,const RsxPoseFrame* f) {
+    memset(h->stationary_vertices,0,f->nv);memset(h->heads,0xFF,(size_t)h->buckets*4);
+    uint32_t nodes=0;
+    for(uint32_t i=0;i<f->nd;i++)if(h->stationary_draws[i]) {
+        const RsxPoseDraw* d=f->draws+i;
+        for(uint32_t k=0;k<d->count;k++)h->stationary_vertices[d->first+k]=1;
+    }
+    for(uint32_t i=0;i<f->nd;i++)if(h->stationary_draws[i]&&(f->draws[i].flags&RSX_POSE_WORLD_LIGHT_GEOMETRY)) {
+        const RsxPoseDraw* d=f->draws+i;
+        for(uint32_t k=0;k<d->count;k++) {
+            uint32_t v=d->first+k,bucket=rsx_pose_bucket(h,rsx_pose_hash_floats(1469598103934665603ull,f->vertices[v].xyz,3)),visits=0;int found=0;
+            for(int32_t n=h->heads[bucket];n>=0;n=h->vertex_next[n]) {
+                if(++visits>128)return;
+                if(rsx_pose_floats_equal(f->vertices[v].xyz,f->vertices[h->vertex_owners[n]].xyz,3) ){found=1;break;}
+            }
+            if(!found){if(nodes==h->maxv)return;h->vertex_owners[nodes]=v;h->vertex_next[nodes]=h->heads[bucket];h->heads[bucket]=(int32_t)nodes++;}
+        }
+    }
+    for(uint32_t i=0;i<f->nd;i++)if((f->draws[i].flags&3u)==3u) {
+        const RsxPoseDraw* d=f->draws+i;
+        for(uint32_t k=0;k<d->count;k++) {
+            uint32_t v=d->first+k;if(h->stationary_vertices[v])continue;
+            uint32_t bucket=rsx_pose_bucket(h,rsx_pose_hash_floats(1469598103934665603ull,f->vertices[v].xyz,3)),visits=0;
+            for(int32_t n=h->heads[bucket];n>=0&&visits++<128;n=h->vertex_next[n])
+                if(rsx_pose_floats_equal(f->vertices[v].xyz,f->vertices[h->vertex_owners[n]].xyz,3) ){h->stationary_vertices[v]=1;break;}
+        }
+    }
+}
 static inline int rsx_pose_weld_recipe(RsxPoseHistory* h,const RsxPoseFrame* f,float* output,uint32_t* states,uint64_t* recipes) {
     h->seams=h->seam_conflicts=h->seam_components=h->seam_veto_vertices=0;
+    rsx_pose_stationary_vertices(h,f);
     memset(h->vertex_groups,0,(size_t)f->nv*sizeof(uint32_t));
     memset(h->heads,0xFF,(size_t)h->buckets*sizeof(int32_t));
     uint32_t nodes=0;
@@ -837,6 +1017,13 @@ static inline int rsx_pose_weld_recipe(RsxPoseHistory* h,const RsxPoseFrame* f,f
     }
     /* Hash-node owners are no longer needed; map each upload to its root. */
     for(uint32_t v=0;v<f->nv;v++)h->vertex_owners[v]=h->vertex_groups[v]?rsx_pose_point_component(h,v)+1:0;
+    /* Confirmed stationary geometry is a real constraint, not an absent
+     * moving proposal. An erroneous nearby match must not drag its shared
+     * points away. Reuse dead point-DSU scratch only AFTER owners are final. */
+    memset(h->vertex_groups,0,(size_t)f->nv*sizeof(uint32_t));
+    for(uint32_t v=0;v<f->nv;v++)if(h->stationary_vertices[v]){
+        uint32_t owner=h->vertex_owners[v];if(owner)h->vertex_groups[owner-1]=1;
+    }
     /* The chains are no longer needed: reuse them as representative states.
      * 0 no moving candidate, 1 moving seed, 2 hard alias veto, 3 disagreement. */
     memset(h->vertex_next,0,(size_t)f->nv*sizeof(int32_t));
@@ -844,7 +1031,10 @@ static inline int rsx_pose_weld_recipe(RsxPoseHistory* h,const RsxPoseFrame* f,f
         if(!h->vertex_owners[v])continue;
         uint32_t root=h->vertex_owners[v]-1;int32_t* state=h->vertex_next+root;
         if(states[v]==2){*state=2;continue;}
-        if(*state==2||*state==3||rsx_pose_floats_equal(output+(size_t)v*3,f->vertices[v].xyz,3))continue;
+        if(*state==2||*state==3)continue;
+        int unchanged=rsx_pose_floats_equal(output+(size_t)v*3,f->vertices[v].xyz,3);
+        if(h->vertex_groups[root]&&!unchanged){*state=3;h->seam_conflicts++;continue;}
+        if(unchanged)continue;
         if(!*state){memcpy(output+(size_t)root*3,output+(size_t)v*3,3*sizeof(float));if(recipes)recipes[root]=recipes[v];*state=1;}
         else if(!rsx_pose_floats_equal(output+(size_t)root*3,output+(size_t)v*3,3)){*state=3;h->seam_conflicts++;}
     }

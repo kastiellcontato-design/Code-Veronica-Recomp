@@ -8,10 +8,11 @@
 #include <cstdint>
 #include <cassert>
 #include "rsx_pose_interpolation.h"
-int main(int argc,char**argv){assert(argc>=2);FILE*f=fopen(argv[1],"rb");assert(f);fseek(f,0,SEEK_END);size_t size=ftell(f);rewind(f);std::vector<unsigned char>b(size);assert(fread(b.data(),1,size,f)==size);fclose(f);assert(size>=64);uint32_t hd[16];memcpy(hd,b.data(),64);assert(hd[0]==0x4d435031&&hd[1]==1&&hd[10]==sizeof(RsxPoseVertex)&&hd[11]==sizeof(RsxPoseDraw)&&hd[12]==sizeof(RsxPoseTrack));assert(hd[2]<=786432&&hd[3]<=24576&&hd[4]<=786432);unsigned nv=hd[2],nd=hd[3],pn=hd[4];size_t at=64;
+int main(int argc,char**argv){assert(argc>=2);FILE*f=fopen(argv[1],"rb");assert(f);fseek(f,0,SEEK_END);size_t size=ftell(f);rewind(f);std::vector<unsigned char>b(size);assert(fread(b.data(),1,size,f)==size);fclose(f);assert(size>=64);uint32_t hd[16];memcpy(hd,b.data(),64);assert(hd[0]==0x4d435031&&(hd[1]==1||hd[1]==2)&&hd[10]==sizeof(RsxPoseVertex)&&hd[11]==sizeof(RsxPoseDraw)&&hd[12]==sizeof(RsxPoseTrack));assert(hd[2]<=786432&&hd[3]<=24576&&hd[4]<=786432);unsigned nv=hd[2],nd=hd[3],pn=hd[4];size_t at=64;
  auto take=[&](void*dst,size_t n){assert(at<=size&&n<=size-at);if(dst)memcpy(dst,b.data()+at,n);at+=n;};
  std::vector<RsxPoseVertex>raw(nv);std::vector<float>actual(nv*3),cams(24576*32),before(nv*3),out(nv*3);std::vector<RsxPoseDraw>bind(nd);std::vector<int32_t>sources(nd);RsxPoseHistory h{};assert(rsx_pose_init(&h,nv>pn?nv:pn,24576));
  take(raw.data(),nv*sizeof(RsxPoseVertex));take(actual.data(),nv*12);take(h.cur.draws,nd*sizeof(RsxPoseDraw));take(bind.data(),nd*sizeof(RsxPoseDraw));take(h.cur.tracks,nd*sizeof(RsxPoseTrack));take(sources.data(),nd*4);take(nullptr,nd*4);take(h.cur.old_xyz,pn*12);take(h.cur.xyz,pn*12);take(h.cur.old_cameras,nd*128);take(h.cur.cameras,nd*128);h.cur.nv=pn;h.cur.nd=nd;h.cur.scene=hd[7];h.have_cur=1;
+ for(unsigned d=0;d<nd;d++)h.stationary_draws[d]=h.cur.stationary[d]=(h.cur.draws[d].flags&RSX_POSE_CAPTURE_STATIONARY)!=0;
  for(unsigned d=0;d<nd;d++)memcpy(cams.data()+size_t(bind[d].cb)*32,h.cur.cameras+size_t(d)*32,128);
  RsxPoseFrame fr{raw.data(),cams.data(),bind.data(),nv,nd,hd[7],hd[8]};assert(rsx_pose_cohere(&h,&fr));unsigned srcdiff=0;for(unsigned d=0;d<nd;d++)srcdiff+=h.vertex_sources[d]!=sources[d];printf("nv=%u nd=%u pn=%u source_diffs=%u\n",nv,nd,pn,srcdiff);
  std::vector<uint32_t>state(nv),cs(24576);std::vector<uint64_t>recipes(nv,UINT64_MAX);

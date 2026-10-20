@@ -16,7 +16,7 @@ def inspect_pose(path):
     data = path.read_bytes()
     h = struct.unpack_from('<16I', data)
     magic, version, nv, nd, packed, mode = h[:6]
-    if magic != 0x4D435031 or version != 1 or h[10:14] != (20, 24, 16, 32):
+    if magic != 0x4D435031 or version not in (1, 2) or h[10:14] != (20, 24, 16, 32):
         raise ValueError('Unknown pose schema / ABI')
     offset = 64
 
@@ -46,7 +46,7 @@ def inspect_pose(path):
     # Per-op metadata plus up to 16 frozen fragment float4 constants.
     operations, stride = h[14:16]
     lighting = []
-    if operations and stride != 320:
+    if operations and stride != (336 if version == 2 else 320):
         raise ValueError('Unknown lighting-record stride')
     for i in range(operations):
         row = struct.unpack_from('<16I', data, offset)
@@ -56,10 +56,41 @@ def inspect_pose(path):
                              'pose_accepted': bool(row[9]),
                              'fragment_constants': struct.unpack_from(f'<{row[12]*4}f', data, offset+64)})
         offset += stride
+    state_summary = {'schema': version, 'operations': operations, 'vertex_banks': 0, 'vertex_programs': 0}
+    if version == 2:
+        if offset + 16 > len(data):
+            raise ValueError('Missing vertex-state extension')
+        tag, bank_count, program_count, constants = struct.unpack_from('<4I', data, offset)
+        offset += 16
+        if tag != 0x3256434d or constants != 512 or bank_count > 24576 or program_count > 24576:
+            raise ValueError('Unknown vertex-state schema / limits')
+        bank_slots = set()
+        for _ in range(bank_count):
+            end = offset + 4 + constants * 16
+            if end > len(data):
+                raise ValueError('Truncated vertex bank')
+            slot = struct.unpack_from('<I', data, offset)[0]
+            if slot >= 24576 or slot in bank_slots:
+                raise ValueError('Invalid / duplicate vertex bank')
+            bank_slots.add(slot)
+            offset = end
+        program_hashes = set()
+        for _ in range(program_count):
+            if offset + 8 > len(data):
+                raise ValueError('Truncated vertex program header')
+            code, size = struct.unpack_from('<2I', data, offset)
+            offset += 8
+            if size > 4 * 1024 * 1024 or offset + size > len(data):
+                raise ValueError('Truncated / oversized vertex program')
+            data[offset:offset+size].decode('utf-8')
+            program_hashes.add(f'{code:08x}')
+            offset += size
+        state_summary.update(vertex_banks=bank_count, vertex_programs=program_count,
+                             program_hashes=sorted(program_hashes))
     if offset != len(data):
         raise ValueError('Snapshot length mismatch')
     if mode == 2:
-        return {'final_positions_available': False, 'note': 'GPU compute result not read back'}
+        return {'capture_state': state_summary, 'final_positions_available': False, 'note': 'GPU compute result not read back'}
 
     def edge(a, ia, ib):
         return sum((a[ia*3+k] - a[ib*3+k])**2 for k in range(3))
@@ -87,7 +118,7 @@ def inspect_pose(path):
         if worst > 4.0:
             suspects.append({'draw': d, 'key': f'{binding[0]:016x}', 'flags': flags,
                              'edge_stretch_ratio': math.sqrt(worst), 'source': source})
-    return {'final_positions_available': True,
+    return {'capture_state': state_summary, 'final_positions_available': True,
             'shadow_camera_changes': changed_shadow_cameras,
             'shadow_passes': lighting,
             'suspect_draws': sorted(suspects, key=lambda d: -d['edge_stretch_ratio'])[:12]}

@@ -43,10 +43,33 @@ static void run(bool warp){
                 if(iteration%23==0&&i>=nd-2)v.xyz[0]+=100; // disconnected clean component
             }
         }
+        if(iteration%31==1){
+            // Detached eye/mouth geometry inside a retained animated body.
+            nd=4;nv=33;memset(vertices,0,sizeof vertices);memset(veto,0,sizeof veto);
+            draws[0]={101,0,24,0,0};draws[1]={102,24,3,0,0};draws[2]={103,27,3,0,0};draws[3]={104,30,3,1,0};
+            cameras[60]=10;
+            for(unsigned v=0;v<24;v++)for(unsigned a=0;a<3;a++)vertices[v].xyz[a]=((v>>a)&1)?2.f:-2.f;
+            for(unsigned k=0;k<3;k++){
+                vertices[24+k].xyz[0]=float(k)*.1f;vertices[24+k].xyz[1]=float(k%2)*.1f;
+                vertices[27+k]=vertices[24+k];vertices[27+k].xyz[0]+=10;
+                vertices[30+k]=vertices[24+k];
+            }
+            for(unsigned v=0;v<nv;v++){vertices[v].stamp=1;vertices[v].uv=v%3;}
+            veto[0]=2;
+        }
+        if(iteration%37==1){
+            nd=3;nv=12;memset(vertices,0,sizeof vertices);memset(veto,0,sizeof veto);
+            draws[0]={201,0,6,0,iteration%2?2u:3u};draws[1]={202,6,3,1,3};draws[2]={203,9,3,2,0};
+            const float p[6][3]={{0,0,2},{1,0,2},{0,1,2},{1,0,2},{1,1,2},{0,1,2}};
+            for(unsigned v=0;v<6;v++)memcpy(vertices[v].xyz,p[v],12);
+            for(unsigned v=6;v<12;v++)memcpy(vertices[v].xyz,p[v%3],12);
+            cameras[60]=2;cameras[92]=4;for(unsigned v=0;v<nv;v++){vertices[v].stamp=1;vertices[v].uv=v%3;}
+        }
         if(iteration%3==0)veto[draws[2].first]=2;
         unsigned packed=0;
         for(auto h:{&cpu,&compute}){
-            packed=0;h->cur.nd=nd;h->cur.scene=1;
+            packed=0;h->cur.nd=nd;h->cur.scene=1;memset(h->stationary_draws,0,h->maxd);
+            if(iteration%29==0||iteration%37==1)h->stationary_draws[0]=1;
             for(unsigned i=0;i<nd;i++){
                 h->cur.draws[i]=draws[i];h->cur.draws[i].first=packed;h->cur.tracks[i].active=iteration%13!=0;h->cur.tracks[i].alpha=(iteration%4)*.125f+.5f;
                 memcpy(h->cur.cameras+i*32,cameras+draws[i].cb*32,128);memcpy(h->cur.old_cameras+i*32,cameras+draws[i].cb*32,128);
@@ -56,6 +79,7 @@ static void run(bool warp){
                     if(iteration%7==0&&i%2)delta*=2; // inconsistent duplicate => collective fallback
                     if(iteration%19==0&&i%2)delta*=1.5f; // conflicting shared point only
                     if(iteration%17==0)delta=0;
+                    if((iteration%29==0||iteration%37==1)&&i==0)delta=0; // proven stationary seam beside a moving patch
                     h->cur.old_xyz[(packed+k)*3+a]=value-delta;
                 }packed+=draws[i].count;
             }h->cur.nv=packed;

@@ -38,6 +38,7 @@ static inline int rsx_pose_compute_plan_build(RsxPoseComputePlan* p,RsxPoseHisto
     header[PC_FINAL]=off;off=pc_align(off+f->nv*16);
     p->output_bytes=off;p->final_offset=header[PC_FINAL];
     memcpy(p->words,header,sizeof header);
+    rsx_pose_stationary_vertices(h,f);
     uint32_t* v=pc_at(p,header[PC_VERT]);uint32_t* d=pc_at(p,header[PC_DRAW]);
     uint32_t* gh=pc_at(p,header[PC_GEOM_HEAD]);uint32_t* ah=pc_at(p,header[PC_ALIAS_HEAD]);
     uint32_t* an=pc_at(p,header[PC_ALIAS_NEXT]);uint32_t* ph=pc_at(p,header[PC_POINT_HEAD]);uint32_t* pn=pc_at(p,header[PC_POINT_NEXT]);
@@ -50,6 +51,9 @@ static inline int rsx_pose_compute_plan_build(RsxPoseComputePlan* p,RsxPoseHisto
         for(uint32_t k=0;k<draw->count;k++)v[(draw->first+k)*8+5]++;
     }
     uint32_t cursor=0;for(uint32_t i=0;i<f->nv;i++){v[i*8+4]=cursor;cursor+=v[i*8+5];h->vertex_next[i]=0;if(v[i*8+5]&&v[i*8+3]!=2)v[i*8+3]=1;}
+    /* Input state 3 records a proven stationary draw. It is not a veto:
+     * point resolution vetoes only if a moving proposal contradicts it. */
+    for(uint32_t i=0;i<f->nv;i++)if(h->stationary_vertices[i]&&v[i*8+3]!=2)v[i*8+3]=3;
     uint32_t* r=pc_at(p,header[PC_REFS]);
     for(uint32_t i=0;i<f->nd;i++)for(uint32_t k=0;k<f->draws[i].count;k++){
         uint32_t at=f->draws[i].first+k,index=v[at*8+4]+(uint32_t)h->vertex_next[at]++;r[index*2]=i;r[index*2+1]=k;}
