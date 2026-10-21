@@ -523,6 +523,21 @@ static u32 vf_pose_stride(void) {
 static u64 vf_parity_bytes(void) {
     return VF_BASE_PARITY_BYTES+(vf_pose_enabled()?(u64)MAX_VERTICES*vf_pose_stride():0);
 }
+/* Upload stream sets (vp_vb, vp_cb, vp_fpcb, vf records and the pose
+ * snapshots), indexed by vp_parity. Two by default. The 60 FPS CPU pose
+ * overlap (pose_overlap_on) uses a third, so the producer can record the
+ * next batch while the GPU still draws the previous one. Decided once,
+ * before the buffers are allocated; CV_POSE_TRIPLE=0 keeps two. */
+static int vp_sets(void) {
+    static int sets;
+    if(!sets) {
+        const char *ri=getenv("CV_RENDER_INTERPOLATION"),*fps=getenv("CV_FPS_TEST_60"),*raw=getenv("CV_FPS_BENCHMARK_RAW");
+        const char *overlap=getenv("CV_POSE_OVERLAP"),*triple=getenv("CV_POSE_TRIPLE");
+        int interp=ri&&!strcmp(ri,"1")&&fps&&!strcmp(fps,"1")&&!(raw&&!strcmp(raw,"1"));
+        sets=interp&&!pose_compute_mode()&&!(overlap&&!strcmp(overlap,"0"))&&!(triple&&!strcmp(triple,"0"))?3:2;
+    }
+    return sets;
+}
 static int vf_enabled(void)
 {
     static int on = -1;
@@ -1077,8 +1092,8 @@ static void pose_init_recording(void) {
     if(!e||strcmp(e,"1")||!fps||strcmp(fps,"1")||(raw&&!strcmp(raw,"1")))return;
     {const char* profile=getenv("CV_POSE_PROFILE");s_pose_profile=profile&&*profile=='1';}
     {const char* detail=getenv("CV_POSE_SEARCH_PROFILE");s_pose_search_profile=detail&&!strcmp(detail,"1");}
-    s_pose_vertices=(RsxPoseVertex*)calloc((size_t)MAX_VERTICES*2,sizeof(*s_pose_vertices));
-    s_pose_cameras=(float*)calloc((size_t)MAX_DRAWS*2*32,sizeof(float));
+    s_pose_vertices=(RsxPoseVertex*)calloc((size_t)MAX_VERTICES*vp_sets(),sizeof(*s_pose_vertices));
+    s_pose_cameras=(float*)calloc((size_t)MAX_DRAWS*vp_sets()*32,sizeof(float));
     s_pose_draws=(RsxPoseDraw*)calloc(MAX_DRAWS,sizeof(*s_pose_draws));
     s_pose_seen_vertices=(u32*)calloc(MAX_VERTICES,sizeof(u32));s_pose_seen_cameras=(u32*)calloc(MAX_DRAWS,sizeof(u32));
     s_pose_out_vertices=(float*)calloc((size_t)MAX_VERTICES*3,sizeof(float));
@@ -2437,7 +2452,7 @@ static int init_d3d12(u32 width, u32 height)
         bd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
         D3D12_RANGE nr = {0,0};
 
-        bd.Width = (u64)MAX_VERTICES * 256 * 2;  /* generic VP vertex: 16 float4 slots,
+        bd.Width = (u64)MAX_VERTICES * 256 * vp_sets();  /* generic VP vertex: 16 float4 slots,
                                           * DOUBLE-buffered by frame parity so a
                                           * new frame's upload never overwrites
                                           * vertices the in-flight GPU frame is
@@ -2447,8 +2462,8 @@ static int init_d3d12(u32 width, u32 height)
          * declines to upload -- the scene just does not render, with no error
          * anywhere. Report the size too: this buffer is
          * MAX_VERTICES * 256 * 2 bytes and grows fast. */
-        fprintf(stderr, "[VPVB] per-frame vertex buffer: %llu MB (%u verts, x2 parity)%c",
-                (unsigned long long)(bd.Width >> 20), (unsigned)MAX_VERTICES, 10);
+        fprintf(stderr, "[VPVB] per-frame vertex buffer: %llu MB (%u verts, x%d parity)%c",
+                (unsigned long long)(bd.Width >> 20), (unsigned)MAX_VERTICES, vp_sets(), 10);
         if (SUCCEEDED(s_d3d.device->lpVtbl->CreateCommittedResource(s_d3d.device, &hp,
                 D3D12_HEAP_FLAG_NONE, &bd, D3D12_RESOURCE_STATE_GENERIC_READ, NULL,
                 &IID_ID3D12Resource, (void**)&s_d3d.vp_vb)))
@@ -2456,7 +2471,7 @@ static int init_d3d12(u32 width, u32 height)
         else
             fprintf(stderr, "[VPVB] ALLOCATION FAILED -- no VP geometry will render%c", 10);
 
-        bd.Width = (u64)VP_CB_STRIDE * MAX_DRAWS * 2;   /* per-draw constant slots, x2 parity */
+        bd.Width = (u64)VP_CB_STRIDE * MAX_DRAWS * vp_sets();   /* per-draw constant slots, per parity */
         /* A failure here is silent and catastrophic: vp_record_cb returns early,
          * every draw loses its constants, and the whole scene transforms by
          * zeros -- indistinguishable from a broken vertex program. Say so. */
@@ -2467,13 +2482,13 @@ static int init_d3d12(u32 width, u32 height)
                 &IID_ID3D12Resource, (void**)&s_d3d.vp_cb)))
             s_d3d.vp_cb->lpVtbl->Map(s_d3d.vp_cb, 0, &nr, &s_d3d.vp_cb_mapped);
 
-        bd.Width = (u64)VP_FPCB_STRIDE * MAX_DRAWS * 2;  /* per-draw FP slots (b1), x2 parity */
+        bd.Width = (u64)VP_FPCB_STRIDE * MAX_DRAWS * vp_sets();  /* per-draw FP slots (b1), per parity */
         if (SUCCEEDED(s_d3d.device->lpVtbl->CreateCommittedResource(s_d3d.device, &hp,
                 D3D12_HEAP_FLAG_NONE, &bd, D3D12_RESOURCE_STATE_GENERIC_READ, NULL,
                 &IID_ID3D12Resource, (void**)&s_d3d.vp_fpcb)))
             s_d3d.vp_fpcb->lpVtbl->Map(s_d3d.vp_fpcb, 0, &nr, &s_d3d.vp_fpcb_mapped);
         if (vf_enabled()) {
-            bd.Width = vf_parity_bytes() * 2;
+            bd.Width = vf_parity_bytes() * vp_sets();
             if (SUCCEEDED(s_d3d.device->lpVtbl->CreateCommittedResource(s_d3d.device, &hp,
                     D3D12_HEAP_FLAG_NONE, &bd, D3D12_RESOURCE_STATE_GENERIC_READ, NULL,
                     &IID_ID3D12Resource, (void**)&s_vf_buf)))
@@ -10416,6 +10431,7 @@ static void prepass_range(u32 from, u32 to)
     if(s_frame_profile.active)s_frame_profile.prepass+=pose_time()-frame_profile_start;
 }
 
+static int pose_overlap_on(void);
 static void render_frame_impl(void)
 {
     { static int announced; if(!announced&&opt30_mode()>=0){
@@ -10440,13 +10456,16 @@ static void render_frame_impl(void)
      * (gcm/cube: triangles mixing stale and new vertices -> missing/sliver
      * polygons). These workloads are a few draws/frame, so full serialisation
      * costs little. */
+    /* Its own parity only: may overlap the previous batch's GPU work. */
+    const int pose_early = pose_overlap_on();
+    if (pose_early) { pose_interpolate_batch(); frame_profile_mark(FP_POSE); }
     { double _tw = perf_on() ? perf_now() : 0.0;
       const double cv_gpu_start = cv_diag ? perf_now() : 0.0;
       wait_for_gpu();
       if (cv_diag) cv_wait = (perf_now() - cv_gpu_start) * 1000.0;
       if (perf_on()) s_perf_gpu += perf_now() - _tw; }
     frame_profile_mark(FP_ENTRY);
-    pose_interpolate_batch();
+    if (!pose_early) pose_interpolate_batch();
     s_fsr_ready=0;s_fsr_depth_at=0xFFFFFFFFu;
     if(s_rb.present&&rsx_fsr31_requested()) {
         s_fsr_ready=rsx_fsr31_begin(s_d3d.device,s_display?s_disp_w:rs_dim(s_d3d.width,s_rs),
@@ -12215,7 +12234,7 @@ static int    s_rt_async = -1;
  * waiting, keep servicing messages SENT to this thread's windows: the
  * render thread's SetWindowText (title FPS) and DXGI may send to the window
  * this thread owns, and blocking here without dispatching them deadlocks. */
-static void render_wait_idle(void)
+static void render_wait_cpu_idle(void)
 {
     if (!s_rt_idle) return;
     for (;;) {
@@ -12228,6 +12247,57 @@ static void render_wait_idle(void)
 void ps3_tl_begin(int ev);   /* PS3_TIMELINE, cellGcmSys.c */
 void ps3_tl_end(int ev);
 
+/* 60 FPS CPU interpolation: the next batch's pose reads only its own parity
+ * (CPU snapshots, vp_vb/vp_cb/vf halves), so it may run while the GPU still
+ * draws this batch. The render thread then reports idle right after submit;
+ * the GPU wait that frees this batch's halves moves to the producer, before it
+ * records into them (render_frame), and to every other render_wait_idle. */
+static ID3D12Fence* s_rt_fence;
+static HANDLE s_rt_fence_event;
+static u64 s_rt_fence_value;
+/* s_rt_fence_pending (above render_wait_idle): last batch's fence; 0 = none.
+ * s_rt_set_fence: the last batch drawn from each upload set (vp_sets). */
+static volatile LONG64 s_rt_set_fence[3];
+static int pose_overlap_on(void)
+{
+    static int on = -1;
+    if (on < 0) {
+        const char* e = getenv("CV_POSE_OVERLAP");
+        on = s_pose_on && !pose_compute_mode() && !(e && !strcmp(e, "0"));
+        if (on && (FAILED(s_d3d.device->lpVtbl->CreateFence(s_d3d.device, 0, D3D12_FENCE_FLAG_NONE,
+                &IID_ID3D12Fence, (void**)&s_rt_fence)) ||
+                !(s_rt_fence_event = CreateEventA(NULL, FALSE, FALSE, NULL)))) on = 0;
+        fprintf(stderr, "[POSE-OVERLAP] v1 %s; next pose computed while the GPU draws the current batch%c",
+                on ? "on" : "off", 10);
+    }
+    return on;
+}
+/* Render thread, after the batch's last submit. 0: wait here as before. */
+static int rt_fence_signal(void)
+{
+    if (!pose_overlap_on()) return 0;
+    const u64 v = s_rt_fence_value + 1;
+    if (FAILED(s_d3d.cmd_queue->lpVtbl->Signal(s_d3d.cmd_queue, s_rt_fence, v))) return 0;
+    s_rt_fence_value = v;
+    if ((u32)s_rb.parity < 3) InterlockedExchange64(&s_rt_set_fence[s_rb.parity], (LONG64)v);
+    InterlockedExchange64(&s_rt_fence_pending, (LONG64)v);
+    return 1;
+}
+/* Any thread but the render thread: wait until the GPU finished batch v. */
+static void rt_fence_wait(u64 v)
+{
+    if (!v || !s_rt_fence || s_rt_fence->lpVtbl->GetCompletedValue(s_rt_fence) >= v) return;
+    s_rt_fence->lpVtbl->SetEventOnCompletion(s_rt_fence, v, s_rt_fence_event);
+    for (int tries = 0; tries < 3; tries++) {   /* bounded, as wait_for_gpu */
+        if (WaitForSingleObject(s_rt_fence_event, 2000) != WAIT_TIMEOUT) return;
+        HRESULT rr = s_d3d.device->lpVtbl->GetDeviceRemovedReason(s_d3d.device);
+        printf("[D3D12] batch fence STUCK %ds: want %llu got %llu removed=0x%08lX\n", 2 * (tries + 1),
+               (unsigned long long)v, (unsigned long long)s_rt_fence->lpVtbl->GetCompletedValue(s_rt_fence), (long)rr);
+        fflush(stdout);
+        if (rr != 0) { dred_report("rt_fence_wait"); break; }
+    }
+}
+
 static DWORD WINAPI render_thread_main(LPVOID p)
 {
     (void)p;
@@ -12238,12 +12308,20 @@ static DWORD WINAPI render_thread_main(LPVOID p)
         ps3_tl_end(4);
         frame_profile_mark(FP_BOOKKEEP);
         ps3_tl_begin(5);
-        wait_for_gpu();          /* this batch's upload halves are reusable */
+        if (!rt_fence_signal())
+            wait_for_gpu();      /* this batch's upload halves are reusable */
         ps3_tl_end(5);
         frame_profile_finish();
         SetEvent(s_rt_idle);
     }
     return 0;
+}
+static volatile LONG64 s_rt_fence_pending;
+static void rt_fence_wait(u64 v);
+static void render_wait_idle(void)
+{
+    render_wait_cpu_idle();
+    if (s_rt_idle) rt_fence_wait((u64)s_rt_fence_pending);   /* the GPU part, see pose_overlap_on */
 }
 
 /* Bumped whenever the recording draw list starts over (render_frame). */
@@ -12276,8 +12354,11 @@ static void render_frame(void)
             fprintf(stderr, "[D3D12] render thread %s%c", s_rt_async ? "ON" : "OFF (RSX_RENDER_THREAD=0)", 10);
         }
     }
-    if (s_rt_async) {                     /* previous batch done, both halves free */
-        ps3_tl_begin(3); render_wait_idle(); ps3_tl_end(3);
+    /* Previous batch done on the CPU. With pose overlap the GPU may still
+     * read the set recording moves to: wait for it after handing over. */
+    u64 gpu_pending = 0;
+    if (s_rt_async) {
+        ps3_tl_begin(3); render_wait_cpu_idle(); ps3_tl_end(3);
     }
     if(profile)profile_wait=pose_time()-profile_ready;
 
@@ -12307,7 +12388,10 @@ static void render_frame(void)
     s_d3d.vb_offset = 0;
     vf_flush(); vf_frame_reset();
     s_d3d.vp_vb_offset = 0;
-    s_d3d.vp_parity ^= 1;
+    s_d3d.vp_parity = (s_d3d.vp_parity + 1) % vp_sets();
+    /* The batch that last drew from this set (two sets: the one just
+     * finished on the CPU; three: the one before it). */
+    if (s_rt_async) gpu_pending = (u64)s_rt_set_fence[s_d3d.vp_parity];
     s_vcb_batch++;   /* constant banks of the old batch are not reusable */
     { u8* t = s_fp_arena; s_fp_arena = s_fp_arena_spare; s_fp_arena_spare = t; }
     s_fp_arena_used = 0; s_fp_nsnap = 0;
@@ -12319,6 +12403,7 @@ static void render_frame(void)
     if (s_rt_async) {
         ResetEvent(s_rt_idle);
         SetEvent(s_rt_work);
+        ps3_tl_begin(3); rt_fence_wait(gpu_pending); ps3_tl_end(3);
     } else {
         render_frame_impl();
         frame_profile_mark(FP_BOOKKEEP);
@@ -12928,7 +13013,7 @@ static void vf_flush(void)
 static void pose_note_vertex(const VPSlot* dst,const VPSlot* src,u32 source_index) {
     if(!s_pose_on)return;
     uintptr_t at=(uintptr_t)dst,base=(uintptr_t)s_d3d.vp_vb_mapped;
-    if(at<base||at-base>=(size_t)MAX_VERTICES*2*256||(at-base)%256)return;
+    if(at<base||at-base>=(size_t)MAX_VERTICES*vp_sets()*256||(at-base)%256)return;
     RsxPoseVertex* v=s_pose_vertices+(at-base)/256;
     rsx_pose_record_source_vertex(v,(const float (*)[4])src,s_pose_stamp,source_index);
 }
