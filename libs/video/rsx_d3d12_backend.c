@@ -215,6 +215,7 @@ typedef struct {
 #include "rsx_shadow_batch.h"
 static const u8* fp_snap_ptr(const D3D12DrawRecord* dr);
 static u32 fp_snap_code(const D3D12DrawRecord* dr);
+static u32 fp_snap_code_in(const D3D12DrawRecord* dr,const u8* arena);
 static u32 dr_cube_mask(const D3D12DrawRecord* dr);
 static u32 fp_guest_program_size(const u8* src, u32* constants);
 
@@ -1008,6 +1009,7 @@ typedef struct {
     u8*  vtex_arena;
     int  present;
     u32 pose_stamp,pose_nv,pose_scene;
+    int pose_done;   /* replay: the producer already interpolated this batch */
     double profile_producer,profile_backpressure;
     double profile_producer_cpu; int profile_producer_valid;
 } RenderBatch;
@@ -1048,14 +1050,20 @@ static u32 s_pose_stamp=1;
 static RsxPoseVertex* s_pose_vertices;
 static float* s_pose_cameras;
 static RsxPoseDraw* s_pose_draws;
+/* Merge/upload state of the batch being interpolated: slices of the per-set
+ * arrays below, so a replay can undo one set while the next one is posed. */
 static u32 *s_pose_seen_vertices,*s_pose_seen_cameras;
 static float *s_pose_out_vertices,*s_pose_out_cameras;
+static u32 *s_pose_seen_vertices_sets,*s_pose_seen_cameras_sets;
+static float *s_pose_out_vertices_sets,*s_pose_out_cameras_sets;
 static u8 s_pose_accepted[MAX_DRAWS];
 static RsxPoseHistory s_pose_history;
 static int s_pose_gpu_blend;
 static u64* s_pose_recipes;
 static u32 s_pose_shadow_draws;
 static int s_pose_profile,s_pose_search_profile;
+static int s_pose_written[3];   /* per upload set: holds interpolated positions/cameras */
+static int s_replay_pass;    /* render thread: drawing the current batch a second time */
 static double pose_time(void) {
     static LARGE_INTEGER frequency;LARGE_INTEGER now;
     if(!frequency.QuadPart)QueryPerformanceFrequency(&frequency);
@@ -1095,13 +1103,15 @@ static void pose_init_recording(void) {
     s_pose_vertices=(RsxPoseVertex*)calloc((size_t)MAX_VERTICES*vp_sets(),sizeof(*s_pose_vertices));
     s_pose_cameras=(float*)calloc((size_t)MAX_DRAWS*vp_sets()*32,sizeof(float));
     s_pose_draws=(RsxPoseDraw*)calloc(MAX_DRAWS,sizeof(*s_pose_draws));
-    s_pose_seen_vertices=(u32*)calloc(MAX_VERTICES,sizeof(u32));s_pose_seen_cameras=(u32*)calloc(MAX_DRAWS,sizeof(u32));
-    s_pose_out_vertices=(float*)calloc((size_t)MAX_VERTICES*3,sizeof(float));
-    s_pose_out_cameras=(float*)calloc((size_t)MAX_DRAWS*32,sizeof(float));
+    s_pose_seen_vertices=s_pose_seen_vertices_sets=(u32*)calloc((size_t)MAX_VERTICES*vp_sets(),sizeof(u32));
+    s_pose_seen_cameras=s_pose_seen_cameras_sets=(u32*)calloc((size_t)MAX_DRAWS*vp_sets(),sizeof(u32));
+    s_pose_out_vertices=s_pose_out_vertices_sets=(float*)calloc((size_t)MAX_VERTICES*3*vp_sets(),sizeof(float));
+    s_pose_out_cameras=s_pose_out_cameras_sets=(float*)calloc((size_t)MAX_DRAWS*32*vp_sets(),sizeof(float));
     if(!s_pose_vertices||!s_pose_cameras||!s_pose_draws||!s_pose_seen_vertices||!s_pose_seen_cameras||!s_pose_out_vertices||!s_pose_out_cameras||!rsx_pose_init(&s_pose_history,MAX_VERTICES,MAX_DRAWS)) {
         free(s_pose_vertices);free(s_pose_cameras);free(s_pose_draws);free(s_pose_seen_vertices);free(s_pose_seen_cameras);
         s_pose_vertices=NULL;s_pose_cameras=NULL;s_pose_draws=NULL;s_pose_seen_vertices=s_pose_seen_cameras=NULL;
         free(s_pose_out_vertices);free(s_pose_out_cameras);s_pose_out_vertices=s_pose_out_cameras=NULL;
+        s_pose_seen_vertices_sets=s_pose_seen_cameras_sets=NULL;s_pose_out_vertices_sets=s_pose_out_cameras_sets=NULL;
         fprintf(stderr,"[POSE] allocation failed; original drawing retained\n");return;
     }
     {const char* cpu=getenv("CV_POSE_CPU_BLEND");
@@ -1151,17 +1161,23 @@ static int pose_compute_prepare(const RsxPoseFrame* frame,u32* changed_cameras) 
     return 1;
 }
 
-static void pose_interpolate_batch(void) {
+static void pose_interpolate_batch_for(const RenderBatch* rb) {
     s_pose_compute.active=0;
     if(!s_pose_on||!s_d3d.vp_vb_mapped||!s_d3d.vp_cb_mapped)return;
     /* A partial/readback batch is not a new displayed frame. */
-    if(!s_rb.present)return;
+    if(!rb->present)return;
+    if((u32)rb->parity>=(u32)vp_sets())return;
+    s_pose_written[rb->parity]=0;
+    s_pose_seen_vertices=s_pose_seen_vertices_sets+(size_t)rb->parity*MAX_VERTICES;
+    s_pose_seen_cameras=s_pose_seen_cameras_sets+(size_t)rb->parity*MAX_DRAWS;
+    s_pose_out_vertices=s_pose_out_vertices_sets+(size_t)rb->parity*MAX_VERTICES*3;
+    s_pose_out_cameras=s_pose_out_cameras_sets+(size_t)rb->parity*MAX_DRAWS*32;
     double phases[7]={0},phase=s_pose_profile?pose_time():0;
-    const RsxPoseVertex* vertices=s_pose_vertices+(size_t)s_rb.parity*MAX_VERTICES;
-    const float* cameras=s_pose_cameras+(size_t)s_rb.parity*MAX_DRAWS*32;
+    const RsxPoseVertex* vertices=s_pose_vertices+(size_t)rb->parity*MAX_VERTICES;
+    const float* cameras=s_pose_cameras+(size_t)rb->parity*MAX_DRAWS*32;
     u32 nd=0;s_pose_shadow_draws=0;memset(s_pose_accepted,0,sizeof s_pose_accepted);
-    for(u32 i=0;i<s_rb.count&&i<MAX_DRAWS;i++) {
-        const D3D12DrawRecord* d=&s_rb.draws[i];
+    for(u32 i=0;i<rb->count&&i<MAX_DRAWS;i++) {
+        const D3D12DrawRecord* d=&rb->draws[i];
         /* Additive lighting is blended 3D geometry, not a screen overlay.
          * It must follow the same pose as the depth and material passes. */
         if(!d->is_vp||d->is_clear||d->is_copy||!d->dtest||d->topology!=RSX_TOPOLOGY_TRIANGLES||d->vertex_count<3||d->vcb_slot>=MAX_DRAWS||d->vs_idx<0||d->vs_idx>=s_d3d.vp_vs_n)continue;
@@ -1169,7 +1185,7 @@ static void pose_interpolate_batch(void) {
         if(!vs->uses_c03||!rsx_pose_camera_valid(cameras+(size_t)d->vcb_slot*32))continue;
         if(!vs->pose_inputs_known)continue;
         if(d->vb_byte_offset%256)continue;u32 first=d->vb_byte_offset/256,n=d->vertex_count;
-        if(first>s_rb.pose_nv||n>s_rb.pose_nv-first)continue;
+        if(first>rb->pose_nv||n>rb->pose_nv-first)continue;
         u64 key=1469598103934665603ull;
         /* Surface/texture addresses rotate between banks. Identity uses pass
          * shape, material layout and ordered UVs, then a spatial match. */
@@ -1177,9 +1193,9 @@ static void pose_interpolate_batch(void) {
         for(u32 j=0;j<sizeof(props)/sizeof(props[0]);j++)key=pose_mix(key,props[j]);
         for(u32 t=0;t<FP_TEX_UNITS;t++){key=pose_mix(key,d->tex[t].fmt);key=pose_mix(key,d->tex[t].w);key=pose_mix(key,d->tex[t].h);key=pose_mix(key,d->tex[t].cube);key=pose_mix(key,d->tex[t].set);}
         int recorded=1;
-        for(u32 k=0;k<n;k++){const RsxPoseVertex* v=vertices+first+k;if(v->stamp!=s_rb.pose_stamp){recorded=0;break;}key=pose_mix(key,v->uv);}
+        for(u32 k=0;k<n;k++){const RsxPoseVertex* v=vertices+first+k;if(v->stamp!=rb->pose_stamp){recorded=0;break;}key=pose_mix(key,v->uv);}
         if(!recorded)continue;
-        const u32 fragment_code=fp_snap_code(d);
+        const u32 fragment_code=fp_snap_code_in(d,rb->fp_arena);
         /* Missing frozen identity cannot establish a safe temporal material
          * match. Existing unaccepted-upload protection keeps these original. */
         if(!fragment_code)continue;
@@ -1191,7 +1207,7 @@ static void pose_interpolate_batch(void) {
         if(out->flags&RSX_POSE_CURRENT_LIGHT_CAMERA)s_pose_shadow_draws++;
         s_pose_accepted[i]=1;
     }
-    RsxPoseFrame frame={vertices,cameras,s_pose_draws,s_rb.pose_nv,nd,s_rb.pose_scene,s_rb.pose_stamp};
+    RsxPoseFrame frame={vertices,cameras,s_pose_draws,rb->pose_nv,nd,rb->pose_scene,rb->pose_stamp};
     double now=pose_time();if(s_pose_profile)phases[0]=pose_phase_elapsed(&phase);
     int apply=pose_prepare_profiled(&s_pose_history,&frame,now);
     if(s_pose_profile)phases[1]=pose_phase_elapsed(&phase);
@@ -1205,9 +1221,10 @@ static void pose_interpolate_batch(void) {
             frames,active,fallback,s_pose_compute_plan.bytes/1024.0);at=now;frames=active=fallback=0;}
     }
     if(apply&&!compute_applied) {
+        s_pose_written[rb->parity]=1;
         memset(s_pose_seen_vertices,0,MAX_VERTICES*sizeof(u32));memset(s_pose_seen_cameras,0,MAX_DRAWS*sizeof(u32));
-        u8* vb=(u8*)s_d3d.vp_vb_mapped+(size_t)s_rb.parity*MAX_VERTICES*256;
-        u8* cb=(u8*)s_d3d.vp_cb_mapped+(size_t)s_rb.parity*MAX_DRAWS*VP_CB_STRIDE;
+        u8* vb=(u8*)s_d3d.vp_vb_mapped+(size_t)rb->parity*MAX_VERTICES*256;
+        u8* cb=(u8*)s_d3d.vp_cb_mapped+(size_t)rb->parity*MAX_DRAWS*VP_CB_STRIDE;
         for(u32 i=0;i<nd;i++) {const RsxPoseDraw* d=s_pose_draws+i;
             const int32_t source=s_pose_history.vertex_sources[i],camera_source=s_pose_history.camera_sources[i];
             for(u32 k=0;k<d->count;k++) {
@@ -1224,15 +1241,15 @@ static void pose_interpolate_batch(void) {
         }
         /* Unsupported draws can share an upload range or constant bank.
          * Protect those aliases before writing any interpolated bytes. */
-        for(u32 i=0;i<s_rb.count&&i<MAX_DRAWS;i++) {
-            const D3D12DrawRecord* d=&s_rb.draws[i];
+        for(u32 i=0;i<rb->count&&i<MAX_DRAWS;i++) {
+            const D3D12DrawRecord* d=&rb->draws[i];
             if(s_pose_accepted[i]||!d->is_vp||d->is_clear||d->is_copy)continue;
             /* A screen shader that never reads c0..c3 cannot be affected by
              * these camera constants, even if its stale bank was deduplicated. */
             if(d->vcb_slot<MAX_DRAWS&&(d->vs_idx<0||d->vs_idx>=s_d3d.vp_vs_n||s_d3d.vp_vs[d->vs_idx].uses_c03))s_pose_seen_cameras[d->vcb_slot]=2;
             if(d->vb_byte_offset%256)continue;
             u32 first=d->vb_byte_offset/256;
-            if(first>s_rb.pose_nv||d->vertex_count>s_rb.pose_nv-first)continue;
+            if(first>rb->pose_nv||d->vertex_count>rb->pose_nv-first)continue;
             for(u32 k=0;k<d->vertex_count;k++)s_pose_seen_vertices[first+k]=2;
         }
         if(s_pose_profile)phases[3]=pose_phase_elapsed(&phase);
@@ -1241,15 +1258,15 @@ static void pose_interpolate_batch(void) {
         /* Resolve duplicate points across UV/material boundaries AFTER the
          * alias vetoes: all copies of an edge must still close exactly. */
         if(!rsx_pose_weld_recipe(&s_pose_history,&frame,s_pose_out_vertices,s_pose_seen_vertices,s_pose_gpu_blend?s_pose_recipes:NULL)) {
-            for(u32 v=0;v<s_rb.pose_nv;v++)s_pose_seen_vertices[v]=2;
+            for(u32 v=0;v<rb->pose_nv;v++)s_pose_seen_vertices[v]=2;
             for(u32 c=0;c<MAX_DRAWS;c++)s_pose_seen_cameras[c]=2;
             apply=0;
         }
         if(s_pose_profile)phases[5]=pose_phase_elapsed(&phase);
-        for(u32 v=0;v<s_rb.pose_nv;v++) {
+        for(u32 v=0;v<rb->pose_nv;v++) {
             if(s_pose_seen_vertices[v]==1&&memcmp(vertices[v].xyz,s_pose_out_vertices+(size_t)v*3,3*sizeof(float)))
                 {if(s_vf_mapped) {
-                    u8* record=s_vf_mapped+(u64)s_rb.parity*vf_parity_bytes()+VF_POSE_OFF+(size_t)v*vf_pose_stride();
+                    u8* record=s_vf_mapped+(u64)rb->parity*vf_parity_bytes()+VF_POSE_OFF+(size_t)v*vf_pose_stride();
                     int blended=0;
                     if(s_pose_gpu_blend&&s_pose_recipes[v]!=UINT64_MAX) {
                         u32 draw=(u32)(s_pose_recipes[v]>>32),at=(u32)s_pose_recipes[v];
@@ -1305,6 +1322,7 @@ static void pose_interpolate_batch(void) {
         reported_at=now;presents=subframes=0;
     }
 }
+static void pose_interpolate_batch(void) {pose_interpolate_batch_for(&s_rb);}
 
 /* Window title written by the render thread, applied by the window thread. */
 static SRWLOCK s_title_lock = SRWLOCK_INIT;
@@ -4040,12 +4058,16 @@ static const u8* fp_snap_ptr(const D3D12DrawRecord* dr)
 {
     return (dr->fp_snap && s_rb.fp_arena) ? s_rb.fp_arena + dr->fp_snap - 1 : NULL;
 }
-static u32 fp_snap_code(const D3D12DrawRecord* dr)
+static u32 fp_snap_code_in(const D3D12DrawRecord* dr,const u8* arena)
 {
-    if(dr->fp_snap<17)return 0;
-    const u8* snap=fp_snap_ptr(dr);if(!snap)return 0;
+    if(dr->fp_snap<17||!arena)return 0;
+    const u8* snap=arena+dr->fp_snap-1;
     u32 header[4];memcpy(header,snap-16,sizeof header);
     return header[0]==FP_SNAP_MAGIC&&header[2]==dr->fp_bytes?header[1]:0;
+}
+static u32 fp_snap_code(const D3D12DrawRecord* dr)
+{
+    return fp_snap_code_in(dr,s_rb.fp_arena);
 }
 
 /* Per-frame copy of every vertex texture's texels (guest byte order, packed
@@ -10431,7 +10453,31 @@ static void prepass_range(u32 from, u32 to)
     if(s_frame_profile.active)s_frame_profile.prepass+=pose_time()-frame_profile_start;
 }
 
+/* Undo exactly what pose_interpolate_batch wrote into this batch's upload
+ * set: the same seen/changed tests select the same vertices and constant
+ * banks, and the frozen snapshots hold their recorded values. */
+static void pose_restore_batch(void)
+{
+    if((u32)s_rb.parity>=(u32)vp_sets()||!s_pose_written[s_rb.parity])return;
+    s_pose_written[s_rb.parity]=0;
+    const u32* seen_vertices=s_pose_seen_vertices_sets+(size_t)s_rb.parity*MAX_VERTICES;
+    const u32* seen_cameras=s_pose_seen_cameras_sets+(size_t)s_rb.parity*MAX_DRAWS;
+    const float* out_vertices=s_pose_out_vertices_sets+(size_t)s_rb.parity*MAX_VERTICES*3;
+    const float* out_cameras=s_pose_out_cameras_sets+(size_t)s_rb.parity*MAX_DRAWS*32;
+    const RsxPoseVertex* vertices=s_pose_vertices+(size_t)s_rb.parity*MAX_VERTICES;
+    const float* cameras=s_pose_cameras+(size_t)s_rb.parity*MAX_DRAWS*32;
+    u8* vb=(u8*)s_d3d.vp_vb_mapped+(size_t)s_rb.parity*MAX_VERTICES*256;
+    u8* cb=(u8*)s_d3d.vp_cb_mapped+(size_t)s_rb.parity*MAX_DRAWS*VP_CB_STRIDE;
+    for(u32 v=0;v<s_rb.pose_nv;v++) {
+        if(seen_vertices[v]!=1||!memcmp(vertices[v].xyz,out_vertices+(size_t)v*3,3*sizeof(float)))continue;
+        if(s_vf_mapped)rsx_pose_gpu_reset(s_vf_mapped+(u64)s_rb.parity*vf_parity_bytes()+VF_POSE_OFF+(size_t)v*vf_pose_stride());
+        else memcpy(vb+(size_t)v*256,vertices[v].xyz,3*sizeof(float));
+    }
+    for(u32 c=0;c<MAX_DRAWS;c++)if(seen_cameras[c]==1&&memcmp(cameras+(size_t)c*32,out_cameras+(size_t)c*32,32*sizeof(float)))
+        memcpy(cb+(size_t)c*VP_CB_STRIDE,cameras+(size_t)c*32,32*sizeof(float));
+}
 static int pose_overlap_on(void);
+int rsx_d3d12_pose_replay_enabled(void);
 static void render_frame_impl(void)
 {
     { static int announced; if(!announced&&opt30_mode()>=0){
@@ -10457,7 +10503,7 @@ static void render_frame_impl(void)
      * polygons). These workloads are a few draws/frame, so full serialisation
      * costs little. */
     /* Its own parity only: may overlap the previous batch's GPU work. */
-    const int pose_early = pose_overlap_on();
+    const int pose_early = pose_overlap_on() && !s_replay_pass && !s_rb.pose_done;
     if (pose_early) { pose_interpolate_batch(); frame_profile_mark(FP_POSE); }
     { double _tw = perf_on() ? perf_now() : 0.0;
       const double cv_gpu_start = cv_diag ? perf_now() : 0.0;
@@ -10465,7 +10511,8 @@ static void render_frame_impl(void)
       if (cv_diag) cv_wait = (perf_now() - cv_gpu_start) * 1000.0;
       if (perf_on()) s_perf_gpu += perf_now() - _tw; }
     frame_profile_mark(FP_ENTRY);
-    if (!pose_early) pose_interpolate_batch();
+    if (s_replay_pass) pose_restore_batch();   /* the GPU finished the interpolated draw */
+    else if (!pose_early && !s_rb.pose_done) pose_interpolate_batch();
     s_fsr_ready=0;s_fsr_depth_at=0xFFFFFFFFu;
     if(s_rb.present&&rsx_fsr31_requested()) {
         s_fsr_ready=rsx_fsr31_begin(s_d3d.device,s_display?s_disp_w:rs_dim(s_d3d.width,s_rs),
@@ -11947,7 +11994,9 @@ skip_dump_consider: ;
             s_fsr_ready&&s_fsr_depth_at!=0xFFFFFFFFu&&!s_cap_steps_on&&!fg_menu);
     }
 
-    off_rt_writeback_record();
+    /* A replay draws the same batch again: its targets went back to guest
+     * memory after the first draw; never write them over later guest data. */
+    if (!s_replay_pass) off_rt_writeback_record();
 
     if(pose_compute_mode()&&s_pose_compute.ready&&s_cap_steps_on)
         s_pose_compute_capture_ready=pc_record_capture(&s_pose_compute,s_d3d.device,s_d3d.cmd_list,s_rb.pose_nv);
@@ -12305,13 +12354,58 @@ static void rt_fence_wait(u64 v)
     }
 }
 
+/* CV_POSE_REPLAY (60 FPS, CPU interpolation, 3 upload sets): the guest keeps
+ * its native 30 Hz loop, one update and ONE draw per tick, instead of drawing
+ * every tick twice. Each batch is presented twice: on arrival with the
+ * interpolated pose (midpoint), then about half a guest frame later again
+ * with its recorded positions. CV_POSE_REPLAY=0 restores the guest's own
+ * second draw. FSR frame generation makes its own frames: no replay. */
+int rsx_d3d12_pose_replay_enabled(void)
+{
+    static int on = -1;
+    if (on < 0) {
+        const char *r = getenv("CV_POSE_REPLAY"), *fg = getenv("CV_FSR_FRAME_GENERATION");
+        on = vp_sets() == 3 && !(r && !strcmp(r, "0")) && !(fg && !strcmp(fg, "1"));
+        fprintf(stderr, "[POSE-REPLAY] v1 %s; native 30 Hz guest draws, each batch presented interpolated then recorded%c",
+                on ? "on" : "off", 10);
+    }
+    return on;
+}
+static double s_replay_cost = 0.008;
+/* Present the same batch again half a native 30 Hz tick after its first
+ * present. A fixed target, never the measured guest interval: the producer
+ * waits for this thread, so a wait that followed a slower guest would slow
+ * the guest further. Late (heavy frames): replay at once, never skip it. */
+static void render_replay_batch(u32 count, double first_present)
+{
+    const double start = first_present + 0.5 / 30.0 - s_replay_cost;
+    for (double now = pose_time(); now < start; now = pose_time()) {
+        const double left = start - now;
+        if (left > 0.002) Sleep((DWORD)((left - 0.0015) * 1000.0)); else YieldProcessor();
+    }
+    const double t0 = pose_time();
+    s_rb.count = count;
+    s_replay_pass = 1;
+    render_frame_impl();
+    s_replay_pass = 0;
+    const double cost = pose_time() - t0;
+    if (cost > 0 && cost < 0.05) s_replay_cost = s_replay_cost * 0.8 + cost * 0.2;
+}
+
 static DWORD WINAPI render_thread_main(LPVOID p)
 {
     (void)p;
     for (;;) {
         WaitForSingleObject(s_rt_work, INFINITE);
+        const u32 count = s_rb.count;
+        const int replay = s_rb.present && rsx_d3d12_pose_replay_enabled() && pose_overlap_on();
         ps3_tl_begin(4);
         render_frame_impl();
+        if (replay) {
+            frame_profile_mark(FP_BOOKKEEP);
+            frame_profile_finish();
+            render_replay_batch(count, pose_time());
+        }
         ps3_tl_end(4);
         frame_profile_mark(FP_BOOKKEEP);
         ps3_tl_begin(5);
@@ -12354,6 +12448,26 @@ static void render_frame(void)
             fprintf(stderr, "[D3D12] render thread %s%c", s_rt_async ? "ON" : "OFF (RSX_RENDER_THREAD=0)", 10);
         }
     }
+    /* Replay: interpolate the finished recording batch here, while the render
+     * thread may still draw the previous batch twice. The pose reads and
+     * writes only this batch's own upload set, which no GPU work uses yet. */
+    int pose_done = 0;
+    u32 pose_scene = 0;
+    if (s_rt_async && s_present_this_frame && s_pose_on && rsx_d3d12_pose_replay_enabled()) {
+        vf_flush();
+        RenderBatch next;
+        memset(&next, 0, sizeof next);
+        next.draws = s_d3d.draws;
+        next.count = s_d3d.draw_count;
+        next.parity = s_d3d.vp_parity;
+        next.fp_arena = s_fp_arena;
+        next.present = 1;
+        next.pose_stamp = s_pose_stamp;
+        next.pose_nv = s_d3d.vp_vb_offset / 256;
+        next.pose_scene = pose_scene = (u32)InterlockedCompareExchange(&s_pose_scene, 0, 0);
+        pose_interpolate_batch_for(&next);
+        pose_done = 1;
+    }
     /* Previous batch done on the CPU. With pose overlap the GPU may still
      * read the set recording moves to: wait for it after handing over. */
     u64 gpu_pending = 0;
@@ -12370,7 +12484,8 @@ static void render_frame(void)
     s_rb.vtex_arena = s_vtex_arena;
     s_rb.present    = s_present_this_frame;
     s_rb.pose_stamp=s_pose_stamp;s_rb.pose_nv=s_d3d.vp_vb_offset/256;
-    s_rb.pose_scene=(u32)InterlockedCompareExchange(&s_pose_scene,0,0);
+    s_rb.pose_scene=pose_done?pose_scene:(u32)InterlockedCompareExchange(&s_pose_scene,0,0);
+    s_rb.pose_done=pose_done;
     s_rb.profile_producer=profile&&profile_released?profile_ready-profile_released:0;
     s_rb.profile_backpressure=profile_wait;
     /* GetThreadTimes is cumulative for one host thread. Never subtract across

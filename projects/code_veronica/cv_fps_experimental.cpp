@@ -26,6 +26,7 @@ static constexpr uint32_t bio_update_address=0x00210070;
 void CV_BIO_UPDATE(ppu_context*);
 extern "C" void ppu_register_function(uint64_t,void (*)(ppu_context*));
 extern "C" void rsx_d3d12_pose_scene(uint32_t);
+extern "C" int rsx_d3d12_pose_replay_enabled(void);
 namespace {
 // Publish pacing to a possible engine worker as one consistent snapshot.
 std::atomic<uint64_t> timing{0};
@@ -39,6 +40,12 @@ bool enabled() {
     static const bool on=[] {const char* e=std::getenv("CV_FPS_TEST_60");return e&&std::strcmp(e,"1")==0;}();
     return on;
 }
+// The renderer presents every native 30 Hz frame twice (interpolated, then
+// recorded): the guest keeps its own pacing, one update and one draw a tick.
+bool replay() {
+    static const bool on=rsx_d3d12_pose_replay_enabled()!=0;
+    return on;
+}
 }
 void CV_FN_FRAME_PACE(ppu_context* ctx) {
     if(!enabled()) { CV_OG_FRAME_PACE(ctx);return; }
@@ -50,7 +57,7 @@ void CV_FN_FRAME_PACE(ppu_context* ctx) {
     // for one full logical tick. Select the original variable-step path,
     // with a 60 FPS cap: target delta is 30/60 = 0.5 logical ticks.
     // Keep the base at 30 so elapsed game time is not doubled.
-    const bool change=base==30.0f && cap>=30.0f && cap<=3000.0f && mode<=1;
+    const bool change=base==30.0f && cap>=30.0f && cap<=3000.0f && mode<=1 && !replay();
     if(change) {write_float(object+0x64,60.0f);vm_write8(object+0x68,0);}
     static bool announced=false;
     if(!announced) {
@@ -79,13 +86,19 @@ namespace {
 void bio_update_30hz(ppu_context* ctx) {
     static thread_local cv_fps::LogicClock clock;
     const uint64_t sample=timing.load(std::memory_order_acquire);
-    if(!(sample>>32)) {clock.reset();CV_BIO_UPDATE(ctx);return;}
-    uint32_t bits=static_cast<uint32_t>(sample);float elapsed_ticks;std::memcpy(&elapsed_ticks,&bits,4);
-    const unsigned count=clock.advance(elapsed_ticks);
-    // The virtual method is void. Skipped updates leave the incoming guest
-    // context alone; each executed update gets the same incoming arguments.
-    const ppu_context incoming=*ctx;
-    for(unsigned i=0;i<count;i++) {*ctx=incoming;CV_BIO_UPDATE(ctx);}
+    unsigned count=1;float elapsed_ticks=1;
+    if(!(sample>>32)) {
+        // Native pacing (replay or unrecognised object): one update a frame.
+        clock.reset();CV_BIO_UPDATE(ctx);
+        if(!replay())return;
+    }else {
+        uint32_t bits=static_cast<uint32_t>(sample);std::memcpy(&elapsed_ticks,&bits,4);
+        count=clock.advance(elapsed_ticks);
+        // The virtual method is void. Skipped updates leave the incoming guest
+        // context alone; each executed update gets the same incoming arguments.
+        const ppu_context incoming=*ctx;
+        for(unsigned i=0;i<count;i++) {*ctx=incoming;CV_BIO_UPDATE(ctx);}
+    }
     static const bool interpolate=[] {const char* e=std::getenv("CV_RENDER_INTERPOLATION");return e&&std::strcmp(e,"1")==0;}();
     if(interpolate) {
         static const uint32_t markers[]={0x3D650,0x3C4FC,0x3A4D0,0x3E814};
