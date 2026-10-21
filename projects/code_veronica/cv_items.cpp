@@ -104,13 +104,28 @@ Inventory read() {
     const int equipped=int32_t(vm_read32(base));
     out.equipped=equipped>=1&&equipped<=kEntries?equipped:0;
     for(int i=0;i<kEntries;i++)out.entry[i]=vm_read32(base+4+i*4);
-    // As cv_test_tools' active_game(): the game's task word runs the room
-    // (0x80) and none of the inventory/map/file/option screens, the save
-    // screen, a door, an event or a fade (0x1803F, +70/+74 flags).
-    const uint32_t tasks=vm_read32(state+0x64)&~vm_read32(state+0x68);
-    out.playing=int32_t(vm_read32(CV_SRT_HEALTH))>0&&(tasks&0x80)&&!(tasks&0x1803F)&&
-        !(vm_read32(state+0x74)&7)&&!(vm_read32(state+0x70)&0x1C040008u);
+    // Putting an item in writes one entry between two game frames and moves
+    // nothing, so it only needs the room task running (0x80) and none of the
+    // other screens (tasks 0x1803F; +70 0x10000000, 0x08000000 typewriter).
+    // The game's inventory screen is allowed on request, though it pauses
+    // the room task: task 0x200 runs and +70 0x8 is set (JP log, 0x80
+    // blocked, +70 00015408). It shows the live entries. The rest of the
+    // game's own "may open a menu" mask (EU func_001AEED4: +70 0x04040008,
+    // +74 & 7: events, check points, fades) refused it by typewriters and
+    // elsewhere; a removal, which moves the entries below, still waits for it
+    // outside the inventory screen, as cv_test_tools' active_game().
+    const uint32_t tasks=vm_read32(state+0x64)&~vm_read32(state+0x68),flags=vm_read32(state+0x70);
+    const bool inventory_screen=(tasks&0x200)&&!(tasks&0x80)&&(flags&0x8);
+    out.writable=int32_t(vm_read32(CV_SRT_HEALTH))>0&&((tasks&0x80)||inventory_screen)&&!(tasks&0x1803F)&&!(flags&0x18000000u);
+    out.playing=out.writable&&(tasks&0x80)&&!(vm_read32(state+0x74)&7)&&!(flags&0x1C040008u);
+    out.can_remove=out.playing||(out.writable&&inventory_screen);
     return out;
+}
+void report_refusal(const char* what) {
+    const uint32_t state=state_base();
+    if(!mapped(state,0x300)||!mapped(CV_SRT_HEALTH,4))return;
+    std::fprintf(stderr,"[ITEMS %s] %s refused: tasks=%08X blocked=%08X flags=%08X/%08X health=%d room=%04X\n",CV_TITLE_ID,what,
+        vm_read32(state+0x64),vm_read32(state+0x68),vm_read32(state+0x70),vm_read32(state+0x74),int(int32_t(vm_read32(CV_SRT_HEALTH))),vm_read16(CV_SRT_ROOM));
 }
 int clamp_quantity(int id,int quantity) {
     const Info* item=info(id);if(!item)return 0;
@@ -123,7 +138,7 @@ uint32_t encode(int id,int quantity) {
 int place(const Inventory& inventory,int id,int target,Result& why) {
     why=R_NONE;
     if(!info(id)||target<0||target>inventory.capacity) {why=R_BAD;return -1;}
-    if(!inventory.valid||!inventory.playing) {why=R_NOT_PLAYING;return -1;}
+    if(!inventory.valid||!inventory.writable) {why=R_NOT_PLAYING;return -1;}
     // An empty entry chosen past the list's end still goes to its end: the
     // list stays packed, as the game's own removal keeps it.
     if(target>0&&!inventory.empty(target)) {
@@ -195,7 +210,7 @@ void frame() {
     for(const auto& r:work) {
         if(!g_enabled) {publish(R_DISABLED,r);continue;}
         const Inventory now=read();
-        if(!now.valid||!now.playing) {publish(R_NOT_PLAYING,r);continue;}
+        if(!now.valid||!(r.remove?now.can_remove:now.writable)) {report_refusal(r.remove?"removal":"item");publish(R_NOT_PLAYING,r);continue;}
         Inventory next=now;const Result result=change(next,r);
         if(result!=R_DONE) {publish(result,r);continue;}
         const uint32_t base=CV_SRT_INVENTORY+uint32_t(r.character)*0x40;

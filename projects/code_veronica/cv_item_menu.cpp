@@ -221,7 +221,7 @@ bool apply(View& v,Action a) {
 cv_items::Result submit(View& v) {
     if(v.focus==2) {
         const auto& inv=v.inventory;
-        if(!inv.valid||!inv.playing){v.status=t(v,tx::NOT_PLAYING);v.tone=BAD;return cv_items::R_NOT_PLAYING;}
+        if(!inv.valid||!inv.can_remove){cv_items::report_refusal("removal");v.status=t(v,tx::NOT_PLAYING);v.tone=BAD;return cv_items::R_NOT_PLAYING;}
         if(inv.is_equipped(v.slot)){v.status=t(v,tx::NO_REMOVE_EQUIPPED);v.tone=BAD;return cv_items::R_EQUIPPED;}
         if(!removable(inv,v.slot)){v.status=t(v,tx::REMOVE_PICK);v.tone=WARN;return cv_items::R_BAD;}
         const int gone=inv.id(v.slot);
@@ -240,6 +240,7 @@ cv_items::Result submit(View& v) {
     const int entry=v.target<0?-1:cv_items::place(inv,id,v.target,why);
     if(entry<0) {
         if(v.target<0)why=cv_items::R_FULL;
+        if(why==cv_items::R_NOT_PLAYING)cv_items::report_refusal("item");
         v.status=t(v,why==cv_items::R_FULL?tx::FULL:why==cv_items::R_EQUIPPED?tx::NO_EQUIPPED:tx::NOT_PLAYING);
         v.tone=BAD;return why;
     }
@@ -337,7 +338,7 @@ void draw(Graphics& g,View& v,const std::wstring& game) {
     }
     const Color tones[]={C_DIM,C_OK,C_AMBER,C_RED_HI};
     if(!v.status.empty())p.text(v.status,RectF(LX,y,LW,20),13.5f,tones[v.tone],true);
-    else if(inv.valid&&!inv.playing)p.text(t(v,tx::NOT_PLAYING),RectF(LX,y,LW,20),13.5f,C_AMBER,true);
+    else if(inv.valid&&!inv.writable)p.text(t(v,tx::NOT_PLAYING),RectF(LX,y,LW,20),13.5f,C_AMBER,true);
     else if(inv.valid&&inv.first_empty()<0)p.text(t(v,tx::FULL),RectF(LX,y,LW,20),13.5f,C_AMBER,true);
 
     // The current inventory: the fixed slot, then the entries in two columns.
@@ -398,7 +399,7 @@ void draw(Graphics& g,View& v,const std::wstring& game) {
     row(1,py+42,t(v,tx::SLOT),where,info&&!removing&&!targets(v).empty(),HIT_TARGET_PREV,HIT_TARGET_NEXT);
     {
         // Removing turns the button into the removal's, on the chosen space.
-        const bool ready=removing?inv.valid&&inv.playing&&removable(inv,v.slot):info&&inv.valid&&inv.playing&&v.target>=0&&!targets(v).empty();
+        const bool ready=removing?inv.valid&&inv.can_remove&&removable(inv,v.slot):info&&inv.valid&&inv.writable&&v.target>=0&&!targets(v).empty();
         const bool on=removing||(panel_open&&v.row==2);RectF r(RX,py+86,RW,40);
         const Color fill=removing?Color(255,120,20,24):on?C_RED_HI:C_RED;
         p.panel(r,ready?fill:Color(255,70,40,40),on&&ready?Color(255,255,200,200):Color(0,0,0,0),5,1.5f);

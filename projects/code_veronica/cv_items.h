@@ -14,8 +14,10 @@
  * open, so each choice joins a queue and the menu shows the inventory as it
  * will be. frame(), on the PPU thread at the start of the game's frame
  * function, takes the queue once the game runs again and, for each entry,
- * checks again that a live character is in plain gameplay (no menu, load,
- * save, door or cutscene) and that the entry is still what the menu saw.
+ * checks again that a live character is in a running room with none of the
+ * game's screens open but its inventory (a removal: that screen or plain
+ * gameplay, no door, event or fade) and that the entry is still what the
+ * menu saw.
  * One word per item put in; a removal moves the entries below it up, as the
  * game does. Nothing else in guest memory changes. */
 #include <atomic>
@@ -43,7 +45,9 @@ constexpr int kEntries = 11;   // entry 0 is the fixed slot
 
 struct Inventory {
     bool valid = false;        // a live character with a loaded room
-    bool playing = false;      // ... and in plain gameplay: a write is allowed
+    bool writable = false;     // ... its room running (or the game's inventory screen), no other screen: an item may be put in
+    bool can_remove = false;   // ... and in plain gameplay or the game's inventory screen: a removal too
+    bool playing = false;      // ... in plain gameplay, no screen at all
     int character = -1;        // 0 Claire, 1 Chris, 2 Steve, 3 Wesker
     int capacity = 8;          // usable entries after the fixed one: 8 or 10
     int equipped = 0;          // 0 none, else entry + 1
@@ -59,13 +63,15 @@ struct Inventory {
 // Reads the live inventory. Safe from any thread: reads only.
 Inventory read();
 uint32_t state_base();
+// One stderr line with the words read() judged by, when the menu refuses.
+void report_refusal(const char* what);
 
 enum Result {
     R_NONE, R_QUEUED, R_DONE,
     R_FULL,          // no empty entry, and no entry chosen to replace
     R_EQUIPPED,      // the chosen entry holds the equipped weapon
     R_BAD,           // unknown item, quantity or entry
-    R_NOT_PLAYING,   // menu, loading, cutscene, no character
+    R_NOT_PLAYING,   // a game screen, loading, no character (removal: also a door or event)
     R_CHANGED,       // another character, or the entry changed meanwhile
     R_DISABLED,      // the launcher option is off
     R_BUSY           // the queue is full

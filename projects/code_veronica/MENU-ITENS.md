@@ -72,19 +72,49 @@ um aviso no canto do jogo diz o que entrou (ou que nada entrou). A gravação
 acontece no quadro do jogo, na thread da PPU: `cv_items::frame()` no início de `TEST_FRAME`
 (cv_test_tools.cpp, a função de quadro já usada pelos mapas F7). Antes de
 gravar confere de novo: personagem vivo com a sala carregada (assinatura RDX
-por região, como o SRT), tarefa da sala ativa e nenhuma tela de inventário,
-mapa, arquivo, opções, save, porta, evento ou fade (mesmas máscaras do F7),
-mesmo personagem do pedido, a entrada igual à que o menu mostrou (vazia: ainda
-a primeira vazia da lista), dentro da capacidade e não a equipada. Qualquer
+por região, como o SRT), tarefa da sala ativa (0x80) ou a tela de inventário
+do jogo, nenhuma outra tela (tarefas 0x1803F; `+70` 0x10000000 e 0x08000000
+máquina de escrever), mesmo
+personagem do pedido, a entrada igual à que o menu mostrou (vazia: ainda a
+primeira vazia da lista), dentro da capacidade e não a equipada. Qualquer
 diferença: aquele item não é gravado e o aviso diz. Uma palavra de 4 bytes por
 item, mais nada.
+
+**Colocar em qualquer lugar.** Antes valia para colocar a máscara inteira que
+o jogo usa para decidir se pode abrir um menu (EU func_001AEED4:
+`+70 & 0x1C040008`, `+74 & 7`). Os bits de evento, ponto de checagem e fade
+(`+70` 0x04040008, `+74` 1/2/4) são os únicos da regra antiga que não são
+tela do jogo; perto de máquinas de escrever e em outros pontos do mapa o menu
+abria mas recusava colocar (qual bit exato ainda não foi visto no log). Colocar ou
+substituir grava uma palavra entre dois quadros, na thread da PPU, sem mover as
+outras entradas, então agora só espera as telas acima. Se um evento do jogo já
+tinha escolhido o espaço (por exemplo, pegar um item do chão com a pergunta na
+tela), no máximo ele grava por cima daquele espaço. Remover move as entradas de
+baixo e continua exigindo a máscara inteira (como `active_game()` do F7),
+exceto com a tela de inventário do jogo aberta.
+
+**Com o inventário do jogo aberto** (a pedido do usuário). Visto no log JP com
+a tela ITEM aberta: tarefas `0073DFC0`, bloqueios `0003DC80` (a tarefa da sala
+0x80 pausada, a 0x200 rodando), `+70` `00015408` (bit 0x8), `+74` 0x40. A
+regra: tarefa 0x200 ativa, 0x80 parada e `+70 & 8`. (A tarefa 0x10000 com
+`+70` 0x10000000 é outra tela e continua bloqueada.) Abrir o inventário do
+jogo, depois o F6, permite colocar e tirar itens; a tela do jogo desenha as
+entradas vivas. Aí remover não espera os bits de evento/fade. O cursor da tela nativa pode ficar
+num espaço que mudou ou esvaziou; fechar e abrir o inventário atualiza tudo.
+Save e as demais telas continuam bloqueados. `read().playing` (usado
+pela aparência) não mudou: continua falso com qualquer tela aberta.
+Quando o menu ou o quadro recusa, o log ganha uma linha
+`[ITEMS <id>] item refused: tasks=… blocked=… flags=+70/+74 health=… room=…`
+para identificar o bit se aparecer outro lugar que recusa.
 
 ## Testes
 
 `CV_ITEMS_TESTS=1` em build-release.cmd (EU/JP/US com CV_BUILD_JP/US):
 tests/test_items.cpp com memória fictícia nos endereços de cada região.
 Catálogo e nomes nas 13 línguas, codificação das entradas, leitura (quatro
-personagens, 8/10 espaços, menus/portas/eventos/morte), regras de espaço
+personagens, 8/10 espaços, mapa/arquivo/opções/save/morte recusam; bits
+de evento, ponto de checagem e fade aceitam colocar mas não remover; tela de
+inventário do jogo aceita os dois), regras de espaço
 (cheio, equipado, além da capacidade), gravação de uma só palavra, opção
 desligada (fila descartada), personagem trocado, entrada mudada, vários itens
 na fila num quadro, fila cheia, resumo do aviso e navegação.

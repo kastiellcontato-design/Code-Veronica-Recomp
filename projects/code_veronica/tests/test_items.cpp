@@ -47,6 +47,11 @@ static void fill(int character,std::initializer_list<uint32_t> words,int equippe
     vm_write32(CV_SRT_INVENTORY+character*0x40,uint32_t(equipped));
     int i=0;for(uint32_t w:words)vm_write32(entry_address(character,i++),w);
 }
+// The game's inventory screen, as a JP run logged it.
+static void inventory_screen() {
+    vm_write32(state+0x64,0x0073DFC0);vm_write32(state+0x68,0x0003DC80);
+    vm_write32(state+0x70,0x00015408);vm_write32(state+0x74,0x40);
+}
 static unsigned seen_serial=0;
 static Outcome last() {const auto all=outcomes(seen_serial);assert(!all.empty());return all.back();}
 // Plan on the live inventory as the menu does, queue, run one game frame.
@@ -96,14 +101,23 @@ static void check_read() {
     begin(0);vm_write32(CV_SRT_RDX,0x12345);assert(!read().valid);          // no room loaded
     begin(0);vm_write8(CV_SRT_CHARACTER,7);assert(!read().valid);
     begin(1);vm_write32(CV_SRT_RDX,0x3D650);assert(!read().valid);          // Claire's room marker, Chris
-    // Menus, saves, doors, events, fades, death: valid, not playing.
-    const struct {uint32_t offset,value;} busy[]={{0x64,0x81},{0x64,0x8080},{0x64,0x10080},{0x64,0},{0x74,1},{0x74,4},
-        {0x70,0x08},{0x70,0x00040000},{0x70,0x10000000}};
-    for(const auto& b:busy){begin(0);vm_write32(state+b.offset,b.value);const auto inv=read();assert(inv.valid&&!inv.playing);}
-    begin(0);vm_write32(state+0x68,0x80);assert(!read().playing);           // the room task blocked
-    begin(0);vm_write32(state+0x64,0x81);vm_write32(state+0x68,0x01);assert(read().playing);   // blocked bits do not count
-    begin(0);vm_write32(CV_SRT_HEALTH,0);assert(!read().playing);
-    begin(0);vm_write32(CV_SRT_HEALTH,0xFFFFFFF0u);assert(!read().playing);
+    // Screens (map, file, options, save), no room, death: valid, nothing may be written.
+    const struct {uint32_t offset,value;} busy[]={{0x64,0x81},{0x64,0x8080},{0x64,0x10080},{0x64,0},{0x70,0x10000000},{0x70,0x08000000}};
+    for(const auto& b:busy){begin(0);vm_write32(state+b.offset,b.value);const auto inv=read();assert(inv.valid&&!inv.writable&&!inv.can_remove&&!inv.playing);}
+    // The game's inventory screen (JP log): the room task blocked, task 0x200
+    // and +70 0x8. Put in and taken out, not plain gameplay.
+    begin(0);inventory_screen();{const auto inv=read();assert(inv.writable&&inv.can_remove&&!inv.playing);}
+    begin(0);inventory_screen();vm_write32(state+0x70,0x00015400);assert(!read().writable);   // 0x200 without the screen's bit
+    begin(0);vm_write32(state+0x64,0x280);vm_write32(state+0x70,0x8);assert(!read().can_remove);   // the bit while the room runs: an event
+    // Events, check points (typewriters), doors, fades: an item may be put
+    // in, nothing removed.
+    const struct {uint32_t offset,value;} event[]={{0x74,1},{0x74,2},{0x74,4},{0x70,0x08},{0x70,0x00040000},{0x70,0x04000000}};
+    for(const auto& b:event){begin(0);vm_write32(state+b.offset,b.value);const auto inv=read();assert(inv.valid&&inv.writable&&!inv.can_remove&&!inv.playing);}
+    begin(0);assert(read().playing&&read().can_remove);
+    begin(0);vm_write32(state+0x68,0x80);assert(!read().writable);          // the room task blocked
+    begin(0);vm_write32(state+0x64,0x81);vm_write32(state+0x68,0x01);assert(read().playing&&read().writable);   // blocked bits do not count
+    begin(0);vm_write32(CV_SRT_HEALTH,0);assert(!read().writable);
+    begin(0);vm_write32(CV_SRT_HEALTH,0xFFFFFFF0u);assert(!read().writable);
 }
 static void check_place() {
     Result why;
@@ -121,7 +135,8 @@ static void check_place() {
     assert(place(inv,0x15,5,why)==5);
     begin(1,true);fill(1,{0,0x00080000,0x0005000F,0x000C001E,0x00140001,0x00150001,0x00160001,0x00170001,0x00430001},2);
     assert(place(read(),0x15,0,why)==9);                      // the Side Pack's two entries
-    begin(0);vm_write32(state+0x74,2);assert(place(read(),0x15,0,why)<0&&why==R_NOT_PLAYING);
+    begin(0);vm_write32(state+0x74,2);assert(place(read(),0x15,0,why)==1&&why==R_NONE);           // a fade: still placed
+    begin(0);vm_write32(state+0x70,0x08000000);assert(place(read(),0x15,0,why)<0&&why==R_NOT_PLAYING);   // the save screen
 }
 static void check_writes() {
     seen_serial=outcome_serial();
@@ -168,6 +183,15 @@ static void check_writes() {
     // A screen opened before the frame: no write.
     begin(0);fill(0,{0x00370001});assert(request(0,0x15,1,1,0)==R_QUEUED);
     vm_write32(state+0x64,0x82);before=memory;frame();assert(memory==before&&last().result==R_NOT_PLAYING);
+    // By a typewriter or in an event: the item goes in, a removal waits.
+    begin(0);fill(0,{0x00370001,0x000C001E});vm_write32(state+0x70,0x00040008);vm_write32(state+0x74,4);
+    assert(run(0,0x15,1,0)==R_DONE&&vm_read32(entry_address(0,2))==0x00150001u);
+    assert(request_remove(0,1,0x000C001E)==R_QUEUED);before=memory;frame();assert(memory==before&&last().result==R_NOT_PLAYING);
+    // With the game's inventory screen open: both.
+    begin(0);fill(0,{0x00370001,0x000C001E});inventory_screen();
+    assert(run(0,0x15,1,0)==R_DONE&&vm_read32(entry_address(0,2))==0x00150001u);
+    assert(request_remove(0,1,0x000C001E)==R_QUEUED);frame();
+    assert(last().result==R_DONE&&vm_read32(entry_address(0,1))==0x00150001u&&vm_read32(entry_address(0,2))==0);
     // Another character by the frame, or the entry changed meanwhile: no write.
     begin(0);fill(0,{0x00370001});assert(request(1,0x15,1,1,0)==R_QUEUED);before=memory;frame();assert(memory==before&&last().result==R_CHANGED);
     begin(0);fill(0,{0x00370001,0x000C001E});
