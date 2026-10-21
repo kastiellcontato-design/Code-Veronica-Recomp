@@ -1073,6 +1073,8 @@ static void pose_init_recording(void) {
     {const char* disabled=getenv("CV_POSE_NOVERTEX_VALIDATION_CACHE");s_pose_history.vertex_validation_cache_disabled=disabled&&*disabled=='1';}
     {const char* cap=getenv("CV_POSE_CAP_PRECHECK");s_pose_history.cap_precheck_disabled=cap&&!strcmp(cap,"0");}
     {const char* off=getenv("CV_POSE_REPEAT_WORK");s_pose_history.repeat_work_disabled=off&&!strcmp(off,"0");}
+    {const char* stream=getenv("CV_POSE_STREAM_VECTORS");s_pose_history.stream_vectors=!stream||strcmp(stream,"0");}
+    fprintf(stderr,"[POSE-STREAM] v1 %s; exact position packing and stationary checks\n",s_pose_history.stream_vectors?"SSE2":"original");
     s_pose_on=1;
     if(pose_compute_mode())fprintf(stderr,"[POSE-COMPUTE] v42 enabled; GPU geometry coherence/merge/alias/seams/output; CPU matching/topology/cameras; logic 30 Hz, target 60 Hz\n");
     else fprintf(stderr,"[POSE] v20 final position blend=%s; CPU matching/alias/seam safeguards; logic 30 Hz, target 60 Hz\n",s_pose_gpu_blend?"GPU":"CPU");

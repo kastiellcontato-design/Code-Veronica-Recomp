@@ -119,6 +119,7 @@ typedef struct {
     RsxPoseCameraMemo* position_memo; /* same pair/epoch layout, transform holds the exact sample sum */
     uint32_t position_hits,position_misses,position_uncached;
     int position_memo_disabled;
+    int stream_vectors; /* exact position packing and stationary checks */
     RsxPoseSamples* search_samples;
     uint32_t* search_epochs;
     uint32_t search_candidates,search_pruned,sample_groups_reused,search_blocks_pruned;
@@ -547,6 +548,48 @@ static inline int rsx_pose_block_cannot_win(const RsxPoseBlock* block,const floa
  * with the same complete camera. Not a proximity test or a temporal source.
  * A verified match is a current-position constraint, never an invented pose.
  * Hash/chain storage is rebuilt by the ordinary matcher immediately after. */
+/* Pack four strided capture records into twelve contiguous position floats.
+ * Integer shuffles preserve every bit, including signed zero. Loads include
+ * only xyz/uv of each complete record, never the next record or allocation.
+ * No identity, correspondence, camera or fallback decision is cached here. */
+static inline void rsx_pose_pack_positions(float* out,const RsxPoseVertex* in,uint32_t count,int vectors) {
+    uint32_t i=0;
+#ifdef RSX_POSE_VECTOR_SAMPLES
+    if(vectors)for(;i+4<=count;i+=4) {
+        __m128i a=_mm_loadu_si128((const __m128i*)(in+i));
+        __m128i b=_mm_loadu_si128((const __m128i*)(in+i+1));
+        __m128i c=_mm_loadu_si128((const __m128i*)(in+i+2));
+        __m128i d=_mm_loadu_si128((const __m128i*)(in+i+3));
+        __m128i x=_mm_or_si128(_mm_srli_si128(_mm_slli_si128(a,4),4),_mm_slli_si128(b,12));
+        __m128i y=_mm_or_si128(_mm_srli_si128(_mm_slli_si128(b,4),8),_mm_slli_si128(c,8));
+        __m128i z=_mm_or_si128(_mm_srli_si128(_mm_slli_si128(c,4),12),_mm_slli_si128(d,4));
+        _mm_storeu_si128((__m128i*)(out+(size_t)i*3),x);
+        _mm_storeu_si128((__m128i*)(out+(size_t)i*3+4),y);
+        _mm_storeu_si128((__m128i*)(out+(size_t)i*3+8),z);
+    }
+#else
+    (void)vectors;
+#endif
+    for(;i<count;i++)memcpy(out+(size_t)i*3,in[i].xyz,3*sizeof(float));
+}
+static inline int rsx_pose_stationary_stream(const float* a,const float* b,uint32_t count,int vectors) {
+    uint32_t i=0;
+#ifdef RSX_POSE_VECTOR_SAMPLES
+    if(vectors) {
+        const __m128 mask=_mm_castsi128_ps(_mm_set1_epi32(0x7fffffff));
+        const __m128 limit=_mm_set1_ps(1e-5f);
+        for(;i+4<=count;i+=4) {
+            __m128 delta=_mm_and_ps(_mm_sub_ps(_mm_loadu_ps(a+i),_mm_loadu_ps(b+i)),mask);
+            /* Ordered > retains the scalar fabsf(delta)>limit semantics. */
+            if(_mm_movemask_ps(_mm_cmpgt_ps(delta,limit)))return 0;
+        }
+    }
+#else
+    (void)vectors;
+#endif
+    for(;i<count;i++)if(fabsf(a[i]-b[i])>1e-5f)return 0;
+    return 1;
+}
 static inline int rsx_pose_stationary_endpoints(const float* a,const float* b,uint32_t count) {
     for(uint32_t k=0;k<count;k++)if(fabsf(a[k]-b[k])>1e-5f)return 0;return 1;
 }
@@ -560,8 +603,8 @@ static inline void rsx_pose_carry_stationary(RsxPoseHistory* h,const RsxPoseFram
         const RsxPoseSnapshot* old=snapshots[frame];if(old->scene!=f->scene)continue;
         memset(h->heads,0xFF,(size_t)h->buckets*sizeof(int32_t));
         for(uint32_t i=0;i<old->nd;i++)if(old->draws[i].count&&
-            (old->stationary[i]||rsx_pose_stationary_endpoints(old->xyz+(size_t)old->draws[i].first*3,
-                old->old_xyz+(size_t)old->draws[i].first*3,old->draws[i].count*3))) {
+            (old->stationary[i]||rsx_pose_stationary_stream(old->xyz+(size_t)old->draws[i].first*3,
+                old->old_xyz+(size_t)old->draws[i].first*3,old->draws[i].count*3,h->stream_vectors))) {
             const RsxPoseDraw* d=old->draws+i;
             uint32_t bucket=rsx_pose_bucket(h,rsx_pose_anchor_hash(d->count,old->xyz+(size_t)d->first*3));
             h->next[i]=h->heads[bucket];h->heads[bucket]=(int32_t)i;
@@ -639,7 +682,7 @@ static inline int rsx_pose_prepare(RsxPoseHistory* h,const RsxPoseFrame* f,doubl
         float *xyz=out->xyz+(size_t)d->first*3,*old=out->old_xyz+(size_t)d->first*3;
         float *cam=out->cameras+(size_t)j*32,*oldcam=out->old_cameras+(size_t)j*32;
         out->nv+=b->count;
-        for(uint32_t k=0;k<b->count;k++)memcpy(xyz+(size_t)k*3,f->vertices[b->first+k].xyz,3*sizeof(float));
+        rsx_pose_pack_positions(xyz,f->vertices+b->first,b->count,h->stream_vectors);
         memcpy(cam,f->cameras+(size_t)b->cb*32,32*sizeof(float));
         /* Fill fallback history only when needed. A successful match below
          * always overwrites these buffers with previous-frame history. */
@@ -711,7 +754,7 @@ static inline int rsx_pose_prepare(RsxPoseHistory* h,const RsxPoseFrame* f,doubl
         /* Only a successful temporal match can establish a stationary
          * surface. Unmatched/newly-visible draws with old==new are NOT proof.
          * A repeated animated midpoint still has old!=new, so is not pinned. */
-        h->stationary_draws[j]|=(uint8_t)rsx_pose_stationary_endpoints(old,xyz,b->count*3);
+        h->stationary_draws[j]|=(uint8_t)rsx_pose_stationary_stream(old,xyz,b->count*3,h->stream_vectors);
         out->stationary[j]=h->stationary_draws[j];
         if(tr->active) {
             /* Midpoint on arrival, endpoint after one 60 Hz refresh. Real
