@@ -12243,6 +12243,13 @@ static void render_wait_cpu_idle(void)
         MSG m; PeekMessageA(&m, NULL, 0, 0, PM_NOREMOVE | PM_QS_SENDMESSAGE);
     }
 }
+static volatile LONG64 s_rt_fence_pending;
+static void rt_fence_wait(u64 v);
+static void render_wait_idle(void)
+{
+    render_wait_cpu_idle();
+    if (s_rt_idle) rt_fence_wait((u64)s_rt_fence_pending);   /* the GPU part, see pose_overlap_on */
+}
 
 void ps3_tl_begin(int ev);   /* PS3_TIMELINE, cellGcmSys.c */
 void ps3_tl_end(int ev);
@@ -12315,13 +12322,6 @@ static DWORD WINAPI render_thread_main(LPVOID p)
         SetEvent(s_rt_idle);
     }
     return 0;
-}
-static volatile LONG64 s_rt_fence_pending;
-static void rt_fence_wait(u64 v);
-static void render_wait_idle(void)
-{
-    render_wait_cpu_idle();
-    if (s_rt_idle) rt_fence_wait((u64)s_rt_fence_pending);   /* the GPU part, see pose_overlap_on */
 }
 
 /* Bumped whenever the recording draw list starts over (render_frame). */
