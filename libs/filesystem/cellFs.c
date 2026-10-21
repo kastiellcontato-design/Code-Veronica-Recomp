@@ -6,6 +6,7 @@
  */
 
 #include "cellFs.h"
+#include "vfs_overlay.h"
 #include "../../runtime/platform/win32_backtrace.h"   /* RtlCaptureStackBackTrace / GetModuleHandleA on POSIX */
 #include "ps3emu/endian.h"
 #include <stdio.h>
@@ -626,8 +627,10 @@ s32 cellFsStat(const char* path, CellFsStat* sb)
     if (translate_path(gpath(path), host_path, sizeof(host_path)) != 0)
         return (s32)CELL_ENOENT;
 
+    char overlay_path[CELL_FS_MAX_FS_PATH_LENGTH];
+    const char* stat_path=vfs_overlay_resolve(host_path,overlay_path,sizeof overlay_path);
     HOST_STAT_T hst;
-    if (HOST_STAT(host_path, &hst) != 0) {
+    if (HOST_STAT(stat_path, &hst) != 0) {
         printf("[cellFs] Stat: host stat('%s') failed: %s\n", host_path, strerror(errno));
         return (s32)CELL_ENOENT;
     }

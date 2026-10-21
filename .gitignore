@@ -154,3 +154,8 @@ projects/code_veronica/ps_*.hlsl
 projects/code_veronica/tools/__pycache__/
 # Official redistributable AMD runtime, pinned with license and SHA256.
 !third_party/amd_fsr31/bin/amd_fidelityfx_framegeneration_dx12.dll
+
+# Locally derived character textures and executable rollback copies.
+projects/*/appearance-assets/*.arc
+projects/*/appearance-backups/
+projects/*/appearance-assets/humanoids/

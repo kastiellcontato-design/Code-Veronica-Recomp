@@ -568,13 +568,25 @@ static u32 rs_dim(u32 v, float sc) { return sc == 1.0f ? v : (u32)((float)v * sc
  * fade it should darken with) or lingered after its submitter stopped (a
  * menu the game no longer runs). A few slots, by flip, so the game can
  * build the next frame's batch while this one is still being rendered. */
-#define UI_MAX_QUADS 131072u
+/* The appearance preview plus all text can exceed 131072 quads at some
+ * angles. Never drop the entire menu merely because the model rotates. */
+#define UI_MAX_QUADS 262144u
 #define UI_SLOTS 8u
 u32 cellGcm_flip_submit_count(void);
 static SRWLOCK s_ui_lock = SRWLOCK_INIT;
 static rsx_ui_quad s_ui_quads[UI_SLOTS][UI_MAX_QUADS];
 static u32 s_ui_count[UI_SLOTS], s_ui_frame[UI_SLOTS];
 static uint8_t s_ui_valid[UI_SLOTS];
+/* Explicit ownership for a host menu whose preview can take longer than one
+ * guest flip. Default-off: normal UI cadence is unchanged. Empty batches still
+ * clear immediately; a short lease prevents orphaned UI after a stopped owner. */
+static volatile LONG s_ui_retained;
+static ULONGLONG s_ui_last_submit;
+void rsx_d3d12_set_ui_retained(int active) {
+    InterlockedExchange(&s_ui_retained,active?1:0);
+}
+static u32 ui_reuse_age(void);
+
 static int ui_interpolated(void) {
     static int on=-1;
     if(on<0){const char* fps=getenv("CV_FPS_TEST_60"),*pose=getenv("CV_RENDER_INTERPOLATION");
@@ -588,12 +600,23 @@ static QuadVb s_ui_vbs, s_ov_vbs, s_srt_vbs, s_spr_vbs;   /* the game's UI batch
 typedef struct UiVertex { float x,y,z,r,g,b,a,u,v; } UiVertex;
 void rsx_d3d12_set_ui_quads(const rsx_ui_quad* quads,u32 count)
 {
-    if (!quads || count > UI_MAX_QUADS) count=0;
+    if (count > UI_MAX_QUADS) {
+        fprintf(stderr,"[ui] rejected oversized batch: %u > %u\n",count,UI_MAX_QUADS);
+        return; /* Keep the previous complete menu rather than flashing empty. */
+    }
+    if (!quads) count=0;
     const u32 frame=cellGcm_flip_submit_count()+1, slot=frame%UI_SLOTS;
     AcquireSRWLockExclusive(&s_ui_lock);
     if(count) memcpy(s_ui_quads[slot],quads,(size_t)count*sizeof(*quads));
     s_ui_count[slot]=count;s_ui_frame[slot]=frame;s_ui_valid[slot]=1;
+    s_ui_last_submit=GetTickCount64();
     ReleaseSRWLockExclusive(&s_ui_lock);
+}
+/* Called with s_ui_lock held by both drawing and frame-generation gating. */
+static u32 ui_reuse_age(void) {
+    if(InterlockedCompareExchange(&s_ui_retained,0,0)&&GetTickCount64()-s_ui_last_submit<=500)
+        return 0x7FFFFFFFu;
+    return ui_interpolated()?3u:0u;
 }
 /* The display layer. The game renders at its render size into its own
  * targets (s_d3d.render_targets); the swap chain is the window's client size,
@@ -899,7 +922,7 @@ static void ui_batch_draw(u32 fi)
     /* UI producer can run at native cadence while render flips advance.
      * Hold at most one intervening update (up to four guest flips), including
      * offscreen flips, and honor a newer clear. Native 30 stays exact-frame. */
-    int slot=rsx_ui_select_batch(flip,s_ui_frame,s_ui_valid,UI_SLOTS,ui_interpolated()?3u:0u);
+    int slot=rsx_ui_select_batch(flip,s_ui_frame,s_ui_valid,UI_SLOTS,ui_reuse_age());
     u32 count=slot>=0?s_ui_count[slot]:0;
     if(count) {
         u32 w=rs_dim(s_d3d.width,s_rs),h=rs_dim(s_d3d.height,s_rs);
@@ -11897,7 +11920,7 @@ skip_dump_consider: ;
         int fg_menu=0;
         if(s_fsr_ready){
             AcquireSRWLockShared(&s_ui_lock);
-            int ui_slot=rsx_ui_select_batch(s_ui_render_flip,s_ui_frame,s_ui_valid,UI_SLOTS,ui_interpolated()?3u:0u);
+            int ui_slot=rsx_ui_select_batch(s_ui_render_flip,s_ui_frame,s_ui_valid,UI_SLOTS,ui_reuse_age());
             fg_menu=ui_slot>=0&&s_ui_count[ui_slot]!=0;
             ReleaseSRWLockShared(&s_ui_lock);
         }

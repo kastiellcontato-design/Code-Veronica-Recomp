@@ -1895,6 +1895,26 @@ const char* overlay(const char* host_path, char* buf, size_t cap)
 {
     std::string key(host_path);
     for (char& c : key) if (c == '\\') c = '/';
+    // Explicit appearance-test overlay. The original archive stays untouched;
+    // normal play launches never set this variable.
+    const auto filename=fs::path(key).filename().string();
+    if(filename.size()==12 && filename.rfind("cvskin",0)==0 && filename.substr(8)==".arc" &&
+       filename[6]>='0' && filename[6]<='9' && filename[7]>='0' && filename[7]<='9') {
+        const char* root=getenv("CV_APPEARANCE_ASSET_ROOT");
+        if(root && *root){
+            const auto file=fs::path(root)/fs::path(key).parent_path().parent_path().filename()/filename;
+            const auto path=file.string();
+            if(path.size()+1<=cap && fs::is_regular_file(file)){memcpy(buf,path.c_str(),path.size()+1);return buf;}
+        }
+    }
+    if (ends_with(key, "/system/pl03.arc")) {
+        const char* lens = getenv("CV_WESKER_LENS_ARC");
+        if (lens && *lens && strlen(lens) + 1 <= cap && fs::is_regular_file(lens)) {
+            memcpy(buf, lens, strlen(lens) + 1);
+            fprintf(stderr, "[appearance] serving local Wesker lens archive: %s\n", lens);
+            return buf;
+        }
+    }
     if (key.find("/mry/mp_dat") != std::string::npos && ends_with(key, ".arc")) {
         load_map_pair(host_path, key);   /* texture swap only: the file is served as it is */
         return host_path;

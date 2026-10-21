@@ -194,6 +194,11 @@ endif()
 set(CV_REGION "EU" CACHE STRING "Game version of the lift in RECOMP_DIR: EU, JP or US")
 set_property(CACHE CV_REGION PROPERTY STRINGS EU JP US)
 string(TOLOWER "${CV_REGION}" CV_REGION_LC)
+option(CV_APPEARANCE "Separate character appearance build" OFF)
+option(CV_CHARACTERS "Character appearance menu in normal play builds" ON)
+if(CV_APPEARANCE AND NOT WIN32)
+    message(FATAL_ERROR "Appearance rendering requires Windows")
+endif()
 
 # Guest OPTION menu hooks: create a build-local copy of only the affected
 # lifted units. Direct and indirect guest calls keep their original names;
@@ -201,6 +206,9 @@ string(TOLOWER "${CV_REGION}" CV_REGION_LC)
 if(WIN32)
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
     set(CV_MENU_HOOK_SCRIPT "${PS3RECOMP_DIR}/tools/cv_native_menu_hooks.py")
+    if(CV_APPEARANCE OR CV_CHARACTERS)
+        set(CV_MENU_HOOK_SCRIPT "${PS3RECOMP_DIR}/tools/cv_appearance_hooks.py")
+    endif()
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CV_MENU_HOOK_SCRIPT}")
     execute_process(COMMAND "${Python3_EXECUTABLE}" "${CV_MENU_HOOK_SCRIPT}" --discover "${RECOMP_DIR}"
                             --region "${CV_REGION_LC}"
@@ -266,7 +274,14 @@ endif()
 # title's own artwork and are not in the repository; without them the launcher
 # draws a plain banner and the exe keeps the default icon.
 if(WIN32)
-    target_sources(${PROJECT_NAME} PRIVATE native_pc_menu.cpp boot_skip.cpp cv_test_tools.cpp cv_fps_experimental.cpp cv_native_libc.cpp cv_focus_pause.cpp cv_items.cpp cv_item_menu.cpp)
+    set(CV_MENU_SOURCE native_pc_menu.cpp)
+    if(CV_APPEARANCE OR CV_CHARACTERS)
+        set(CV_MENU_SOURCE cv_appearance_menu.cpp)
+        target_sources(${PROJECT_NAME} PRIVATE cv_appearance_assets.cpp cv_appearance_mesh.cpp
+            cv_appearance_preview.cpp cv_appearance_menu_preview.cpp cv_appearance_runtime.cpp)
+        set_source_files_properties(cv_appearance_assets.cpp PROPERTIES INCLUDE_DIRECTORIES "${PS3RECOMP_DIR}/libs/codec")
+    endif()
+    target_sources(${PROJECT_NAME} PRIVATE ${CV_MENU_SOURCE} boot_skip.cpp cv_test_tools.cpp cv_fps_experimental.cpp cv_native_libc.cpp cv_focus_pause.cpp cv_items.cpp cv_item_menu.cpp)
     file(GLOB LAUNCHER_ART CONFIGURE_DEPENDS
          "${CMAKE_CURRENT_SOURCE_DIR}/launcher_art/*.png"
          "${CMAKE_CURRENT_SOURCE_DIR}/launcher_art/*.jpg")
@@ -439,6 +454,10 @@ if(WIN32)
         "${PS3RECOMP_DIR}/libs/video/tests/test_dxc.cpp"
         "${PS3RECOMP_DIR}/libs/video/rsx_dxc.cpp")
     target_link_libraries(code_veronica_dxc_tests PRIVATE d3d12 d3dcompiler dxgi)
+endif()
+
+if(CV_APPEARANCE)
+    set_target_properties(${PROJECT_NAME} PROPERTIES OUTPUT_NAME "MyGameRecomp_${CV_REGION}_Characters")
 endif()
 
 # Exercises real callback-driven reads/writes in isolated temporary folders.

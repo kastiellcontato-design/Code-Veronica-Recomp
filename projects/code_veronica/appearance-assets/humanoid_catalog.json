@@ -1,0 +1,142 @@
+[
+  {
+    "id": "en01a00",
+    "label": "Prisioneiro 1",
+    "room": "rm_0070.arc"
+  },
+  {
+    "id": "en01a01",
+    "label": "Prisioneiro 2",
+    "room": "rm_0070.arc"
+  },
+  {
+    "id": "en01a02",
+    "label": "Soldado 1",
+    "room": "rm_0030.arc"
+  },
+  {
+    "id": "en01a03",
+    "label": "Soldado 2",
+    "room": "rm_1070.arc"
+  },
+  {
+    "id": "en01a04",
+    "label": "Soldado 3",
+    "room": "rm_5610.arc"
+  },
+  {
+    "id": "en01a05",
+    "label": "Jaleco 1",
+    "room": "rm_3200.arc"
+  },
+  {
+    "id": "en01a06",
+    "label": "Jaleco 2",
+    "room": "rm_1120.arc"
+  },
+  {
+    "id": "en01a07",
+    "label": "Trabalhador 1",
+    "room": "rm_1021.arc"
+  },
+  {
+    "id": "en01a08",
+    "label": "Trabalhador 2",
+    "room": "rm_1100.arc"
+  },
+  {
+    "id": "en01a09",
+    "label": "Congelado 1",
+    "room": "rm_0020.arc"
+  },
+  {
+    "id": "en01a10",
+    "label": "Congelado 2",
+    "room": "rm_0021.arc"
+  },
+  {
+    "id": "en01a21",
+    "label": "Soldado 4",
+    "room": "rm_9030.arc"
+  },
+  {
+    "id": "en01a31",
+    "label": "Prisioneiro 3",
+    "room": "rm_5520.arc"
+  },
+  {
+    "id": "en01a32",
+    "label": "Soldado 5",
+    "room": "rm_0020.arc"
+  },
+  {
+    "id": "en01a33",
+    "label": "Soldado 6",
+    "room": "rm_5530.arc"
+  },
+  {
+    "id": "en01a34",
+    "label": "Soldado 7",
+    "room": "rm_9030.arc"
+  },
+  {
+    "id": "en01a35",
+    "label": "Equipe da base 1",
+    "room": "rm_6020.arc"
+  },
+  {
+    "id": "en01a36",
+    "label": "Equipe da base 2",
+    "room": "rm_6050.arc"
+  },
+  {
+    "id": "en01a37",
+    "label": "Civil 1",
+    "room": "rm_5610.arc"
+  },
+  {
+    "id": "en01a38",
+    "label": "Civil 2",
+    "room": "rm_5680.arc"
+  },
+  {
+    "id": "en01a39",
+    "label": "Traje de protecao",
+    "room": "rm_3140.arc"
+  },
+  {
+    "id": "en01a40",
+    "label": "Uniforme escuro 1",
+    "room": "rm_3050.arc"
+  },
+  {
+    "id": "en01a41",
+    "label": "Uniforme escuro 2",
+    "room": "rm_5630.arc"
+  },
+  {
+    "id": "en01a42",
+    "label": "Equipe da base 3",
+    "room": "rm_5620.arc"
+  },
+  {
+    "id": "en26a00",
+    "label": "Zumbi anatomista",
+    "room": "rm_0110.arc"
+  },
+  {
+    "id": "en51a00",
+    "label": "Prisioneiro (cena)",
+    "room": "rm_3000.arc"
+  },
+  {
+    "id": "en12a00",
+    "label": "Alexia - primeira forma",
+    "room": "rm_5820.arc"
+  },
+  {
+    "id": "en95a00",
+    "label": "Alexia - humana",
+    "room": "rm_2030.arc"
+  }
+]

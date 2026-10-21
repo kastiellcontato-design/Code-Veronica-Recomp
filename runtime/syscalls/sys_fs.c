@@ -795,11 +795,13 @@ int64_t sys_fs_stat(ppu_context* ctx)
     char host_path[1024];
     sys_fs_translate_path(ps3_path, host_path, sizeof(host_path));
 
+    char overlay_path[1024];
+    const char* stat_path=vfs_overlay_resolve(host_path,overlay_path,sizeof overlay_path);
     struct stat st;
 #ifdef _WIN32
-    if (_stat64(host_path, (struct _stat64*)&st) != 0)
+    if (_stat64(stat_path, (struct _stat64*)&st) != 0)
 #else
-    if (stat(host_path, &st) != 0)
+    if (stat(stat_path, &st) != 0)
 #endif
     {
         return (int64_t)(int32_t)CELL_ENOENT;
