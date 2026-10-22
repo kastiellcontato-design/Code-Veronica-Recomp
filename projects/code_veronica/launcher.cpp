@@ -35,6 +35,7 @@
 #include "../../libs/video/rsx_render_optimizations.h"
 #include "pad_map.h"
 #include "launcher_i18n.h"
+#include "launcher_design_i18n.h"
 #include "patch_files.h"
 #include "cv_version.h"
 #include "cv_srt.h"
@@ -89,10 +90,10 @@ static bool opt30_comparison() {return rsx_opt30_parse(std::getenv("CV30_OPTIMIZ
 
 
 /* ---------------------------------------------------------------- palette */
-const Color C_BG(255, 21, 17, 17), C_SIDE(255, 13, 11, 11), C_PANEL(255, 30, 25, 25),
-            C_LINE(255, 70, 28, 28), C_TEXT(255, 225, 218, 210), C_DIM(255, 150, 140, 132),
-            C_RED(255, 196, 28, 34), C_RED_HI(255, 230, 50, 50), C_HOVER(255, 38, 30, 30),
-            C_FIELD(255, 26, 22, 22), C_FIELD_BD(255, 70, 60, 58), C_OK(255, 120, 190, 110);
+const Color C_BG(255,16,16,18),C_SIDE(255,11,11,13),C_PANEL(255,24,23,25),
+ C_LINE(255,98,77,52),C_TEXT(255,235,226,210),C_DIM(255,163,154,143),
+ C_RED(255,133,26,40),C_RED_HI(255,192,42,55),C_HOVER(255,36,29,31),
+ C_FIELD(255,25,24,26),C_FIELD_BD(255,74,64,51),C_OK(255,120,192,140);
 
 /* The versions this port is built for, one executable each, side by side
  * (cv_version.h, build-release-jp.cmd). The launcher of either accepts both:
@@ -191,7 +192,7 @@ const wchar_t* family(bool serif, int lang)
     for (int i = 0; list[i]; i++) { FontFamily f(list[i]); if (f.IsAvailable()) return list[i]; }
     return L"Segoe UI";
 }
-const int W = 1120, H = 770, SIDE = 230;
+const int W = 1280, H = 820, SIDE = 224;
 
 /* ---------------------------------------------------------------- settings */
 struct Settings {
@@ -223,6 +224,7 @@ struct Settings {
     bool srt_border=true;
     int srt_enemies=3, srt_corner=0, srt_scale=100, srt_language=0, srt_opacity=70, srt_inventory_below=0, srt_window=0, srt_boss_bar=0; // 0 follow, 1 EN, 2 PT-BR; 3..13 other launcher languages
     std::wstring game, rap, fw, saves;
+    std::wstring region_game[3],region_rap[3];int region_selected=0;
     std::wstring patch_dir;                 /* patch files (patch_files.h) */
     std::vector<std::string> patch_files_on; /* ids of the file patches turned on */
     int key[PA_COUNT][PAD_KEY_SLOTS];   /* 0: empty; the first is what the game's icons show */
@@ -360,6 +362,25 @@ std::wstring rap_for_game(const Settings& s, const std::wstring& code)
     return s.rap;  /* also allow a manually chosen licence with a renamed file */
 }
 
+// Host-only regional library. Slots follow k_versions: EU, US, JP.
+std::string sfo_field(const fs::path&,const char*);
+int region_index(const std::wstring& id){for(int i=0;i<3;i++)if(id==k_versions[i].code)return i;return -1;}
+void library_load(Settings& s){
+ const std::wstring legacy_game=s.game,legacy_rap=s.rap;
+ for(int i=0;i<3;i++){const std::wstring section=L"biblioteca_"+std::wstring(k_versions[i].code);s.region_game[i]=ini_get(section.c_str(),L"pasta",L"");s.region_rap[i]=ini_get(section.c_str(),L"rap",L"");}
+ for(int i=0;i<3;i++)if(s.region_rap[i].empty()&&!legacy_rap.empty()&&fs::path(legacy_rap).filename().wstring().find(k_versions[i].code)!=std::wstring::npos)s.region_rap[i]=legacy_rap;
+ const int legacy=region_index(widen(sfo_field(fs::path(legacy_game)/L"PARAM.SFO","TITLE_ID").c_str()));
+ if(legacy>=0&&s.region_game[legacy].empty()){s.region_game[legacy]=legacy_game;if(legacy!=2)s.region_rap[legacy]=rap_for_game(s,k_versions[legacy].code);}
+ const int chosen=region_index(ini_get(L"biblioteca",L"selecionada",legacy>=0?k_versions[legacy].code:GAME_CODE));
+ s.region_selected=chosen>=0?chosen:0;
+ if(s.region_game[s.region_selected].empty()&&legacy>=0)s.region_selected=legacy;
+ if(!s.region_game[s.region_selected].empty()){s.game=s.region_game[s.region_selected];s.rap=s.region_rap[s.region_selected];}
+}
+void library_save(const Settings& s){
+ ini_set(L"biblioteca",L"selecionada",k_versions[s.region_selected].code);
+ for(int i=0;i<3;i++){const std::wstring section=L"biblioteca_"+std::wstring(k_versions[i].code);ini_set(section.c_str(),L"pasta",s.region_game[i]);ini_set(section.c_str(),L"rap",s.region_rap[i]);}
+}
+
 Settings load_settings()
 {
     Settings s;
@@ -459,11 +480,13 @@ Settings load_settings()
             s.btn[a][k] = pb >= 0 || nb == "none" ? pb : (k ? -1 : k_pad_default_btn[a]);
         }
     }
+    library_load(s);
     return s;
 }
 
 void save_settings(const Settings& s)
 {
+    library_save(s);
     ini_set(L"tela", L"modo", std::to_wstring(s.mode));
     ini_set(L"tela", L"resolucao", std::to_wstring(s.res));
     ini_set(L"tela", L"antialias", std::to_wstring(s.aa));
@@ -554,7 +577,22 @@ std::string sfo_field(const fs::path& sfo, const char* key)
 }
 
 /* Validation of the three paths. */
+std::wstring check_game_uncached(const std::wstring& g, bool* ok);
+/* Pages call this on every repaint (several folders per frame on Jogos):
+ * reuse a result for a second instead of re-reading PARAM.SFO per frame. */
 std::wstring check_game(const std::wstring& g, bool* ok)
+{
+    struct Entry { std::wstring path, msg; bool ok; int lang; ULONGLONG at; };
+    static std::vector<Entry> cache;
+    const ULONGLONG now = GetTickCount64();
+    for (auto& e : cache)
+        if (e.path == g && e.lang == g_lang && now - e.at < 1000) { *ok = e.ok; return e.msg; }
+    std::wstring msg = check_game_uncached(g, ok);
+    for (auto& e : cache) if (e.path == g) { e = { g, msg, *ok, g_lang, now }; return msg; }
+    cache.push_back({ g, msg, *ok, g_lang, now });
+    return msg;
+}
+std::wstring check_game_uncached(const std::wstring& g, bool* ok)
 {
     std::error_code ec; *ok = false;
     if (g.empty()) return T(S_CHK_GAME_CHOOSE);
@@ -630,9 +668,11 @@ Bitmap* load_png(const char* name)
 }
 
 /* ---------------------------------------------------------------- UI state */
-enum Page { P_INICIO, P_JOGO, P_CONTROLES, P_ATALHOS, P_PATCHES, P_MODS, P_SRT, P_INVENTARIO, P_DESEMPENHO, P_AVANCADO, P_COUNT };
+enum Page { P_INICIO, P_JOGO, P_SAVES, P_CONTROLES, P_ATALHOS, P_PATCHES, P_MODS, P_SRT, P_INVENTARIO, P_DESEMPENHO, P_AVANCADO, P_COUNT };
 /* Each page's name in the side bar. */
-const int k_nav[P_COUNT] = { S_NAV_HOME, S_NAV_GAME, S_NAV_CONTROLS, S_NAV_SHORTCUTS, S_NAV_PATCHES, S_NAV_MODS, S_NAV_SRT, S_NAV_ITEMS, S_NAV_PERF, S_NAV_ADVANCED };
+const int k_nav[P_COUNT] = { S_NAV_HOME, S_NAV_GAME, S_NAV_GAME /* Saves: named by design::SAVES */, S_NAV_CONTROLS, S_NAV_SHORTCUTS, S_NAV_PATCHES, S_NAV_MODS, S_NAV_SRT, S_NAV_ITEMS, S_NAV_PERF, S_NAV_ADVANCED };
+/* Side bar order: the game library first. */
+const int k_nav_order[P_COUNT] = { P_JOGO, P_INICIO, P_SAVES, P_CONTROLES, P_ATALHOS, P_PATCHES, P_MODS, P_SRT, P_INVENTARIO, P_DESEMPENHO, P_AVANCADO };
 enum Capture { CAP_NONE, CAP_KEY, CAP_BTN };
 
 struct Hit { RectF r; int id; };
@@ -658,6 +698,7 @@ struct UI {
     std::wstring play_msg;
     int result = 0;              /* 1 = play */
     Bitmap* banner = nullptr;
+    Bitmap* castle=nullptr;Bitmap* cover[3]={},*cover_bg[3]={};std::wstring art_path[3];
     std::wstring pad_status;       /* connected model ("" = none) */
     int pad_count = 0;
     int pad_kind = 0;              /* PAD_KIND_* of the first connected pad */
@@ -932,122 +973,93 @@ void section(Graphics& gr, const std::wstring& t, float x, float y, float w, con
 const wchar_t* const k_launcher_version = L"v1.0";
 
 /* ---------------------------------------------------------------- pages */
-void draw_sidebar(Graphics& gr, const Font& title, const Font& title2, const Font& nav, const Font& footer_font)
-{
-    SolidBrush side(C_SIDE); gr.FillRectangle(&side, 0, 0, SIDE, H);
-    text(gr, L"RESIDENT EVIL", 22, 26, title, C_TEXT);
-    text(gr, L"CODE:VERONICA X", 22, 56, title2, C_RED);
-    for (int i = 0; i < P_COUNT; i++) {
-        float y = 120.0f + i * 46;
-        bool act = (int)g.page == i, hot = g.hover == ID_NAV + i;
-        if (act || hot) { SolidBrush hb(act ? Color(255, 30, 22, 22) : C_HOVER); gr.FillRectangle(&hb, 0.0f, y, (float)SIDE, 44.0f); }
-        if (act) { SolidBrush rb(C_RED); gr.FillRectangle(&rb, 0.0f, y, 3.0f, 44.0f); }
-        text(gr, T(k_nav[i]), 24, y, nav, act ? C_RED_HI : C_TEXT, StringAlignmentNear, SIDE - 30, 44);
-        hit(0, y, SIDE, 44, ID_NAV + i);
-    }
-    text(gr, T(S_CREDIT_KASTIEL), 22, H - 42.0f, footer_font, C_DIM,
-         StringAlignmentNear, SIDE - 44.0f, 22);
-    text(gr, k_launcher_version, 22, H - 42.0f, footer_font, C_DIM,
-         StringAlignmentFar, SIDE - 44.0f, 22);
+namespace design=cv_launcher_design;
+const wchar_t* lx(design::Id id){return design::texts[g_lang][id];}
+const wchar_t* region_name(int i){return T(i==2?S_REGION_JP:i==1?S_REGION_US:S_REGION_EU);}
+const int region_order[]={2,1,0};
+/* Bicubic scaling of the castle and the PIC1/ICON0 art is the slow part of a
+ * repaint, and a scroll repaints every wheel tick: scale each image once per
+ * box size and copy it 1:1 afterwards. */
+struct FitCache { Bitmap* src; int w, h; bool cover; Bitmap* out; };
+std::vector<FitCache> g_fit_cache;
+void image_fit_forget(){for(auto& c:g_fit_cache)delete c.out;g_fit_cache.clear();}
+void image_fit(Graphics& gr,Bitmap* image,RectF box,bool cover=false){
+ if(!image||!image->GetWidth()||!image->GetHeight())return;
+ const int bw=int(box.Width+.5f),bh=int(box.Height+.5f);if(bw<=0||bh<=0)return;
+ Bitmap* scaled=nullptr;
+ for(auto& c:g_fit_cache)if(c.src==image&&c.w==bw&&c.h==bh&&c.cover==cover){scaled=c.out;break;}
+ if(!scaled){
+  const float iw=float(image->GetWidth()),ih=float(image->GetHeight());
+  const float scale=cover?std::max(bw/iw,bh/ih):std::min(bw/iw,bh/ih);
+  scaled=new Bitmap(bw,bh,PixelFormat32bppPARGB);
+  {Graphics sg(scaled);sg.SetInterpolationMode(InterpolationModeHighQualityBicubic);sg.SetPixelOffsetMode(PixelOffsetModeHighQuality);
+   sg.DrawImage(image,RectF((bw-iw*scale)/2,(bh-ih*scale)/2,iw*scale,ih*scale));}
+  g_fit_cache.push_back({image,bw,bh,cover,scaled});
+ }
+ gr.DrawImage(scaled,int(box.X+.5f),int(box.Y+.5f),bw,bh);
 }
-
-void draw_play(Graphics& gr, const Font& big, const Font& fsm)
-{
-    RectF r(W - 250.0f, H - 78.0f, 220.0f, 50.0f);
-    if (g.running) {
-        button(gr, RectF(W - 300.0f, H - 78.0f, 270.0f, 50.0f), T(S_RESUME), ID_RESUME, big, true, true);
-        button(gr, RectF(W - 450.0f, H - 71.0f, 135.0f, 36.0f), T(S_QUIT), ID_QUIT, fsm);
-        text(gr, T(S_MENU_HINT),
-             SIDE + 32.0f, H - 78.0f, fsm, C_DIM, StringAlignmentNear, W - SIDE - 500.0f, 50);
-        return;
-    }
-    bool ok_game; check_game(g.s.game, &ok_game);
-    button(gr, r, T(S_PLAY), ID_PLAY, big, true, true);
-    std::wstring msg = g.play_msg;
-    if (msg.empty() && !ok_game) msg = T(S_SET_FOLDER_TAB);
-    if (!msg.empty()) text(gr, msg, SIDE + 32.0f, H - 78.0f, fsm, C_RED_HI, StringAlignmentNear, W - SIDE - 320.0f, 50);
+void library_art(){
+ for(int i=0;i<3;i++){
+  if(g.art_path[i]==g.s.region_game[i])continue;g.art_path[i]=g.s.region_game[i];
+  image_fit_forget();
+  delete g.cover[i];delete g.cover_bg[i];g.cover[i]=g.cover_bg[i]=nullptr;
+  if(g.art_path[i].empty())continue;
+  auto load=[&](const wchar_t* name)->Bitmap*{const auto path=fs::path(g.art_path[i])/name;std::error_code ec;if(!fs::is_regular_file(path,ec))return nullptr;auto* img=new Bitmap(path.c_str());if(img->GetLastStatus()!=Ok||!img->GetWidth()||!img->GetHeight()){delete img;return nullptr;}return img;};
+  g.cover[i]=load(L"ICON0.PNG");g.cover_bg[i]=load(L"PIC1.PNG");
+ }
 }
-
-void draw_inicio(Graphics& gr, const Font& head, const Font& body, const Font& code, const Font& fsm)
-{
-    const float cx = (float)SIDE, cw = (float)(W - SIDE), bh = 330;
-    if (g.banner) {
-        /* cover-crop the art into the banner box, weighted to the right */
-        float iw = (float)g.banner->GetWidth(), ih = (float)g.banner->GetHeight();
-        float sc = std::max(cw / iw, bh / ih);
-        float sw = cw / sc, sh = bh / sc;
-        float sx = (iw - sw) * 0.62f, sy = (ih - sh) * 0.25f;
-        gr.DrawImage(g.banner, RectF(cx, 0, cw, bh), sx, sy, sw, sh, UnitPixel);
-    } else {
-        LinearGradientBrush lg(PointF(cx, 0), PointF(cx + cw, bh), Color(255, 40, 14, 14), Color(255, 18, 12, 12));
-        gr.FillRectangle(&lg, cx, 0.0f, cw, bh);
-    }
-    /* fade the bottom of the banner into the page */
-    LinearGradientBrush fade(PointF(0, bh - 120), PointF(0, bh + 1), Color(0, 21, 17, 17), C_BG);
-    gr.FillRectangle(&fade, cx, bh - 120, cw, 121.0f);
-    LinearGradientBrush fadeL(PointF(cx, 0), PointF(cx + 120, 0), Color(200, 13, 11, 11), Color(0, 13, 11, 11));
-    gr.FillRectangle(&fadeL, cx, 0.0f, 120.0f, bh);
-    { const GameVersion* v = version_of(folder_code());
-      if (!v) v = &own_version();
-      text(gr, std::wstring(v->code) + L"  ·  " + v->name, cx + 32, bh - 110, code, C_RED_HI); }
-    {   /* game and .rap checks under the title, shadowed to read over the art */
-        bool o1, o2;
-        std::wstring m1 = check_game(g.s.game, &o1), m2 = check_rap(g.s.rap, &o2);
-        const std::wstring* ms[2] = { &m1, &m2 }; bool oks[2] = { o1, o2 };
-        for (int i = 0; i < 2; i++) {
-            const std::wstring line = (oks[i] ? L"✔  " : L"✖  ") + *ms[i];
-            const float ly = bh - 74 + i * 26.0f;
-            text(gr, line, cx + 33, ly + 1, body, Color(220, 0, 0, 0), StringAlignmentNear, cw - 64, 24);
-            text(gr, line, cx + 32, ly, body, oks[i] ? C_OK : C_RED_HI, StringAlignmentNear, cw - 64, 24);
-        }
-    }
-
-    float x = cx + 32, y = bh + 14;
-    section(gr, T(S_QUICK), x, y, cw - 64, head);
-    y += 44;
-    text(gr, T(S_DISPLAY_MODE), x, y, body, C_TEXT, StringAlignmentNear, 200, 30);
-    dropdown(gr, RectF(x + 210, y, 200, 30), mode_name(g.s.mode), ID_DD_MODE, body);
-    text(gr, T(S_FRAME_LIMIT), x + 450, y, body, C_TEXT, StringAlignmentNear, 180, 30);
-    dropdown(gr, RectF(x + 630, y, 180, 30), fps_name(g.s.fps), (g.running||opt30_comparison()) ? -1 : ID_DD_FPS, body, !g.running&&!opt30_comparison());
-    y += 44;
-    text(gr, T(S_RENDER_RES), x, y, body, C_TEXT, StringAlignmentNear, 205, 30);
-    dropdown(gr, RectF(x + 210, y, 200, 30), res_name(g.s.res), ID_DD_RES, body);
-    text(gr, T(S_AA), x + 450, y, body, C_TEXT, StringAlignmentNear, 180, 30);
-    dropdown(gr, RectF(x + 630, y, 180, 30), aa_name(g.s.aa), ID_DD_AA, body);
-    y += 44;   /* in the pipelines' samplers: chosen before the game starts */
-    text(gr, T(S_ANISO), x, y, body, C_TEXT, StringAlignmentNear, 205, 30);
-    dropdown(gr, RectF(x + 210, y, 200, 30), aniso_name(g.s.aniso), g.running ? -1 : ID_DD_ANISO, body, !g.running);
-    text(gr, T(S_SHARPNESS), x + 450, y, body, C_TEXT, StringAlignmentNear, 180, 30);   /* live */
-    dropdown(gr, RectF(x + 630, y, 180, 30), sharp_name(g.s.sharpness / 10), ID_DD_SHARP, body);
-    y += 44;
-    /* 60 FPS interpolation always runs on the CPU: no device choice here. */
-    if((g.s.fps==1||pose_device_override()>=0)&&!opt30_comparison()) {
-        text(gr,T(S_FRAME_GEN),x,y,body,C_TEXT,StringAlignmentNear,205,30);
-        dropdown(gr,RectF(x+210,y,200,30),frame_generation_name(frame_generation_allowed()?g.s.frame_generation:0),(g.running||!frame_generation_allowed())?-1:ID_DD_FRAME_GEN,body,!g.running&&frame_generation_allowed());
-        y+=44;
-    }
-    y+=10;
-    /* What the frame limit means: 30 is the PS3 original; 60 is smoother but
-     * slows the game if the PC can't hold it; frame generation doubles it. */
-    std::wstring fps_note = T(g.s.fps ? S_FPS_NOTE_60 : S_FPS_NOTE_30);
-    if (g.s.fps && g.s.frame_generation && frame_generation_allowed()) fps_note += L"\n" + std::wstring(T(S_FPS_NOTE_FG));
-    const float ny = y;
-    {   /* wraps, unlike text() */
-        const std::wstring shown = g_lang == LANG_AR ? L"‫" + fps_note + L"‬" : fps_note;
-        StringFormat sf; sf.SetAlignment(StringAlignmentNear); sf.SetLineAlignment(StringAlignmentNear);
-        SolidBrush nb(C_DIM);
-        gr.DrawString(shown.c_str(), -1, &fsm, RectF(x, ny, cw - 64, 54), &sf, &nb);
-    }
-    /* Keep the supported releases visible independently of the selected game,
-     * near the bottom but never over the lines above. */
-    const float vy = std::max(H - 162.0f, ny + 54.0f + 12.0f);
-    text(gr, T(S_SUPPORTED_VERSIONS), x, vy, fsm, C_DIM,
-         StringAlignmentNear, cw - 64, 20);
-    const std::wstring versions = std::wstring(T(S_REGION_EU)) + L": NPEB00553   ·   "
-        + T(S_REGION_JP) + L": NPJB00135   ·   " + T(S_REGION_US) + L": NPUB30467";
-    text(gr, versions, x, vy + 26.0f, fsm, C_DIM,
-         StringAlignmentNear, cw - 64, 38);
-    g_page_end = std::max(g_page_end, vy + 64.0f);
+void nav_icon(Graphics& gr,int page,float x,float y,Color color){
+ Pen p(color,1.5f);p.SetLineJoin(LineJoinRound);p.SetStartCap(LineCapRound);p.SetEndCap(LineCapRound);
+ if(page==P_INICIO){gr.DrawRectangle(&p,x,y,23.f,15.f);gr.DrawLine(&p,x+11,y+16,x+11,y+21);gr.DrawLine(&p,x+5,y+21,x+18,y+21);}
+ else if(page==P_JOGO){gr.DrawEllipse(&p,x+1,y,22.f,22.f);gr.DrawEllipse(&p,x+9,y+8,6.f,6.f);gr.DrawArc(&p,x+5,y+4,14.f,14.f,200.f,70.f);}
+ else if(page==P_PATCHES){GraphicsState s=gr.Save();gr.TranslateTransform(x+12,y+11);gr.RotateTransform(-45.f);GraphicsPath band;band.AddArc(-14.f,-5.f,10.f,10.f,90.f,180.f);band.AddArc(4.f,-5.f,10.f,10.f,270.f,180.f);band.CloseFigure();gr.DrawPath(&p,&band);gr.DrawLine(&p,-5.f,-5.f,-5.f,5.f);gr.DrawLine(&p,5.f,-5.f,5.f,5.f);for(int a=0;a<2;a++)for(int b=0;b<2;b++)gr.DrawLine(&p,-2.f+b*4,-2.f+a*4,-1.5f+b*4,-2.f+a*4);gr.Restore(s);}
+ else if(page==P_SRT){gr.DrawEllipse(&p,x+2,y+3,20.f,20.f);gr.DrawLine(&p,x+9,y,x+15,y);gr.DrawLine(&p,x+12,y,x+12,y+3);gr.DrawLine(&p,x+20,y+4,x+22,y+6);gr.DrawLine(&p,x+12,y+13,x+12,y+8);gr.DrawLine(&p,x+12,y+13,x+16,y+15);}
+ else if(page==P_CONTROLES){GraphicsPath path;PointF a[]={{x+4,y+3},{x+20,y+3},{x+25,y+18},{x+21,y+22},{x+16,y+15},{x+8,y+15},{x+2,y+22},{x-2,y+18}};path.AddPolygon(a,8);gr.DrawPath(&p,&path);gr.DrawLine(&p,x+4,y+8,x+10,y+8);gr.DrawLine(&p,x+7,y+5,x+7,y+11);gr.DrawEllipse(&p,x+17,y+7,2.f,2.f);}
+ else if(page==P_ATALHOS){gr.DrawRectangle(&p,x,y+2,24.f,17.f);for(int a=0;a<3;a++)for(int b=0;b<6;b++)gr.DrawLine(&p,x+3+b*3,y+6+a*4,x+4+b*3,y+6+a*4);}
+ else if(page==P_DESEMPENHO){for(int a=0;a<4;a++)gr.DrawRectangle(&p,x+a*6,y+17-a*5,4.f,7.f+a*5);}
+ else if(page==P_AVANCADO){GraphicsPath gear;PointF t[32];for(int k=0;k<8;k++){const float a=k*0.785398f,d[4]={-0.26f,-0.13f,0.13f,0.26f},r[4]={8.f,11.f,11.f,8.f};for(int j=0;j<4;j++)t[k*4+j]=PointF(x+12+r[j]*cosf(a+d[j]),y+12+r[j]*sinf(a+d[j]));}gear.AddPolygon(t,32);gr.DrawPath(&p,&gear);gr.DrawEllipse(&p,x+8.5f,y+8.5f,7.f,7.f);}
+ else if(page==P_INVENTARIO){gr.DrawLine(&p,x+2,y+22,x+15,y+9);gr.DrawLine(&p,x+15,y+9,x+17,y+11);gr.DrawLine(&p,x+17,y+11,x+4,y+24);
+  const float sx=x+19,sy=y+5;gr.DrawLine(&p,sx,sy-4,sx,sy+4);gr.DrawLine(&p,sx-4,sy,sx+4,sy);gr.DrawLine(&p,x+9,y+3,x+9,y+7);gr.DrawLine(&p,x+7,y+5,x+11,y+5);gr.DrawLine(&p,x+23,y+14,x+23,y+16);gr.DrawLine(&p,x+22,y+15,x+24,y+15);}
+ else if(page==P_SAVES){gr.DrawRectangle(&p,x+1,y+1,22.f,22.f);gr.DrawRectangle(&p,x+6,y+1,12.f,7.f);gr.DrawLine(&p,x+14,y+3,x+14,y+6);gr.DrawRectangle(&p,x+5,y+13,14.f,10.f);}
+ else if(page==P_MODS){GraphicsPath piece;piece.AddLine(x+3,y+6,x+8,y+6);piece.AddLine(x+8,y+6,x+8,y+4);piece.AddArc(x+8,y+1,6.f,6.f,180.f,180.f);piece.AddLine(x+14,y+4,x+14,y+6);piece.AddLine(x+14,y+6,x+19,y+6);piece.AddLine(x+19,y+6,x+19,y+11);piece.AddLine(x+19,y+11,x+21,y+11);piece.AddArc(x+18,y+11,6.f,6.f,270.f,180.f);piece.AddLine(x+21,y+17,x+19,y+17);piece.AddLine(x+19,y+17,x+19,y+22);piece.AddLine(x+19,y+22,x+3,y+22);piece.CloseFigure();gr.DrawPath(&p,&piece);}
+ else{gr.DrawRectangle(&p,x+3,y,18.f,24.f);for(int a=0;a<3;a++)gr.DrawLine(&p,x+7,y+6+a*5,x+17,y+6+a*5);}
+}
+void brand(Graphics& gr,float x,float y,float width){
+ FontFamily face(L"Impact");Font logo(&face,34,FontStyleRegular,UnitPixel);SolidBrush ink(C_TEXT);StringFormat sf;sf.SetFormatFlags(StringFormatFlagsNoWrap);GraphicsState saved=gr.Save();gr.TranslateTransform(x,y);gr.ScaleTransform(width/218.f,1.f);gr.DrawString(L"RESIDENT EVIL",-1,&logo,PointF(0,0),&sf,&ink);gr.Restore(saved);
+ FontFamily serif(L"Georgia");Font hint_font(&serif,14,FontStyleBold,UnitPixel);text(gr,L"CODE: VERONICA X",x,y+44,hint_font,C_RED_HI,StringAlignmentNear,width,25);
+}
+void draw_sidebar(Graphics& gr,const Font&,const Font&,const Font& nav,const Font& footer_font){
+ SolidBrush side(C_SIDE);gr.FillRectangle(&side,0,0,SIDE,H);Pen line(C_FIELD_BD);gr.DrawLine(&line,float(SIDE-1),0.f,float(SIDE-1),float(H));brand(gr,20,22,SIDE-38.f);
+ for(int slot=0;slot<P_COUNT;slot++){const int i=k_nav_order[slot];float y=128.f+slot*49;bool active=g.page==i,hot=g.hover==ID_NAV+i;if(active||hot){LinearGradientBrush b(PointF(0,y),PointF(float(SIDE),y),active?Color(255,68,20,28):C_HOVER,C_SIDE);gr.FillRectangle(&b,0.f,y,float(SIDE),45.f);}if(active){SolidBrush b(C_RED);gr.FillRectangle(&b,0.f,y,3.f,45.f);}nav_icon(gr,i,22,y+10,active?C_TEXT:C_DIM);text(gr,i==P_INICIO?lx(design::GRAPHICS):i==P_JOGO?lx(design::GAMES):i==P_SAVES?lx(design::SAVES):T(k_nav[i]),62,y,nav,active?C_TEXT:C_DIM,StringAlignmentNear,SIDE-72.f,45);hit(0,y,SIDE,45,ID_NAV+i);}
+ text(gr,T(S_CREDIT_KASTIEL),22,H-62.f,footer_font,C_DIM,StringAlignmentNear,SIDE-38.f,22);text(gr,k_launcher_version,22,H-38.f,footer_font,C_DIM);
+}
+void draw_play(Graphics& gr,const Font& big,const Font& hint_font){
+ SolidBrush bg(Color(250,16,15,17));gr.FillRectangle(&bg,float(SIDE),PAGE_BOTTOM,float(W-SIDE),float(H)-PAGE_BOTTOM);Pen line(Color(255,104,80,53));gr.DrawLine(&line,float(SIDE),PAGE_BOTTOM,float(W),PAGE_BOTTOM);
+ if(g.running){button(gr,RectF(W-310.f,H-72.f,280,50),T(S_RESUME),ID_RESUME,big,true);button(gr,RectF(W-460.f,H-64.f,135,36),T(S_QUIT),ID_QUIT,hint_font);return;}
+ int installed=0;for(const auto& path:g.s.region_game)installed+=!path.empty();
+ text(gr,std::to_wstring(installed)+L" / 3  "+lx(design::CONFIGURED),SIDE+30.f,H-72.f,hint_font,C_TEXT,StringAlignmentNear,430,25);
+ text(gr,g.play_msg.empty()?lx(design::SELECT_HINT):g.play_msg,SIDE+30.f,H-44.f,hint_font,g.play_msg.empty()?C_DIM:C_RED_HI,StringAlignmentNear,W-SIDE-400.f,25);
+ button(gr,RectF(W-310.f,H-72.f,280,50),L"▶   "+std::wstring(T(S_PLAY)),ID_PLAY,big,true);
+}
+void draw_inicio(Graphics& gr,const Font& head,const Font& body,const Font&,const Font& hint_font){
+ const float x=SIDE+30.f,w=W-SIDE-60.f,bh=308;
+ if(g.banner){const float iw=float(g.banner->GetWidth()),ih=float(g.banner->GetHeight()),sc=std::max(float(W-SIDE)/iw,bh/ih);GraphicsState save=gr.Save();gr.SetClip(RectF(float(SIDE),0,float(W-SIDE),bh),CombineModeIntersect);gr.DrawImage(g.banner,RectF(float(SIDE)+(W-SIDE-iw*sc)/2,0,iw*sc,ih*sc));gr.Restore(save);}
+ LinearGradientBrush fade(PointF(float(SIDE),0),PointF(float(W),0),Color(240,12,13,16),Color(20,12,13,16));gr.FillRectangle(&fade,float(SIDE),0.f,float(W-SIDE),bh);
+ LinearGradientBrush bottom(PointF(0,bh-130),PointF(0,bh),Color(0,16,16,18),C_BG);gr.FillRectangle(&bottom,float(SIDE),bh-130,float(W-SIDE),131.f);
+ FontFamily serif(family(true,g_lang));Font title(&serif,37,FontStyleBold,UnitPixel);text(gr,L"RESIDENT EVIL",x,64,head,C_TEXT);text(gr,L"CODE: VERONICA X",x,100,title,C_TEXT,StringAlignmentNear,w-20,55);
+ text(gr,lx(design::GRAPHICS),x,170,body,C_DIM);bool ok=false;check_game(g.s.game,&ok);text(gr,(ok?L"●  ":L"○  ")+std::wstring(ok?lx(design::READY):T(S_SET_FOLDER_TAB)),x,234,body,ok?C_OK:C_DIM,StringAlignmentNear,w-40,30);
+ text(gr,lx(design::GRAPHICS),x,320,head,C_TEXT);
+ const float gap=16,cw=(w-2*gap)/3,cy=362,ch=250;
+ const wchar_t* titles[]={lx(design::DISPLAY),lx(design::QUALITY),lx(design::PERFORMANCE)};
+ for(int i=0;i<3;i++){float xx=x+i*(cw+gap);SolidBrush b(Color(245,22,21,23));gr.FillRectangle(&b,xx,cy,cw,ch);Pen p(Color(255,96,78,54));gr.DrawRectangle(&p,xx,cy,cw,ch);nav_icon(gr,i==0?P_INICIO:i==1?P_ATALHOS:P_DESEMPENHO,xx+17,cy+18,Color(255,187,159,116));text(gr,titles[i],xx+55,cy+12,head,C_TEXT,StringAlignmentNear,cw-66,34);}
+ auto setting=[&](int card,int row,const wchar_t* name,const std::wstring& value,int id,bool enabled=true){float xx=x+card*(cw+gap)+16,yy=cy+60+row*61; text(gr,name,xx,yy,hint_font,C_DIM,StringAlignmentNear,cw-32,21);dropdown(gr,RectF(xx,yy+22,cw-32,29),value,id,body,enabled);};
+ setting(0,0,T(S_DISPLAY_MODE),mode_name(g.s.mode),ID_DD_MODE);setting(0,1,T(S_RENDER_RES),res_name(g.s.res),ID_DD_RES);
+ setting(1,0,T(S_AA),aa_name(g.s.aa),ID_DD_AA);setting(1,1,T(S_ANISO),aniso_name(g.s.aniso),g.running?-1:ID_DD_ANISO,!g.running);setting(1,2,T(S_SHARPNESS),sharp_name(g.s.sharpness/10),ID_DD_SHARP);
+ setting(2,0,T(S_FRAME_LIMIT),fps_name(g.s.fps),g.running||opt30_comparison()?-1:ID_DD_FPS,!g.running&&!opt30_comparison());
+ if((g.s.fps==1||pose_device_override()>=0)&&!opt30_comparison())setting(2,1,T(S_FRAME_GEN),frame_generation_name(frame_generation_allowed()?g.s.frame_generation:0),g.running||!frame_generation_allowed()?-1:ID_DD_FRAME_GEN,!g.running&&frame_generation_allowed());
+ text(gr,lx(design::MORE),x,627,hint_font,C_DIM,StringAlignmentNear,w,24);
+ std::wstring note=T(g.s.fps?S_FPS_NOTE_60:S_FPS_NOTE_30);if(g.s.fps&&g.s.frame_generation&&frame_generation_allowed())note+=L"\n"+std::wstring(T(S_FPS_NOTE_FG));
+ StringFormat sf;sf.SetLineAlignment(StringAlignmentNear);if(g_lang==LANG_AR)sf.SetFormatFlags(StringFormatFlagsDirectionRightToLeft);SolidBrush ink(C_DIM);gr.DrawString(note.c_str(),-1,&hint_font,RectF(x,657,w,60),&sf,&ink);g_page_end=700;
 }
 
 void path_row(Graphics& gr, float x, float y, const std::wstring& label, const std::wstring& value,
@@ -1104,33 +1116,125 @@ void save_note(Graphics& gr, const wchar_t* message, float x, float y, const Fon
 void option_card(Graphics& gr, float x, float y, float w, float h, bool on, int id,
                  const std::wstring& title, const std::wstring& desc, const Font& body, const Font& fsm);
 
+/* A version is ready when its folder holds the game and, outside Japan, its RAP is set. */
+bool region_ready(int i)
+{
+    if (g.s.region_game[i].empty()) return false;
+    bool valid = false; check_game(g.s.region_game[i], &valid);
+    std::error_code ec;
+    return valid && (i == 2 || (!g.s.region_rap[i].empty() && fs::is_regular_file(g.s.region_rap[i], ec)));
+}
+int ready_count() { int n = 0; for (int i = 0; i < 3; i++) n += region_ready(i); return n; }
+bool g_version_picked = false;   /* a card was clicked this session (needed with 2+ ready versions) */
+
+/* The shortcut as the player will press it: the key, plus the connected controller's buttons. */
+std::wstring shortcut_text(const wchar_t* key, const wchar_t* ps, const wchar_t* xbox)
+{
+    std::wstring s = key;
+    if (g.pad_status.empty()) return s;
+    return s + L"   ·   " + (g.pad_kind == PAD_KIND_XINPUT ? xbox : ps);
+}
+
 void draw_jogo(Graphics& gr, const Font& head, const Font& body, const Font& fsm)
 {
-    float x = SIDE + 32.0f, y = 34;
-    section(gr, T(S_FOLDERS), x, y, W - SIDE - 64.0f, head);
-    y += 52;
-    bool ok;
-    std::wstring n = check_game(g.s.game, &ok);
-    path_row(gr, x, y, T(S_GAME_FOLDER), g.s.game, n, ok, ID_GAME_BROWSE, ID_GAME_OPEN, body, fsm);
-    text(gr, T(S_GAME_FOLDER_HINT),
-         x + 175, y + 58, fsm, C_DIM, StringAlignmentNear, 690, 20);
-    y += 110;
-    n = check_rap(g.s.rap, &ok);
-    path_row(gr, x, y, T(S_LICENSE), g.s.rap, n, ok, ID_RAP_BROWSE, ID_RAP_OPEN, body, fsm);
-    text(gr, T(S_LICENSE_HINT),
-         x + 175, y + 58, fsm, C_DIM, StringAlignmentNear, 690, 20);
-    /* Keep the regional licence note visible even with EU selected. Wrap
-     * translations rather than truncating the Japanese/no-RAP explanation. */
-    {
-        StringFormat sf;
-        sf.SetLineAlignment(StringAlignmentNear);
-        sf.SetTrimming(StringTrimmingWord);
-        if (g_lang == LANG_AR) sf.SetFormatFlags(StringFormatFlagsDirectionRightToLeft);
-        SolidBrush brush(C_TEXT);
-        gr.DrawString(T(S_LICENSE_JP_NOTICE), -1, &fsm,
-                      RectF(x + 175, y + 84, W - x - 203, 72), &sf, &brush);
+    library_art();
+    const float x=SIDE+30.f,w=W-SIDE-60.f,gap=18,card_w=(w-2*gap)/3;
+    FontFamily face(family(true,g_lang));Font title(&face,29,FontStyleBold,UnitPixel);
+    const Color gold(255,208,177,119),amber(255,226,160,80);
+    text(gr,lx(design::LIBRARY),x,24,title,C_TEXT,StringAlignmentNear,w-440,46);
+    text(gr,lx(design::DESCRIPTION),x,72,fsm,C_DIM,StringAlignmentNear,w-440,22);
+    if(!g.pad_status.empty()){
+        std::wstring pad=lx(design::PAD_CONNECTED);const size_t at=pad.find(L"%s");
+        if(at!=std::wstring::npos)pad.replace(at,2,g.pad_kind==PAD_KIND_XINPUT?std::wstring(T(S_PAD_XBOX)):g.pad_status);
+        text(gr,L"●  "+pad,x,96,fsm,C_OK,StringAlignmentNear,w-440,20);
     }
-    y += 170;
+    if(ready_count()>1)
+        text(gr,lx(design::PICK_VERSION),x,116,body,g_version_picked?C_DIM:gold,StringAlignmentNear,w,22);
+
+    const float yy=146,hh=388;
+    /* Only added versions get a card; the next slot offers to add another. */
+    int shown[3],n=0;for(int r:region_order)if(!g.s.region_game[r].empty())shown[n++]=r;
+    /* Several-line hint, centered in a box (text() is one line). */
+    auto wrap=[&](const wchar_t* t,RectF r){const std::wstring s=g_lang==LANG_AR?L"‫"+std::wstring(t)+L"‬":std::wstring(t);
+        StringFormat sf;sf.SetAlignment(StringAlignmentCenter);sf.SetLineAlignment(StringAlignmentNear);SolidBrush b(C_DIM);gr.DrawString(s.c_str(),-1,&fsm,r,&sf,&b);};
+    if(!n){   /* nothing added yet: one big Add version in the middle */
+        SolidBrush bg(Color(200,18,18,20));gr.FillRectangle(&bg,x,yy,w,hh);Pen edge(C_FIELD_BD);gr.DrawRectangle(&edge,x,yy,w,hh);
+        FontFamily face2(family(true,g_lang));Font big(&face2,22,FontStyleBold,UnitPixel);
+        button(gr,RectF(x+w/2-200,yy+120,400,64),L"+   "+std::wstring(lx(design::ADD)),2710,big,true,!g.running);
+        wrap(lx(design::ADD_HINT),RectF(x+60,yy+204,w-120,22));
+    }
+    for(int slot=0;slot<n;slot++){
+        const int i=shown[slot];const float xx=x+slot*(card_w+gap);
+        const bool added=!g.s.region_game[i].empty(),active=added&&g.s.region_selected==i;
+        SolidBrush bg(Color(240,18,18,20));gr.FillRectangle(&bg,xx,yy,card_w,hh);
+        if(!g.running)hit(xx,yy,card_w,hh,added?2700+i:2710);   /* inner buttons are added later and win */
+        /* art */
+        const RectF art(xx+8,yy+8,card_w-16,150);
+        SolidBrush art_bg(Color(255,12,12,14));gr.FillRectangle(&art_bg,art);
+        image_fit(gr,g.cover_bg[i],art,true);
+        SolidBrush dim(Color(120,9,10,12));gr.FillRectangle(&dim,art);
+        if(g.cover[i])image_fit(gr,g.cover[i],RectF(art.X+10,art.Y+10,art.Width-20,art.Height-20));
+        else text(gr,lx(design::NO_ART),art.X+10,art.Y+50,fsm,C_DIM,StringAlignmentCenter,art.Width-20,40);
+        /* name, code, state */
+        const float tx=xx+14,tw=card_w-28;
+        text(gr,region_name(i),tx,yy+166,head,C_TEXT,StringAlignmentNear,tw,26);
+        text(gr,k_versions[i].code,tx,yy+192,fsm,C_DIM,StringAlignmentNear,tw,18);
+        bool valid=false;if(added)check_game(g.s.region_game[i],&valid);
+        std::error_code ec;const bool rap_ok=i==2||(!g.s.region_rap[i].empty()&&fs::is_regular_file(g.s.region_rap[i],ec));
+        const wchar_t* status=!added?lx(design::MISSING):!valid?T(S_CHK_GAME_BAD):!rap_ok?lx(design::RAP_PENDING):lx(design::READY);
+        const Color sc=!added?C_DIM:!valid?C_RED_HI:!rap_ok?amber:C_OK;
+        {SolidBrush dot(sc);gr.FillEllipse(&dot,tx,yy+219,9.f,9.f);}
+        text(gr,status,tx+16,yy+212,body,sc,StringAlignmentNear,tw-16,22);
+        {
+            /* game folder (set by Add version), then the license */
+            text(gr,T(S_GAME_FOLDER),tx,yy+244,fsm,C_DIM,StringAlignmentNear,tw,18);
+            field(gr,RectF(tx,yy+264,tw,30),false,false);
+            text(gr,g.s.region_game[i],tx+8,yy+264,fsm,C_TEXT,StringAlignmentNear,tw-16,30);
+            text(gr,T(S_LICENSE),tx,yy+300,fsm,C_DIM,StringAlignmentNear,tw,18);
+            if(i==2){
+                field(gr,RectF(tx,yy+320,tw,30),false,false);
+                text(gr,lx(design::RAP_NOT_NEEDED),tx+8,yy+320,fsm,C_DIM,StringAlignmentNear,tw-16,30);
+            } else {
+                const RectF rf(tx,yy+320,tw-40,30);field(gr,rf,false,false);
+                const bool has=!g.s.region_rap[i].empty();
+                text(gr,has?fs::path(g.s.region_rap[i]).filename().wstring():std::wstring(lx(design::RAP_PICK)),tx+8,yy+320,fsm,has&&rap_ok?C_TEXT:C_DIM,StringAlignmentNear,rf.Width-16,30);
+                button(gr,RectF(tx+tw-34,yy+320,34,30),L"…",2720+i,body,false,!g.running);
+            }
+            /* actions */
+            const float ay=yy+hh-34,half=(tw-10)/2;
+            button(gr,RectF(tx,ay,half,26),lx(design::OPEN_FOLDER),2730+i,fsm);
+            button(gr,RectF(tx+half+10,ay,half,26),lx(design::REMOVE),2740+i,fsm,false,!g.running);
+        }
+        Pen edge(active?gold:g.hover==2700+i?C_TEXT:C_FIELD_BD,active?2.f:1.f);gr.DrawRectangle(&edge,xx,yy,card_w,hh);
+        if(active){Pen tick(gold,2.f);tick.SetStartCap(LineCapRound);tick.SetEndCap(LineCapRound);tick.SetLineJoin(LineJoinRound);
+            PointF v[3]={PointF(xx+card_w-32,yy+178),PointF(xx+card_w-26,yy+184),PointF(xx+card_w-16,yy+172)};gr.DrawLines(&tick,v,3);}
+    }
+    if(n&&n<3){   /* beside the last card: add another version */
+        const float xx=x+n*(card_w+gap);const bool hot=g.hover==2710;
+        SolidBrush bg(Color(hot?230:160,22,20,22));gr.FillRectangle(&bg,xx,yy,card_w,hh);
+        Pen edge(hot?C_TEXT:C_FIELD_BD,1.f);edge.SetDashStyle(DashStyleDash);gr.DrawRectangle(&edge,xx,yy,card_w,hh);
+        Pen plus(hot?C_TEXT:C_DIM,2.f);const float cx=xx+card_w/2,cy=yy+150;
+        gr.DrawEllipse(&plus,cx-28,cy-28,56.f,56.f);gr.DrawLine(&plus,cx-12,cy,cx+12,cy);gr.DrawLine(&plus,cx,cy-12,cx,cy+12);
+        text(gr,lx(design::ADD_ANOTHER),xx+14,cy+44,head,hot?C_TEXT:C_DIM,StringAlignmentCenter,card_w-28,28);
+        wrap(lx(design::ADD_HINT),RectF(xx+20,cy+84,card_w-40,40));
+        if(!g.running)hit(xx,yy,card_w,hh,2710);
+    }
+    /* Always visible: which versions need a license. */
+    text(gr,L"ⓘ  "+std::wstring(lx(design::RAP_HINT)),x,yy+hh+10,fsm,C_DIM,StringAlignmentNear,w,20);
+    if(n)text(gr,L"ⓘ  "+std::wstring(lx(design::REMOVE_NOTE)),x,yy+hh+30,fsm,C_DIM,StringAlignmentNear,w,20);
+    option_card(gr,x,yy+hh+60,w,84,g.s.focus_pause,ID_FOCUS_PAUSE,
+                T(S_FOCUS_PAUSE_T),T(S_FOCUS_PAUSE_D),body,fsm);
+}
+
+void draw_saves(Graphics& gr, const Font& head, const Font& body, const Font& fsm)
+{
+    const float x=SIDE+30.f,w=W-SIDE-60.f;
+    FontFamily face(family(true,g_lang));Font title(&face,29,FontStyleBold,UnitPixel);
+    text(gr,lx(design::SAVES_TITLE),x,24,title,C_TEXT,StringAlignmentNear,w,46);
+    text(gr,lx(design::SAVES_DESC),x,76,fsm,C_DIM,StringAlignmentNear,w,25);
+    float y=124;
+    section(gr,T(S_SAVE_FOLDER),x,y,w,head);
+    y+=44;
     path_row(gr, x, y, T(S_SAVE_FOLDER), save_folder().wstring(),
              T(g.s.saves.empty() ? S_SAVE_USING_DEFAULT : S_SAVE_SELECTED), true,
              ID_SAVE_BROWSE, ID_SAVE_OPEN, body, fsm);
@@ -1138,16 +1242,16 @@ void draw_jogo(Graphics& gr, const Font& head, const Font& body, const Font& fsm
     save_note(gr, T(S_SAVE_NO_MOVE), x + 175, y + 114, fsm);
     button(gr, RectF(x + 175, y + 168, 330, 32), T(S_SAVE_DEFAULT), ID_SAVE_DEFAULT,
            body, false, !g.s.saves.empty());
-    button(gr,RectF(x,y+228,390,32),T(g.s.test_tools?S_TEST_ENABLED:S_TEST_ENABLE),ID_TEST_ENABLE,body);
-    button(gr,RectF(x+404,y+228,260,32),T(S_TEST_OPEN),ID_TEST_OPEN,body,false,g.s.test_tools&&g.running);
-    text(gr,s_shortcut_xbox?L"F7 / RB+RT+LB+LT+B":L"F7 / R1+R2+L1+L2+○",x,y+262,fsm,C_DIM,StringAlignmentNear,W-SIDE-64.0f,14);
-    option_card(gr,x,y+276,W-SIDE-64.0f,84,g.s.focus_pause,ID_FOCUS_PAUSE,
-                T(S_FOCUS_PAUSE_T),T(S_FOCUS_PAUSE_D),body,fsm);
-    text(gr,T(S_SHOT_HINT),x,y+380,fsm,C_DIM,StringAlignmentNear,W-SIDE-64.0f,24);
-    button(gr,RectF(x,y+410,330,32),T(S_SHOT_OPEN),ID_SHOT_OPEN,body);
     if (g.running)
-        text(gr, T(S_PATHS_RESTART), x, y + 195, body, C_RED_HI,
-             StringAlignmentNear, 820, 24);
+        text(gr, T(S_PATHS_RESTART), x + 520, y + 172, body, C_RED_HI,
+             StringAlignmentNear, w - 520, 24);
+    y+=230;
+    section(gr,lx(design::SHOT_TITLE),x,y,w,head);
+    y+=44;
+    text(gr,lx(design::SHOT_DESC),x,y,fsm,C_DIM,StringAlignmentNear,w,20);
+    text(gr,std::wstring(lx(design::SHORTCUT))+L"  "+shortcut_text(L"F10",L"R1+R2+L1+L2+R3",L"RB+RT+LB+LT+RS"),
+         x,y+24,body,C_TEXT,StringAlignmentNear,w,24);
+    button(gr,RectF(x,y+60,330,32),T(S_SHOT_OPEN),ID_SHOT_OPEN,body);
 }
 
 bool file_patch_on(const FilePatch& p)
@@ -1620,6 +1724,17 @@ void draw_avancado(Graphics& gr, const Font& head, const Font& body, const Font&
         else { wchar_t b[1024]; swprintf(b, 1024, T(S_LOG_SIZE_FMT), lp.c_str(), log_size() / 1048576.0); log_note = b; }
     }
     text(gr, log_note, x, y, fsm, g.log_msg.empty() ? C_DIM : C_OK, StringAlignmentNear, w, 20);
+    y += 44;
+    /* Test maps (F7): moved here from the game library */
+    {   /* upper case like this page's other section titles */
+        std::wstring maps = lx(design::MAPS_TITLE); CharUpperBuffW(maps.data(), (DWORD)maps.size());
+        section(gr, maps, x, y, w, head);
+    }
+    y += 46;
+    button(gr,RectF(x,y,390,32),T(g.s.test_tools?S_TEST_ENABLED:S_TEST_ENABLE),ID_TEST_ENABLE,body);
+    button(gr,RectF(x+404,y,260,32),T(S_TEST_OPEN),ID_TEST_OPEN,body,false,g.s.test_tools&&g.running);
+    text(gr,std::wstring(lx(design::SHORTCUT))+L"  "+shortcut_text(L"F7",L"R1+R2+L1+L2+○",L"RB+RT+LB+LT+B"),
+         x,y+40,fsm,C_DIM,StringAlignmentNear,w,20);
 }
 
 /* A switch card whose description wraps (the options' texts run to two
@@ -1892,7 +2007,7 @@ void draw_page_scroll(Graphics& gr, int pi)
 {
     const float max = pi == P_PATCHES ? 0.0f : std::max(0.0f, g_page_end + 24 - PAGE_BOTTOM);
     g.page_scroll_max[pi] = max;
-    if (g.page_scroll[pi] > max) { g.page_scroll[pi] = max; InvalidateRect(g.hwnd, NULL, FALSE); }
+    if (g.page_scroll[pi] > max) { g.page_scroll[pi] = std::floor(max); InvalidateRect(g.hwnd, NULL, FALSE); }
     g.page_track = g.page_thumb = RectF();
     if (max <= 0) return;
     const float sc = g.page_scroll[pi];
@@ -1915,7 +2030,7 @@ void draw_page_scroll(Graphics& gr, int pi)
 void page_scroll_to(float v)
 {
     const int pi = g.page;
-    v = std::clamp(v, 0.0f, g.page_scroll_max[pi]);
+    v = std::round(std::clamp(v, 0.0f, g.page_scroll_max[pi]));   /* whole pixels: cached art copies 1:1 */
     if (v != g.page_scroll[pi]) { g.page_scroll[pi] = v; g.open_dd = -1; InvalidateRect(g.hwnd, NULL, FALSE); }
 }
 void page_drag_to(int mouse_y)
@@ -1926,17 +2041,18 @@ void page_drag_to(int mouse_y)
 
 void paint(HDC hdc)
 {
-    Bitmap back(W, H, PixelFormat32bppARGB);
+    Bitmap back(W, H, PixelFormat32bppPARGB);
     Graphics gr(&back);
     gr.SetSmoothingMode(SmoothingModeAntiAlias);
     gr.SetTextRenderingHint(TextRenderingHintClearTypeGridFit);
     gr.SetInterpolationMode(InterpolationModeHighQualityBicubic);
     SolidBrush bg(C_BG); gr.FillRectangle(&bg, 0, 0, W, H);
+    if(g.castle){image_fit(gr,g.castle,RectF(float(SIDE),0,float(W-SIDE),PAGE_BOTTOM),true);SolidBrush shade(Color(195,12,13,16));gr.FillRectangle(&shade,float(SIDE),0.f,float(W-SIDE),PAGE_BOTTOM);}
     g.hits.clear();
 
     FontFamily serif(family(true, g_lang)), sans(family(false, g_lang));
     Font fTitle(&serif, 22, FontStyleBold, UnitPixel), fTitle2(&serif, 17, FontStyleBold, UnitPixel);
-    Font fNav(&sans, 16, FontStyleRegular, UnitPixel), fHead(&serif, 18, FontStyleRegular, UnitPixel);
+    Font fNav(&sans, 15, FontStyleRegular, UnitPixel), fHead(&serif, 18, FontStyleRegular, UnitPixel);
     Font fBody(&sans, 14, FontStyleRegular, UnitPixel), fSmall(&sans, 12, FontStyleRegular, UnitPixel);
     Font fCode(&serif, 18, FontStyleBold, UnitPixel), fBig(&serif, 22, FontStyleBold, UnitPixel);
     Font fCol(&serif, 15, FontStyleBold, UnitPixel);
@@ -1947,6 +2063,7 @@ void paint(HDC hdc)
     gr.TranslateTransform(0, -g_page_dy);
     if (g.page == P_INICIO) draw_inicio(gr, fHead, fBody, fCode, fSmall);
     else if (g.page == P_JOGO) draw_jogo(gr, fHead, fBody, fSmall);
+    else if (g.page == P_SAVES) draw_saves(gr, fHead, fBody, fSmall);
     else if (g.page == P_CONTROLES) draw_controles(gr, fHead, fBody, fSmall, fCol);
     else if (g.page == P_ATALHOS) draw_atalhos(gr, fHead, fBody, fSmall);
     else if (g.page == P_PATCHES) draw_patches(gr, fHead, fBody, fSmall);
@@ -2031,8 +2148,8 @@ void paint(HDC hdc)
         Pen lp(C_RED, 1); gr.DrawRectangle(&lp, box.X, box.Y, box.Width - 1, box.Height - 1);
     }
 
-    Graphics screen(hdc);
-    screen.DrawImage(&back, 0, 0);
+    Graphics screen(hdc);RECT client{};GetClientRect(g.hwnd,&client);if(client.right==W&&client.bottom==H){screen.DrawImage(&back,0,0,W,H);return;}   /* 1:1, no resampling */
+    screen.SetInterpolationMode(InterpolationModeHighQualityBicubic);screen.DrawImage(&back,RectF(0,0,float(client.right),float(client.bottom)));
 }
 
 int hit_at(int x, int y)
@@ -2230,6 +2347,26 @@ void finish_srt_drag() {
 
 void click(int id)
 {
+    if((id>=2700&&id<2703)&&!g.running){
+        g_version_picked=true;
+        g.s.region_selected=id-2700;g.s.game=g.s.region_game[id-2700];g.s.rap=g.s.region_rap[id-2700];changed();return;
+    }
+    if(g.running&&(id==2710||id==ID_GAME_BROWSE||id==ID_RAP_BROWSE||(id>=2720&&id<2723)||(id>=2740&&id<2743)))return;
+    if(id>=2720&&id<2723){   /* a version's RAP license, from its card */
+        const int i=id-2720;auto path=pick(false,g.s.region_rap[i],T(S_RAP_FILTER),L"*.rap");
+        if(!path.empty()){g.s.region_rap[i]=path;if(g.s.region_selected==i)g.s.rap=path;changed();}
+        return;
+    }
+    if(id>=2730&&id<2733){open_in_explorer(g.s.region_game[id-2730]);return;}
+    if(id>=2740&&id<2743){   /* forget the version; its files stay on disk */
+        const int i=id-2740;g.s.region_game[i].clear();g.s.region_rap[i].clear();
+        if(g.s.region_selected==i){
+            g.s.game.clear();g.s.rap.clear();
+            for(int r:region_order)if(!g.s.region_game[r].empty()){g.s.region_selected=r;g.s.game=g.s.region_game[r];g.s.rap=g.s.region_rap[r];break;}
+        }
+        changed();return;
+    }
+
     if (g.open_dd >= 0) {
         if (id == ID_DD_UP || id == ID_DD_DOWN) { g.dd_scroll += id == ID_DD_UP ? -1 : 1; InvalidateRect(g.hwnd, NULL, FALSE); return; }
         if (id == ID_DD_LIST) return;
@@ -2278,8 +2415,21 @@ void click(int id)
     else if(id==ID_FOCUS_PAUSE){g.s.focus_pause=!g.s.focus_pause;changed();}
     else if(id==ID_ITEMS_ENABLE){g.s.items_menu=!g.s.items_menu;cv_item_menu_enable(g.s.items_menu);changed();}
     else if(id==ID_SHOT_OPEN){const fs::path d=fs::path(ini_path()).parent_path()/L"screenshots";std::error_code ec;fs::create_directories(d,ec);open_in_explorer(d.wstring());}
-    else if (id == ID_GAME_BROWSE) { auto p = pick(true, g.s.game, nullptr, nullptr); if (!p.empty()) { g.s.game = p; changed(); } }
-    else if (id == ID_RAP_BROWSE) { auto p = pick(false, g.s.rap, T(S_RAP_FILTER), L"*.rap"); if (!p.empty()) { g.s.rap = p; changed(); } }
+    else if (id == ID_GAME_BROWSE||id==2710) {
+        auto path=pick(true,g.s.game,nullptr,nullptr);if(!path.empty()){
+            const int region=region_index(widen(sfo_field(fs::path(path)/L"PARAM.SFO","TITLE_ID").c_str()));
+            bool valid=false;const auto note=check_game(path,&valid);
+            if(region<0||!valid){g.play_msg=note;InvalidateRect(g.hwnd,nullptr,FALSE);return;}
+            // Detect the chosen folder by TITLE_ID, not by its directory name.
+            // The player picks the license themselves; no searching for one.
+            std::wstring license=region==2?std::wstring():g.s.region_rap[region];
+            g.s.region_selected=region;g.s.region_game[region]=path;g.s.region_rap[region]=license;g.s.game=path;g.s.rap=license;g_version_picked=true;
+            // A version that needs a license and has none: ask for it now.
+            if(license.empty()&&region!=2){auto rap=pick(false,path,T(S_RAP_FILTER),L"*.rap");if(!rap.empty()){g.s.region_rap[region]=rap;g.s.rap=rap;}}
+            changed();
+        }
+    }
+    else if (id == ID_RAP_BROWSE) { auto path=pick(false,g.s.rap,T(S_RAP_FILTER),L"*.rap");if(!path.empty()){g.s.rap=path;g.s.region_rap[g.s.region_selected]=path;changed();} }
     else if (id == ID_SAVE_BROWSE) { auto p = pick(true, save_folder().wstring(), nullptr, nullptr); if (!p.empty()) { g.s.saves = p; changed(); } }
     else if (id == ID_SAVE_DEFAULT) { g.s.saves.clear(); changed(); }
     else if (id == ID_SAVE_OPEN) { std::error_code ec; fs::create_directories(save_folder(), ec); open_in_explorer(save_folder().wstring()); }
@@ -2394,10 +2544,15 @@ void click(int id)
         changed();
     }
     else if (id == ID_PLAY) {
+        /* One ready version plays at once; with more, the player picks one first. */
+        const int ready=ready_count();
+        if(ready==1&&!region_ready(g.s.region_selected))
+            for(int i=0;i<3;i++)if(region_ready(i)){g.s.region_selected=i;g.s.game=g.s.region_game[i];g.s.rap=g.s.region_rap[i];break;}
+        if(ready>1&&!g_version_picked){g.page=P_JOGO;g.play_msg=lx(design::PICK_VERSION);InvalidateRect(g.hwnd,NULL,FALSE);return;}
         bool ok; check_game(g.s.game, &ok);
         if (!ok) { g.page = P_JOGO; g.play_msg = T(S_SET_FOLDER_FIRST); }
         else if (folder_code() != GAME_CODE) { save_settings(g.s); start_other_version(); }
-        else if (!prepare_save_folder()) { g.page = P_JOGO; g.play_msg = T(S_SAVE_ERROR); }
+        else if (!prepare_save_folder()) { g.page = P_SAVES; g.play_msg = T(S_SAVE_ERROR); }
         else if (int e = prepare_eboot()) { g.page = P_JOGO; g.play_msg = with_code(T(e), GAME_CODE); }
         else { save_settings(g.s); start_game(); }
     }
@@ -2417,6 +2572,8 @@ int vk_from_msg(WPARAM wp, LPARAM lp)
     }
 }
 
+int logical_x(int x){RECT c{};GetClientRect(g.hwnd,&c);return int(double(x)*W/std::max(1L,c.right));}
+int logical_y(int y){RECT c{};GetClientRect(g.hwnd,&c);return int(double(y)*H/std::max(1L,c.bottom));}
 LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp)
 {
     switch (m) {
@@ -2438,16 +2595,16 @@ LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp)
     case WM_ERASEBKGND: return 1;
     case WM_PAINT: { PAINTSTRUCT ps; HDC dc = BeginPaint(h, &ps); paint(dc); EndPaint(h, &ps); return 0; }
     case WM_MOUSEMOVE: {
-        if(g.srt_drag>=0) {update_srt_slider(g.srt_drag,GET_X_LPARAM(lp));SetCursor(LoadCursor(NULL,IDC_HAND));return 0;}
-        if (g.page_drag) { page_drag_to(GET_Y_LPARAM(lp)); return 0; }
-        int id = hit_at(GET_X_LPARAM(lp), GET_Y_LPARAM(lp));
+        if(g.srt_drag>=0) {update_srt_slider(g.srt_drag,logical_x(GET_X_LPARAM(lp)));SetCursor(LoadCursor(NULL,IDC_HAND));return 0;}
+        if (g.page_drag) { page_drag_to(logical_y(GET_Y_LPARAM(lp))); return 0; }
+        int id = hit_at(logical_x(GET_X_LPARAM(lp)), logical_y(GET_Y_LPARAM(lp)));
         if (id != g.hover) { g.hover = id; InvalidateRect(h, NULL, FALSE); }
         SetCursor(LoadCursor(NULL, id >= 0 ? IDC_HAND : IDC_ARROW));
         TRACKMOUSEEVENT t = { sizeof t, TME_LEAVE, h, 0 }; TrackMouseEvent(&t);
         return 0; }
     case WM_MOUSEWHEEL:
         if(g.page==P_SRT && g.open_dd<0) {
-            POINT p={GET_X_LPARAM(lp),GET_Y_LPARAM(lp)};ScreenToClient(h,&p);const int id=hit_at(p.x,p.y);
+            POINT p={GET_X_LPARAM(lp),GET_Y_LPARAM(lp)};ScreenToClient(h,&p);p.x=logical_x(p.x);p.y=logical_y(p.y);const int id=hit_at(p.x,p.y);
             if(id==ID_SRT_OPACITY) {
                 const int step=GET_WHEEL_DELTA_WPARAM(wp)>0?1:-1;
                 g.s.srt_opacity=std::clamp(g.s.srt_opacity+step,0,100);set_srt_env();changed();return 0;
@@ -2470,25 +2627,25 @@ LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp)
     case WM_MOUSELEAVE: g.hover = -1; InvalidateRect(h, NULL, FALSE); return 0;
     case WM_SETCURSOR: if (LOWORD(lp) == HTCLIENT) return TRUE; break;
     case WM_LBUTTONDOWN: {
-        const int id=hit_at(GET_X_LPARAM(lp),GET_Y_LPARAM(lp));
+        const int id=hit_at(logical_x(GET_X_LPARAM(lp)),logical_y(GET_Y_LPARAM(lp)));
         if(g.page==P_SRT&&g.open_dd<0&&(id==ID_SRT_SCALE||id==ID_SRT_OPACITY)) {
             g.srt_drag=id;g.srt_drag_dirty=false;SetCapture(h);
-            update_srt_slider(id,GET_X_LPARAM(lp));InvalidateRect(h,NULL,FALSE);return 0;
+            update_srt_slider(id,logical_x(GET_X_LPARAM(lp)));InvalidateRect(h,NULL,FALSE);return 0;
         }
         if (id == ID_PAGE_THUMB) {
-            g.page_drag = true; g.page_grab = GET_Y_LPARAM(lp) - g.page_thumb.Y; SetCapture(h);
+            g.page_drag = true; g.page_grab = logical_y(GET_Y_LPARAM(lp)) - g.page_thumb.Y; SetCapture(h);
             InvalidateRect(h, NULL, FALSE); return 0;
         }
         if (id == ID_PAGE_TRACK) {   /* a page up or down, towards the click */
             const float step = PAGE_BOTTOM - 80;
-            page_scroll_to(g.page_scroll[g.page] + (GET_Y_LPARAM(lp) < g.page_thumb.Y ? -step : step));
+            page_scroll_to(g.page_scroll[g.page] + (logical_y(GET_Y_LPARAM(lp)) < g.page_thumb.Y ? -step : step));
             return 0;
         }
         click(id);return 0;
     }
     case WM_LBUTTONUP:
         if (g.page_drag) { g.page_drag = false; ReleaseCapture(); InvalidateRect(h, NULL, FALSE); return 0; }
-        if(g.srt_drag>=0) {update_srt_slider(g.srt_drag,GET_X_LPARAM(lp));finish_srt_drag();return 0;}break;
+        if(g.srt_drag>=0) {update_srt_slider(g.srt_drag,logical_x(GET_X_LPARAM(lp)));finish_srt_drag();return 0;}break;
     case WM_CAPTURECHANGED: case WM_CANCELMODE: g.page_drag = false; finish_srt_drag();return 0;
     case WM_KEYDOWN: case WM_SYSKEYDOWN:
         if (g.cap == CAP_KEY) {
@@ -2501,6 +2658,7 @@ LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp)
         if (g.cap == CAP_BTN && wp == VK_ESCAPE) { g.cap = CAP_NONE; InvalidateRect(h, NULL, FALSE); return 0; }
         if (wp == VK_ESCAPE && g.open_dd >= 0) { g.open_dd = -1; InvalidateRect(h, NULL, FALSE); return 0; }
         if (g.running && (wp == VK_INSERT || wp == VK_F5 || wp == VK_ESCAPE)) { hide_menu(); return 0; }
+        if(!g.running&&wp==VK_RETURN&&g.open_dd<0&&(g.page==P_JOGO||g.page==P_INICIO)){click(ID_PLAY);return 0;}
         if (m == WM_SYSKEYDOWN) break;
         return 0;
     case WM_ACTIVATE:
@@ -2875,7 +3033,7 @@ void start_game()
     g.applied_mode = s.mode; g.applied_res = s.res; g.applied_aa = s.aa;
     g_rsx_menu_hook = menu_hook;
     g_rsx_key_hook = key_hook;
-    g.page = P_INICIO;
+    g.page = P_JOGO;   /* the first tab */
     InvalidateRect(g.hwnd, NULL, FALSE);
     SetEvent(s_play_ev);
 }
@@ -2890,6 +3048,7 @@ DWORD WINAPI launcher_thread(void*)
     cv_item_menu_enable(g.s.items_menu);   /* the saved choice, before any change */
     set_icon_env();   /* the button capture below reads the layout it implies */
     g.banner = load_png("BANNER");
+    g.castle=load_png("LAUNCHER_CASTLE");
 
     WNDCLASSEXW wc = { sizeof wc };
     wc.lpfnWndProc = wndproc; wc.hInstance = GetModuleHandleW(NULL);
@@ -2900,6 +3059,9 @@ DWORD WINAPI launcher_thread(void*)
     RECT r = { 0, 0, W, H }; AdjustWindowRect(&r, style, FALSE);
     int ww = r.right - r.left, wh = r.bottom - r.top;
     RECT wa; SystemParametersInfoW(SPI_GETWORKAREA, 0, &wa, 0);
+    const int frame_w=ww-W,frame_h=wh-H;
+    const double scale=std::min({1.0,double(wa.right-wa.left-frame_w-24)/W,double(wa.bottom-wa.top-frame_h-24)/H});
+    ww=int(W*scale)+frame_w;wh=int(H*scale)+frame_h;
     g.hwnd = CreateWindowExW(0, L"cv_launcher", L"Resident Evil Code: Veronica X (PC)", style,
                              wa.left + ((wa.right - wa.left) - ww) / 2, wa.top + ((wa.bottom - wa.top) - wh) / 2,
                              ww, wh, NULL, NULL, wc.hInstance, NULL);
@@ -2911,6 +3073,7 @@ DWORD WINAPI launcher_thread(void*)
      * play at once with the settings it saved. Once only. */
     if (const char* a = getenv("CV_LAUNCHER_AUTOPLAY"); a && *a) {
         _putenv_s("CV_LAUNCHER_AUTOPLAY", "");
+        g_version_picked = true;   /* the other launcher already chose this version */
         click(ID_PLAY);
     }
     /* CV_LAUNCHER_PAGE=<n>: open on page n (Page order), for screenshots. */
@@ -2922,6 +3085,8 @@ DWORD WINAPI launcher_thread(void*)
     cv_item_menu_close();
     /* closed before Jogar: the main thread sees this thread end */
     delete g.banner; g.banner = nullptr;
+    image_fit_forget();
+    delete g.castle;g.castle=nullptr;for(int i=0;i<3;i++){delete g.cover[i];delete g.cover_bg[i];g.cover[i]=g.cover_bg[i]=nullptr;}
     GdiplusShutdown(gtok);
     return 0;
 }
