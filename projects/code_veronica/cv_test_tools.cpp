@@ -1,5 +1,6 @@
 // Optional host-side test window. Guest calls are consumed only by the game dispatcher.
 #include "cv_test_tools.h"
+#include "cv_save_library.h"
 #include "cv_version.h"
 #include "ppu_recomp.h"
 #include <atomic>
@@ -294,14 +295,12 @@ void send_selected() {
     ShowWindow(window,SW_HIDE);g_pad_block=0;auto game=static_cast<HWND>(rsx_d3d12_window());if(game)SetForegroundWindow(game);
 }
 void send_save() {
-    if(!SAVE_OBJECT||!enabled||!ready||request.load()||save_request.load()||load_request.load())return;
-    result=1;save_request=true;
-    ShowWindow(window,SW_HIDE);g_pad_block=0;auto game=static_cast<HWND>(rsx_d3d12_window());if(game)SetForegroundWindow(game);
+    if(!enabled||!ready||request.load()||save_request.load()||load_request.load())return;
+    ShowWindow(window,SW_HIDE);cv_save_library_show(true,language);
 }
 void send_load_save() {
     if(!enabled||!ready||request.load()||save_request.load()||load_request.load())return;
-    result=1;load_request=true;
-    ShowWindow(window,SW_HIDE);g_pad_block=0;auto game=static_cast<HWND>(rsx_d3d12_window());if(game)SetForegroundWindow(game);
+    ShowWindow(window,SW_HIDE);cv_save_library_show(false,language);
 }
 // Enter and the pad's confirm button must activate the focused action, rather
 // than warping to the selected map while the new load-save button has focus.
@@ -455,39 +454,30 @@ LRESULT CALLBACK proc(HWND h,UINT msg,WPARAM wp,LPARAM lp) {
 }
 }
 bool cv_test_tools_message(MSG* m) {
+    if(cv_save_library_message(m))return true;
     if(!cv_test_tools_visible() || (m->hwnd!=window&&!IsChild(window,m->hwnd)))return false;
     if(m->message==WM_KEYDOWN&&(m->wParam==VK_ESCAPE||m->wParam==VK_F7)){cv_test_tools_close();return true;}
     if(m->message==WM_KEYDOWN&&m->wParam==VK_RETURN){confirm_action();return true;}
     return IsDialogMessageW(window,m)!=FALSE;
 }
-void cv_test_tools_enable(bool on) {enabled=on;if(!on){request=0;save_request=false;load_request=false;if(window)cv_test_tools_close();}}
-bool cv_test_tools_visible() {return window&&IsWindowVisible(window);}
-void cv_test_tools_close() {if(window)SendMessageW(window,WM_CLOSE,0,0);}
-void cv_test_tools_show(HWND owner,const std::wstring& game,int lang) {
-    if(!enabled)return;
-    if(cv_test_tools_visible()){cv_test_tools_close();return;}
-    (void)owner;
-    lang=lang>=0&&lang<13?lang:1;
-    if(window&&language!=lang)DestroyWindow(window);
-    language=lang;
-    if(!window) {
-        if(!field_brush) {field_brush=CreateSolidBrush(C_FIELD);title_font=font(30,FW_BOLD,L"Georgia");body_font=font(17,FW_NORMAL,L"Segoe UI");
-            small_font=font(14,FW_NORMAL,L"Segoe UI");code_font=font(17,FW_SEMIBOLD,L"Consolas");}
-        WNDCLASSW wc{};wc.lpfnWndProc=proc;wc.hInstance=GetModuleHandleW(nullptr);wc.hCursor=LoadCursorW(nullptr,MAKEINTRESOURCEW(32512));wc.lpszClassName=L"CVTestMaps";
-        wc.hIcon=LoadIconW(wc.hInstance,MAKEINTRESOURCEW(1));RegisterClassW(&wc);
-        RECT r{0,0,W,H};AdjustWindowRectEx(&r,WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU,FALSE,WS_EX_TOOLWINDOW);
-        // No owner: showing an owned window brings back its minimized owner (the launcher), which blocks the pad.
-        window=CreateWindowExW(WS_EX_TOOLWINDOW|WS_EX_TOPMOST,L"CVTestMaps",tx(cv_test_i18n::WINDOW),
-            WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU,CW_USEDEFAULT,CW_USEDEFAULT,r.right-r.left,r.bottom-r.top,nullptr,nullptr,GetModuleHandleW(nullptr),nullptr);
-        // A dark title bar, as the launcher's.
-        BOOL dark=TRUE;DwmSetWindowAttribute(window,20,&dark,sizeof dark);
-    }
-    if(game_root!=game||rooms.empty()){game_root=game;catalog(game);}
-    here_shown=room_known?room_now.load():~0u;
-    refresh_list();ShowWindow(window,SW_SHOW);SetForegroundWindow(window);SetFocus(list);g_pad_block=1;
-    for(int i=0;i<PAD_PHYS_MAX;i++){PadPhys p{};pad_phys_poll(i,&p);previous_pad[i]=p.buttons;}
+void cv_test_tools_enable(bool on) {enabled=on;if(!on){request=0;save_request=false;load_request=false;cv_test_tools_close();}}
+bool cv_test_tools_visible() {return cv_archives_visible()||(window&&IsWindowVisible(window));}
+void cv_test_tools_close() {cv_save_library_close();if(window)SendMessageW(window,WM_CLOSE,0,0);}
+// Publish only a room request; the existing game-thread dispatcher performs the warp.
+bool cv_archives_travel(unsigned key,unsigned spawn) {
+ if(!enabled||!ready||spawn>255||save_request||load_request)return false;
+ const uint32_t packed=0x80000000u|(((key>>16)&15)<<24)|(((key>>8)&255)<<16)|((key&15)<<8)|spawn;
+ uint32_t empty=0;return request.compare_exchange_strong(empty,packed);
+}
+void cv_test_tools_show(HWND owner,const std::wstring& game,int lang,int opening_input) {
+ if(!enabled)return;if(cv_test_tools_visible()){cv_test_tools_close();return;}(void)owner;
+ language=std::clamp(lang,0,12);
+ if(game_root!=game||rooms.empty()){game_root=game;catalog(game);}
+ cv_archives_maps(rooms,room_known?room_now.load():~0u,cv_archives_travel);
+ cv_archives_show(0,language,opening_input);
 }
 void TEST_FRAME(ppu_context* ctx) {
+    cv_save_library_frame(ctx,enabled&&active_game()&&!tool_load&&!tool_save);
     cv_items::frame();   // the F6 item menu's one write, between game frames
     if(enabled) {
         bool valid=active_game()&&!tool_load;ready=valid;

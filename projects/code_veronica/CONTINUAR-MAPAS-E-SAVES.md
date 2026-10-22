@@ -276,3 +276,6 @@ no load confirmado. Build + testes PASS EU/JP/US
 **Teste real 17/10 (JP): OK.** Escolher um save pelo F7 carrega o jogo daquele
 save, sem o som da sala anterior e sem lentidão. Cancelar já voltava certo.
 Ainda não testado em EU/US dentro do jogo (só testes sintéticos).
+
+## 22/10/2026 — biblioteca de saves
+Os botões Salvar aqui e Carregar save do F7 agora abrem a biblioteca PC com miniaturas e arquivos independentes, sem a tela de slots original. Documentação atual: SAVE-LIBRARY.md. Slots antigos continuam disponíveis para leitura. Save/load na gameplay desta integração ainda aguardam confirmação do usuário.

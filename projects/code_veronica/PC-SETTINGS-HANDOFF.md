@@ -144,3 +144,19 @@ Os 28 modelos foram regenerados nos seis idiomas. As 28 prévias foram renderiza
 
 Instalação concluída: executáveis normais JP/US/EU substituídos pelas compilações corrigidas, cópias SHA256 verificadas. Manifesto: work/appearance/fix-humanoids/production-installed.json. Caches dos três builds restaurados para CV_APPEARANCE=OFF e CV_CHARACTERS=ON. É necessário reiniciar o jogo para descartar os modelos e texturas em cache. Aguardando confirmação visual de gameplay do usuário.
 
+## 22/10/2026 — biblioteca PC de saves
+F7 > Salvar aqui / Carregar save abre a biblioteca com miniaturas, data/hora, personagem e local. Um arquivo independente por save em CodeVeronicaLibrary/TITLE_ID dentro da pasta de saves configurada. Os 15 slots antigos ficam disponíveis só para leitura; o novo fluxo não abre UI da máquina de escrever. Snapshot local com os campos vivos do ator, conforme 00190BA8 EU e equivalentes JP/US; carregamento pelo reinício nativo, preservando o bit de load 0x200 e parando o banco de som 9. Não é savestate de toda a máquina. Detalhes, formato, referências e limites em SAVE-LIBRARY.md. JP/US/EU compilados (exit 0); sem teste isolado ou gameplay, sem alterar arquivos de save existentes e sem commit/push. FPS/interpolação/FSR mantidos.
+
+
+## Arquivos: F7 unificado — 22/10/2026
+
+Aprovado o mockup pelo usuário: implementada janela única Mapas / Salvar / Carregar em `cv_save_library.cpp`, traduções completas de interface em `cv_archives_i18n.h` (13 idiomas do launcher). Mouse/teclado e pads Sony/Xbox: L1/R1 ou LB/RB trocam abas; L2/R2 ou LT/RT percorrem blocos de qualquer lista; direcional/analógico com repetição acelerada; Enter/✕/A confirma; ○/B/Esc volta; □/X/O abre confirmação para sobrescrever. Novo save é sempre a ação principal da aba Salvar. Há botões clicáveis, filtro de mapas e entrada ajustável por ←/→ ou −/+. Ícones acompanham a fonte de entrada. Layout de ombros Xbox 360 é desfeito só dentro do menu para as dicas corresponderem aos botões físicos.
+
+F6 já segue `g_lang` e tem rótulos/itens traduzidos. Inventário SRT também é traduzido, preservando eventual preferência explícita de idioma do usuário. Locais de save em idiomas diferentes de inglês usam área/sala traduzidas e código, sem falsa tradução dos nomes descritivos ingleses. Sem alterações em captura/restauração do save, 60 FPS, FSR ou personagens. Detalhes e controles: SAVE-LIBRARY.md. Compilação nas três regiões; gameplay e controles físicos não testados nesta atualização.
+
+
+## Correção das dicas por dispositivo — 22/10/2026
+
+Corrigida a atualização dos atalhos do menu Arquivos. No modo Automático, qualquer tecla (inclusive digitação no filtro), clique, rolagem ou movimento real do mouse muda as dicas para teclado; botões e analógicos dos controles atualizam para Xbox ou PlayStation. A mudança solicita redesenho imediato, mesmo quando não houve alteração de seleção/aba. O modo de ícones escolhido no launcher (`CV_BUTTON_ICONS`: auto/ps/xbox/keyboard) também é respeitado, incluindo mudanças enquanto a janela está aberta. O dispositivo que abre F7 é enviado explicitamente pelo launcher: F7 do teclado, clique ou combinação de controle, evitando herdar o último dispositivo da gameplay pausada. A leitura inicial dos botões usa o mesmo remapeamento local usado na navegação para não produzir bordas falsas ao abrir.
+
+Recompilados os três executáveis normais JP/US/EU. Logs: `work/archives-menu/build-input-{jp,us,eu}.log` no workspace do Codex. Sem teste de gameplay ou controles físicos; validação por compilação e revisão das rotas de entrada.

@@ -159,3 +159,5 @@ projects/code_veronica/tools/__pycache__/
 projects/*/appearance-assets/*.arc
 projects/*/appearance-backups/
 projects/*/appearance-assets/humanoids/
+
+/projects/*/save-library-backups/

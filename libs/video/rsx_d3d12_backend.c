@@ -3033,6 +3033,19 @@ static void cap_readback_write(ID3D12Resource* res, u32 w, u32 h, u32 dxgi,
  * command list; once it has run, a thread writes the PNG into "screenshots"
  * beside the exe and a notice says how it went (SCREENSHOT_TEXT, UTF-8
  * "<saved>|<failed>", gives the launcher's words). */
+/* One-shot save thumbnail, using the same clean frame readback as F10.
+ * No capture, allocation, or per-frame readback unless explicitly requested. */
+typedef void (*SaveThumbnailCallback)(void*,const u32*,unsigned,unsigned);
+static SRWLOCK s_thumb_lock=SRWLOCK_INIT;
+static SaveThumbnailCallback s_thumb_request,s_thumb_captured;
+static void *s_thumb_context,*s_thumb_captured_context;
+int rsx_d3d12_request_thumbnail(SaveThumbnailCallback cb,void* context) {
+    int ok=0;AcquireSRWLockExclusive(&s_thumb_lock);
+    if(cb&&!s_thumb_request&&!s_thumb_captured){s_thumb_request=cb;s_thumb_context=context;ok=1;}
+    ReleaseSRWLockExclusive(&s_thumb_lock);return ok;
+}
+static int thumbnail_pending(void){int yes;AcquireSRWLockShared(&s_thumb_lock);yes=s_thumb_request!=NULL;ReleaseSRWLockShared(&s_thumb_lock);return yes;}
+static int s_shot_disk;
 static ID3D12Resource* s_shot_rb;
 static u32 s_shot_w, s_shot_h, s_shot_pitch;
 typedef struct { u8* rgba; u32 w, h; } ShotJob;
@@ -3072,8 +3085,12 @@ static DWORD WINAPI shot_thread(LPVOID arg)
 /* res is a R8G8B8A8 render target in RENDER_TARGET state. */
 static void shot_record(ID3D12Resource* res, u32 w, u32 h)
 {
-    if (!s_shot_request || s_shot_rb || !res || !w || !h) return;
-    InterlockedExchange(&s_shot_request, 0);
+    if ((!s_shot_request&&!thumbnail_pending()) || s_shot_rb || !res || !w || !h) return;
+    s_shot_disk=InterlockedExchange(&s_shot_request, 0)!=0;
+    AcquireSRWLockExclusive(&s_thumb_lock);
+    s_thumb_captured=s_thumb_request;s_thumb_captured_context=s_thumb_context;
+    s_thumb_request=NULL;s_thumb_context=NULL;
+    ReleaseSRWLockExclusive(&s_thumb_lock);
     const u32 pitch = (w * 4 + 255) & ~255u;
     D3D12_HEAP_PROPERTIES hp = {0}; hp.Type = D3D12_HEAP_TYPE_READBACK;
     D3D12_RESOURCE_DESC rd = {0};
@@ -3083,7 +3100,8 @@ static void shot_record(ID3D12Resource* res, u32 w, u32 h)
     if (FAILED(s_d3d.device->lpVtbl->CreateCommittedResource(s_d3d.device, &hp, D3D12_HEAP_FLAG_NONE, &rd,
             D3D12_RESOURCE_STATE_COPY_DEST, NULL, &IID_ID3D12Resource, (void**)&s_shot_rb)) || !s_shot_rb) {
         s_shot_rb = NULL;
-        perf_overlay_toast(L"Screenshot failed", 0);
+        AcquireSRWLockExclusive(&s_thumb_lock);s_thumb_captured=NULL;s_thumb_captured_context=NULL;ReleaseSRWLockExclusive(&s_thumb_lock);
+        if(s_shot_disk)perf_overlay_toast(L"Screenshot failed", 0);
         return;
     }
     D3D12_RESOURCE_BARRIER b = {0};
@@ -3124,13 +3142,19 @@ static void shot_finish(void)
         }
         D3D12_RANGE wr = {0, 0};
         s_shot_rb->lpVtbl->Unmap(s_shot_rb, 0, &wr);
-        j->rgba = px; j->w = w; j->h = h;
-        HANDLE t = CreateThread(NULL, 0, shot_thread, j, 0, NULL);
-        if (t) { CloseHandle(t); ok = 1; }
+        SaveThumbnailCallback callback;void* context;
+        AcquireSRWLockExclusive(&s_thumb_lock);callback=s_thumb_captured;context=s_thumb_captured_context;s_thumb_captured=NULL;s_thumb_captured_context=NULL;ReleaseSRWLockExclusive(&s_thumb_lock);
+        if(callback)callback(context,(const u32*)px,w,h);
+        if(s_shot_disk){
+            j->rgba = px; j->w = w; j->h = h;
+            HANDLE t = CreateThread(NULL, 0, shot_thread, j, 0, NULL);
+            if (t) { CloseHandle(t); ok = 1; }
+        }else{free(px);free(j);px=NULL;j=NULL;ok=1;}
     }
     s_shot_rb->lpVtbl->Release(s_shot_rb);
     s_shot_rb = NULL;
-    if (!ok) { free(px); free(j); perf_overlay_toast(L"Screenshot failed", 0); }
+    if (!ok) { free(px); free(j);if(s_shot_disk)perf_overlay_toast(L"Screenshot failed", 0); }
+    AcquireSRWLockExclusive(&s_thumb_lock);s_thumb_captured=NULL;s_thumb_captured_context=NULL;ReleaseSRWLockExclusive(&s_thumb_lock);
 }
 
 

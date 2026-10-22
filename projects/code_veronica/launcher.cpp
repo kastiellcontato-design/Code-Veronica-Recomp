@@ -2121,7 +2121,7 @@ void key_hook(unsigned vk) { if (vk == VK_F9) PostMessageW(g.hwnd, WM_TOGGLE_TEX
     else if(vk==VK_F5)menu_hook();
     else if(vk==VK_F6)PostMessageW(g.hwnd,WM_ITEM_MENU,0,0);
     else if(vk==VK_F8)PostMessageW(g.hwnd,WM_TOGGLE_SRT,0,0);
-    else if(vk==VK_F7)PostMessageW(g.hwnd,WM_TEST_MAPS,0,0); }   /* game window thread */
+    else if(vk==VK_F7)PostMessageW(g.hwnd,WM_TEST_MAPS,PAD_INPUT_KEYBOARD,0); }   /* game window thread */
 /* F9 in the game or R1+R2+L1+L2+square on a controller: texture mods on or off at once,
  * with a notice in the game's corner. The replacements stay loaded while
  * off, so going back and forth to compare is immediate. */
@@ -2211,7 +2211,7 @@ void click(int id)
     else if (id == ID_CACHE_CLEAR && !g.running) g.cache_msg = Tf(S_CACHE_CLEARED_FMT, cache_clear());
     else if (id == ID_CACHE_OPEN) { std::error_code ec; fs::create_directories(cache_dir(), ec); open_in_explorer(cache_dir().wstring()); }
     else if(id==ID_TEST_ENABLE){g.s.test_tools=!g.s.test_tools;cv_test_tools_enable(g.s.test_tools);changed();}
-    else if(id==ID_TEST_OPEN&&g.running)cv_test_tools_show(g.hwnd,g.s.game,g_lang);
+    else if(id==ID_TEST_OPEN&&g.running)cv_test_tools_show(g.hwnd,g.s.game,g_lang,PAD_INPUT_KEYBOARD);
     else if(id==ID_FOCUS_PAUSE){g.s.focus_pause=!g.s.focus_pause;changed();}
     else if(id==ID_ITEMS_ENABLE){g.s.items_menu=!g.s.items_menu;cv_item_menu_enable(g.s.items_menu);changed();}
     else if(id==ID_SHOT_OPEN){const fs::path d=fs::path(ini_path()).parent_path()/L"screenshots";std::error_code ec;fs::create_directories(d,ec);open_in_explorer(d.wstring());}
@@ -2461,9 +2461,9 @@ LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp)
             return 0;
         }
         if (g.running) {   /* L2+R3+R1, all on the same controller, toggles the menu. */
-            uint32_t test_combo=0;
-            for(int i=0;i<PAD_PHYS_MAX;i++){PadPhys p{};if(pad_phys_poll(i,&p)&&cv_launcher_controls::chord_active(p.buttons,cv_launcher_controls::test_chord))test_combo|=1u<<i;}
-            if(test_combo&~g.test_combo_prev)PostMessageW(g.hwnd,WM_TEST_MAPS,0,0);
+            uint32_t test_combo=0;int test_input=PAD_KIND_NONE;
+            for(int i=0;i<PAD_PHYS_MAX;i++){PadPhys p{};if(pad_phys_poll(i,&p)&&cv_launcher_controls::chord_active(p.buttons,cv_launcher_controls::test_chord)){test_combo|=1u<<i;if(!(g.test_combo_prev&(1u<<i)))test_input=p.kind;}}
+            if(test_combo&~g.test_combo_prev)PostMessageW(g.hwnd,WM_TEST_MAPS,WPARAM(test_input),0);
             g.test_combo_prev=test_combo;
             uint32_t items_combo=0;   /* R1+R2+L1+L2+triangle: the F6 item menu, as the key (cv_launcher_controls.h) */
             for(int i=0;i<PAD_PHYS_MAX;i++){PadPhys p{};if(pad_phys_poll(i,&p)&&cv_launcher_controls::chord_active(p.buttons,cv_launcher_controls::items_chord))items_combo|=1u<<i;}
@@ -2544,7 +2544,7 @@ LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp)
     if (m == WM_TOGGLE_MENU) { toggle_menu(); return 0; }
     if (m == WM_TOGGLE_TEXTURES) { toggle_textures("F9"); return 0; }
     if(m==WM_TOGGLE_SRT) {toggle_srt();return 0;}
-    if(m==WM_TEST_MAPS) {if(g.running)cv_test_tools_show(g.hwnd,g.s.game,g_lang);return 0;}
+    if(m==WM_TEST_MAPS) {if(g.running)cv_test_tools_show(g.hwnd,g.s.game,g_lang,int(wp));return 0;}
     if(m==WM_ITEM_MENU) {if(g.running&&g.s.items_menu)cv_item_menu_toggle(g.s.game,g_lang);return 0;}   /* off: F6 does nothing */
     return DefWindowProcW(h, m, wp, lp);
 }

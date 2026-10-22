@@ -20,7 +20,7 @@ inline bool parse_room(std::wstring_view file,Room& out) {
 #endif
 #include <windows.h>
 void cv_test_tools_enable(bool enabled);
-void cv_test_tools_show(HWND owner,const std::wstring& game,int language);   // launcher_i18n.h Lang
+void cv_test_tools_show(HWND owner,const std::wstring& game,int language,int opening_input=0);   // launcher_i18n.h Lang
 bool cv_test_tools_visible();
 void cv_test_tools_close();
 bool cv_test_tools_message(MSG* message);
