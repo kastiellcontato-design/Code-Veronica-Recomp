@@ -710,6 +710,7 @@ struct UI {
     std::wstring play_msg;
     int result = 0;              /* 1 = play */
     Bitmap* banner = nullptr;
+    Bitmap* brand_logo=nullptr;
     Bitmap* castle=nullptr;Bitmap* cover[3]={},*cover_bg[3]={};std::wstring art_path[3];
     std::wstring pad_status;       /* connected model ("" = none) */
     int pad_count = 0;
@@ -1058,6 +1059,7 @@ void nav_icon(Graphics& gr,int page,float x,float y,Color color){
  else{gr.DrawRectangle(&p,x+3,y,18.f,24.f);for(int a=0;a<3;a++)gr.DrawLine(&p,x+7,y+6+a*5,x+17,y+6+a*5);}
 }
 void brand(Graphics& gr,float x,float y,float width){
+ if(g.brand_logo){image_fit(gr,g.brand_logo,RectF(x,y,width,96.f));return;}
  FontFamily face(L"Impact");Font logo(&face,34,FontStyleRegular,UnitPixel);SolidBrush ink(C_TEXT);StringFormat sf;sf.SetFormatFlags(StringFormatFlagsNoWrap);GraphicsState saved=gr.Save();gr.TranslateTransform(x,y);gr.ScaleTransform(width/218.f,1.f);gr.DrawString(L"RESIDENT EVIL",-1,&logo,PointF(0,0),&sf,&ink);gr.Restore(saved);
  FontFamily serif(L"Georgia");Font hint_font(&serif,14,FontStyleBold,UnitPixel);text(gr,L"CODE: VERONICA X",x,y+44,hint_font,C_RED_HI,StringAlignmentNear,width,25);
 }
@@ -3111,6 +3113,16 @@ DWORD WINAPI launcher_thread(void*)
     set_icon_env();   /* the button capture below reads the layout it implies */
     g.banner = load_png("BANNER");
     g.castle=load_png("LAUNCHER_CASTLE");
+    if(Bitmap* full=load_png("LAUNCHER_LOGO")){
+        // Remove only the exported transparent padding in the UI's bitmap;
+        // the approved source PNG is kept byte-for-byte in launcher_art.
+        if(full->GetWidth()==1630&&full->GetHeight()==965){
+            g.brand_logo=full->Clone(Rect(40,148,1570,774),PixelFormat32bppPARGB);
+            if(g.brand_logo&&g.brand_logo->GetLastStatus()==Ok){delete full;full=nullptr;}
+            else{delete g.brand_logo;g.brand_logo=nullptr;}
+        }
+        if(full)g.brand_logo=full;
+    }
 
     WNDCLASSEXW wc = { sizeof wc };
     wc.lpfnWndProc = wndproc; wc.hInstance = GetModuleHandleW(NULL);
@@ -3148,6 +3160,7 @@ DWORD WINAPI launcher_thread(void*)
     /* closed before Jogar: the main thread sees this thread end */
     delete g.banner; g.banner = nullptr;
     image_fit_forget();
+    delete g.brand_logo;g.brand_logo=nullptr;
     delete g.castle;g.castle=nullptr;for(int i=0;i<3;i++){delete g.cover[i];delete g.cover_bg[i];g.cover[i]=g.cover_bg[i]=nullptr;}
     GdiplusShutdown(gtok);
     return 0;

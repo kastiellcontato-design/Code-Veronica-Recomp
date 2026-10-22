@@ -41,3 +41,12 @@ Compilação dos três launchers normais JP/US/EU: Clang, compilação dos recur
 Inspeção visual real das páginas Gráficos e Jogos do launcher japonês, sem pressionar Jogar. A imagem oficial japonesa, o cadastro antigo, os títulos, ícones e campos foram verificados. Os cartões das regiões ainda não cadastradas mostraram sua indicação de adicionar pasta. Não houve teste de início de partida ou abertura regional com as três instalações; isso fica para o usuário. Também não foi feito teste visual de cada um dos 13 idiomas.
 
 Backups e logs no workspace do Codex: work/launcher-redesign/before, compile-final-{jp,us,eu}.log, resource-{jp,us,eu}.log e link-final-{jp,us,eu}.log. Nenhum commit/push foi solicitado para esta alteração.
+
+
+## Logo aprovada no canto esquerdo — 22/10/2026
+
+A marca desenhada por fontes no topo esquerdo foi substituída pelo PNG aprovado pelo usuário: RESIDENT EVIL e CODE: VERONICA X em marfim, com a mesma textura, e somente PORT em vermelho. Sem ornamento e com alfa transparente. Arquivo launcher_art/launcher_logo.png, preservado byte a byte da arte aprovada; recurso LAUNCHER_LOGO incorporado ao executável pelo mecanismo existente.
+
+Apenas o espaço transparente de exportação é recortado no bitmap de exibição, mantendo o PNG original intacto. A imagem é ajustada proporcionalmente em uma caixa de 96 px de altura no cabeçalho da sidebar e usa o cache de desenho já existente. A marca de texto antiga é fallback se o recurso não puder ser lido. Não muda títulos, imagens das capas, abas, configurações ou comportamento do jogo. Backups/diff/logs desta mudança: work/launcher-logo no workspace do Codex.
+
+Validação desta logo: compilação e instalação dos executáveis JP/US/EU, com os recursos atualizados. O lld-link travou na etapa de link; os mesmos objetos e argumentos do CMake foram finalizados com o LINK do MSVC instalado, sem alterar fontes do jogo. Inspeção visual do launcher JP confirmou transparência, proporção, cores e espaço acima da navegação. Nenhuma partida foi iniciada. Hash do PNG idêntico à arte aprovada; manifesto em work/launcher-logo/installed.json.
