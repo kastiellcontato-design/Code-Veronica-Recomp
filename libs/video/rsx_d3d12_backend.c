@@ -1226,8 +1226,18 @@ static void pose_interpolate_batch_for(const RenderBatch* rb) {
         memset(s_pose_seen_vertices,0,MAX_VERTICES*sizeof(u32));memset(s_pose_seen_cameras,0,MAX_DRAWS*sizeof(u32));
         u8* vb=(u8*)s_d3d.vp_vb_mapped+(size_t)rb->parity*MAX_VERTICES*256;
         u8* cb=(u8*)s_d3d.vp_cb_mapped+(size_t)rb->parity*MAX_DRAWS*VP_CB_STRIDE;
+        /* A coherence conflict (-2) keeps its whole group at the current pose.
+         * As a plain current value its seam points were "no proposal", so an
+         * interpolated neighbour pulled only those points: torn triangles at
+         * Steve's mouth and hair (JP F9, 254 of 440 conflicted draws). Veto
+         * them instead; the weld spreads the veto over the connected surface.
+         * CV_POSE_CONFLICT_VETO=0 restores the old merge. */
+        static int conflict_veto=-1;
+        if(conflict_veto<0){const char* e=getenv("CV_POSE_CONFLICT_VETO");conflict_veto=!(e&&!strcmp(e,"0"));
+            fprintf(stderr,"[POSE-CONFLICT] v1 %s; conflicted coherence groups keep their whole surface current\n",conflict_veto?"on":"off");}
         for(u32 i=0;i<nd;i++) {const RsxPoseDraw* d=s_pose_draws+i;
             const int32_t source=s_pose_history.vertex_sources[i],camera_source=s_pose_history.camera_sources[i];
+            if(conflict_veto&&source==-2)for(u32 k=0;k<d->count;k++)s_pose_seen_vertices[d->first+k]=2;
             for(u32 k=0;k<d->count;k++) {
                 const u32 v=d->first+k;if(s_pose_seen_vertices[v]==2)continue;float xyz[3];
                 if(source>=0)rsx_pose_vertex(&s_pose_history,(u32)source,k,xyz);else memcpy(xyz,vertices[v].xyz,sizeof xyz);
@@ -12533,6 +12543,10 @@ static void render_frame(void)
     int pose_done = 0;
     u64 pose_seq = 0;
     u32 pose_scene = 0;
+    /* F9 copies the drawn batch's pose history on the render thread. While
+     * it records, let that batch finish before this pose replaces the
+     * history, so the capture's old/current positions belong to it. */
+    if (s_rt_async && (mc.request || mc.remaining)) render_wait_cpu_idle();
     if (s_rt_async && s_present_this_frame && s_pose_on && rsx_d3d12_pose_replay_enabled()) {
         vf_flush();
         RenderBatch next;

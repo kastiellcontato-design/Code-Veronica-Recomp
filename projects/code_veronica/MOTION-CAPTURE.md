@@ -781,3 +781,26 @@ Depois, nesta ordem:
 O usuário relata falhas anteriores ao FSR durante corrida e sombras do isqueiro.
 A causa e a correção dessas falhas permanecem pendentes de capturas de gameplay.
 Não confundir esse diagnóstico com a correção comprovada do overlay no FSR.
+
+## 22/10/2026 — boca e cabelo do Steve rasgados no 60 FPS (corrigido)
+
+Sintoma (JP, cutscene 0x80030000, 60 FPS com interpolação CPU): no quadro interpolado, espetos escuros
+em volta da boca do Steve e um corte no cabelo perto do olho. O quadro gravado do mesmo lote fica certo,
+e no 30 FPS não aparece.
+
+F9 coerente: com a pose fora da thread de render (v4/v5), a F9 copiava o histórico de outro lote
+(1.545 de 1.545 desenhos com posição atual diferente da empacotada). Agora, enquanto a F9 grava, o
+produtor espera a thread de render terminar o lote antes de começar a pose do seguinte
+(`render_frame`, `mc.request || mc.remaining`). Fora da captura nada muda.
+
+Causa: a mesma peça (mechas de cabelo, partes do rosto) é desenhada em várias passadas, e cada passada
+casa sozinha com o quadro anterior. Com muitas peças idênticas, passadas diferentes recebem históricos
+diferentes, e a coerência marca o grupo como conflito (`vertex_sources=-2`, pose atual). Nas costuras
+(`rsx_pose_weld_recipe`), porém, um ponto na pose atual contava como "sem proposta": uma peça vizinha
+interpolada puxava só os pontos de borda coincidentes. Na captura, 254 dos 440 desenhos em conflito
+tinham parte dos vértices interpolada e parte atual, o que rasga os triângulos.
+
+Correção (`pose_interpolate_batch_for`): os vértices de um desenho em conflito viram veto (estado 2),
+como a proteção de alias. As costuras espalham o veto pela superfície conectada antes de escrever, então
+a superfície fica inteira e coerente na pose atual naquele quadro. `CV_POSE_CONFLICT_VETO=0` volta ao
+comportamento anterior. Marcador: `[POSE-CONFLICT] v1 on`. Teste do usuário na JP: boca certa.
