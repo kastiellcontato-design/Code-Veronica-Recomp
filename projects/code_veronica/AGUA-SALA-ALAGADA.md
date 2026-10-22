@@ -198,3 +198,19 @@ Experimentos que ficaram atras de chave e NAO resolveram: `RSX_TEX_MIPS=1`
 para depurar no RenderDoc; `executar-renderdoc-agua.cmd` captura o nosso jogo.
 O que mostrou o problema foi comparar no RenderDoc o tipo da textura declarada
 no shader com o da view ligada (Texture2D x TextureCube).
+
+## 22/10/2026 — recorte em z revisto (grade da primeira cutscene)
+
+Na primeira cutscene, no close do homem depois de abrir a grade, aparecia uma faixa escura na frente
+do rosto. O original não tem essa faixa. Era a grade aberta colada na câmera, entre metade da
+distância do plano próximo e o próprio plano. O recorte -w <= z <= w do VS deixava essa geometria
+passar.
+
+Nos registradores do RSX de todas as capturas F12, o jogo usa um viewport de profundidade no estilo
+D3D: escala z 1, deslocamento 0, CLIP_MIN 0 e CLIP_MAX 1. Então o RSX recorta 0 <= z' <= w depois do
+viewport, que é o próprio recorte do D3D. `DepthClipEnable` voltou a ser ligado por padrão (log
+`[ZCLIP]`), e o recorte do VS continua como redundância. `RSX_ZCLIP=vs` (ou `DEPTH_CLIP=0`) volta ao
+recorte só do VS; atalho de comparação `executar-teste-recorte-profundidade-jp.cmd`.
+
+Teste do usuário na JP: a faixa sumiu da cutscene, e a água da rm_1130 continua inteira. A faixa
+clara da água vinha da névoa lendo a profundidade velha (item 2 acima), e essa correção continua.

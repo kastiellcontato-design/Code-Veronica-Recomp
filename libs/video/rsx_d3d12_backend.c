@@ -5690,13 +5690,18 @@ static int fp_build_pso(FpJob* j)
      * clipped: in the prison cutscene a wall behind the camera covered two
      * thirds of the screen. vp_posscale/offset already map z to D3D's [0, w].
      * DEPTH_CLIP=0 restores the old behaviour. */
-    /* The guest VS now clips -w <= z <= w itself (SV_ClipDistance0, as RSX
-     * does), so D3D's depth clip stays off here: its 0 <= z' plane removed
-     * geometry RSX keeps with its depth clamped to 0. RSX_ZCLIP=d3d restores
-     * D3D's clip for comparison. */
+    /* The guest VS also clips -w <= z <= w (SV_ClipDistance0). Code Veronica
+     * sets a D3D-style depth viewport (z scale 1, offset 0, CLIP_MIN/MAX 0..1
+     * in every captured scene), so RSX clips 0 <= z' <= w after the viewport:
+     * D3D's own depth clip. Without it, geometry between half the near
+     * distance and the near plane was drawn: the opened cell bars across the
+     * man's face in the first cutscene (absent on the original). The flooded
+     * room's light band was the fog reading stale depth, fixed separately.
+     * RSX_ZCLIP=vs (or DEPTH_CLIP=0) keeps only the VS -w..w clip. */
     { static int dc = -1;
       if (dc < 0) { const char* e = getenv("DEPTH_CLIP"); const char* z = getenv("RSX_ZCLIP");
-                    dc = (e && *e == '0') ? 0 : (z && !strcmp(z, "d3d")) ? 1 : 0; }
+                    dc = (e && *e == '0') || (z && !strcmp(z, "vs")) ? 0 : 1;
+                    fprintf(stderr, "[ZCLIP] depth clip %s%c", dc ? "0 <= z <= w (RSX viewport 0..1)" : "off, VS -w..w only", 10); }
       pd.RasterizerState.DepthClipEnable = dc ? TRUE : FALSE; }
     /* Guest face culling. CULL_OFF=1 forces double-sided, the old
      * unconditional behaviour -- geometry that vanishes under culling is a
