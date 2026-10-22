@@ -79,6 +79,8 @@ enum StrId {
     S_TEX_PATH_CONFLICT, S_TEX_MOD_RESTART,
     S_POSE_DEVICE, S_POSE_CPU, S_POSE_GPU,
     S_FRAME_GEN, S_FRAME_GEN_OFF, S_FRAME_GEN_ON,
+    S_NAV_SHORTCUTS, S_SC_TITLE, S_SC_HINT, S_SC_COL_KEY, S_SC_COL_PAD, S_SC_COL_ACTION, S_SC_MENU, S_SC_ITEMS, S_SC_MAPS, S_SC_SRT, S_SC_TEX, S_SC_SHOT, S_SC_PAD_NOTE,
+    S_FPS_NOTE_30, S_FPS_NOTE_60, S_FPS_NOTE_FG,
     S_COUNT
 };
 
@@ -188,7 +190,7 @@ static const wchar_t* const k_str_pt[] = {
     L"Usa os PNGs da pasta no lugar das texturas originais, carregando cada um só quando aparece: mods grandes não pesam. Cada versão lê a sua subpasta (NPEB00553, NPJB00135, NPUB30467) ou, sem ela, a própria pasta.",
     L"Extrair texturas das salas visitadas",
     L"Salva em PNG as texturas novas carregadas durante a partida, incluindo salas, personagens e efeitos. Entre nas salas desejadas; salas não visitadas não são extraídas.",
-    L"Edite os PNGs mantendo o código do início do nome e coloque-os na subpasta da versão para usar como mod. A extração completa lê texturas armazenadas nos arquivos; imagens criadas pelo jogo exigem a extração durante a partida. Faces dos reflexos ficam em reference/cubemaps para consulta; a substituição atual aceita texturas 2D.",
+    L"Edite os PNGs mantendo o código do início do nome e coloque-os na subpasta da versão para usar como mod. A extração completa lê texturas armazenadas nos arquivos; imagens criadas pelo jogo exigem a extração durante a partida. Faces dos reflexos ficam em reference/cubemaps para consulta; a substituição atual aceita texturas 2D." L" Dica para mods: use “Extrair texturas de todos os mapas” e substitua pelas texturas de pacotes do Code: Veronica de PS2, que costumam funcionar aqui. Os nomes são diferentes: renomeie cada textura, uma por uma, com o nome da extraída equivalente.",
     L"Pasta das texturas extraídas",
     L"%d texturas extraídas até agora",
     L"Texturas do mod ligadas",
@@ -247,7 +249,7 @@ static const wchar_t* const k_str_pt[] = {
     L"Ativar mapas de teste (F7)",
     L"Mapas de teste: ativados (F7)",
     L"Abrir lista de mapas",
-    L"60 FPS (Experimental)",
+    L"60 FPS",
     L"Vértices na GPU (experimental)", L"A placa de vídeo converte os vértices do jogo. Bem mais FPS nas salas pesadas. Vale ao abrir o jogo.",
     L"Filtro anisotrópico",
     L"Nitidez (FSR 1 RCAS)",
@@ -291,7 +293,9 @@ static const wchar_t* const k_str_pt[] = {
     L"GPU (Experimental)",
     L"Geração de quadros",
     L"Desligada",
-    L"FSR 3.1 (Experimental)",
+    L"FSR 3.1",
+    L"Atalhos", L"ATALHOS DO JOGO", L"Atalhos que funcionam durante a partida, no teclado e no controle.", L"Teclado", L"Controle", L"O que faz", L"Abre o menu de opções do jogo (tela, áudio, SRT, sair).", L"Abre o menu de itens para pôr armas e itens no inventário. Ative em %s.", L"Abre a janela de mapas de teste para ir a uma sala. Ative em %s.", L"Mostra ou esconde o painel SRT (vida, inventário e inimigos).", L"Liga ou desliga as texturas do mod na hora.", L"Tira uma screenshot; ela fica na pasta screenshots, ao lado do jogo.", L"No controle: segure os quatro botões de ombro primeiro e depois aperte o botão indicado.",
+    L"30 FPS é o original: a mesma experiência do PlayStation 3, onde o jogo roda a 30 FPS em 720p.", L"60 FPS deixa o jogo mais fluido. Se o PC não mantiver os 60 FPS, o jogo fica mais lento, como no Resident Evil 4 Ultimate HD Edition (2014).", L"Com a geração de quadros (FSR 3.1), se o PC mantiver os 60 FPS, o jogo pode chegar a até 120 FPS.",
 };
 static_assert(sizeof k_str_pt / sizeof k_str_pt[0] == S_COUNT, "k_str_pt: one text per StrId");
 
@@ -401,7 +405,7 @@ static const wchar_t* const k_str_en[] = {
     L"Uses the folder's PNGs in place of the original textures, loading each only when it appears: big mods weigh nothing. Each version reads its own subfolder (NPEB00553, NPJB00135, NPUB30467) or, without one, the folder itself.",
     L"Dump textures from visited rooms",
     L"Saves new textures loaded during play as PNGs, including rooms, characters and effects. Visit the rooms you need; unvisited rooms are not extracted.",
-    L"Edit the PNGs, keeping the code at the start of each name, and put them in the version subfolder to use as a mod. Full extraction reads stored textures; images created by the game require extraction during play. Reflection faces go in reference/cubemaps for reference; replacement currently supports 2D textures.",
+    L"Edit the PNGs, keeping the code at the start of each name, and put them in the version subfolder to use as a mod. Full extraction reads stored textures; images created by the game require extraction during play. Reflection faces go in reference/cubemaps for reference; replacement currently supports 2D textures." L" Modding tip: use “Extract textures from all maps” and replace them with textures from Code: Veronica PS2 texture packs, which usually work here. The names differ: rename each texture, one by one, to the name of the matching extracted file.",
     L"Extracted textures folder",
     L"%d textures dumped so far",
     L"Mod textures on",
@@ -460,7 +464,7 @@ static const wchar_t* const k_str_en[] = {
     L"Enable test maps (F7)",
     L"Test maps: enabled (F7)",
     L"Open map list",
-    L"60 FPS (Experimental)",
+    L"60 FPS",
     L"Vertices on the GPU (experimental)", L"The graphics card converts the game's vertices. Much higher FPS in heavy rooms. Applies when the game starts.",
     L"Anisotropic filtering",
     L"Sharpness (FSR 1 RCAS)",
@@ -504,7 +508,9 @@ static const wchar_t* const k_str_en[] = {
     L"GPU (Experimental)",
     L"Frame generation",
     L"Off",
-    L"FSR 3.1 (Experimental)",
+    L"FSR 3.1",
+    L"Shortcuts", L"GAME SHORTCUTS", L"Shortcuts that work during play, on the keyboard and on a controller.", L"Keyboard", L"Controller", L"What it does", L"Opens the game options menu (display, audio, SRT, quit).", L"Opens the item menu to put weapons and items in the inventory. Enable it in %s.", L"Opens the test map window to go to a room. Enable it in %s.", L"Shows or hides the SRT panel (health, inventory and enemies).", L"Turns mod textures on or off at once.", L"Takes a screenshot; it goes to the screenshots folder next to the game.", L"On a controller: hold the four shoulder buttons first, then press the button shown.",
+    L"30 FPS is the original: the same experience as on PlayStation 3, where the game runs at 30 FPS in 720p.", L"60 FPS makes the game smoother. If your PC can't hold 60 FPS, the game runs slower, like Resident Evil 4 Ultimate HD Edition (2014).", L"With frame generation (FSR 3.1), if your PC holds 60 FPS, the game can reach up to 120 FPS.",
 };
 static_assert(sizeof k_str_en / sizeof k_str_en[0] == S_COUNT, "k_str_en: one text per StrId");
 
@@ -614,7 +620,7 @@ static const wchar_t* const k_str_es[] = {
     L"Usa los PNG de la carpeta en lugar de las texturas originales y carga cada uno solo cuando aparece: los mods grandes no pesan. Cada versión lee su subcarpeta (NPEB00553, NPJB00135, NPUB30467) o, si no existe, la propia carpeta.",
     L"Extraer texturas de salas visitadas",
     L"Guarda en PNG las texturas nuevas cargadas al jugar, incluidas salas, personajes y efectos. Visita las salas deseadas; las no visitadas no se extraen.",
-    L"Edita los PNG conservando el código al principio del nombre y colócalos en la subcarpeta de la versión. La extracción completa lee texturas almacenadas; las imágenes creadas por el juego requieren extracción durante la partida. Las caras de reflejos van a reference/cubemaps como referencia; la sustitución admite texturas 2D.",
+    L"Edita los PNG conservando el código al principio del nombre y colócalos en la subcarpeta de la versión. La extracción completa lee texturas almacenadas; las imágenes creadas por el juego requieren extracción durante la partida. Las caras de reflejos van a reference/cubemaps como referencia; la sustitución admite texturas 2D." L" Consejo para mods: usa “Extraer texturas de todos los mapas” y sustitúyelas por texturas de paquetes de Code: Veronica de PS2, que suelen funcionar aquí. Los nombres son distintos: renombra cada textura, una por una, con el nombre de la extraída equivalente.",
     L"Carpeta de texturas extraídas",
     L"%d texturas extraídas hasta ahora",
     L"Texturas del mod activadas",
@@ -673,7 +679,7 @@ static const wchar_t* const k_str_es[] = {
     L"Activar mapas de prueba (F7)",
     L"Mapas de prueba: activados (F7)",
     L"Abrir lista de mapas",
-    L"60 FPS (Experimental)",
+    L"60 FPS",
     L"Vértices en la GPU (experimental)", L"La tarjeta gráfica convierte los vértices del juego. Muchos más FPS en las salas pesadas. Se aplica al iniciar el juego.",
     L"Filtrado anisotrópico",
     L"Nitidez (FSR 1 RCAS)",
@@ -717,7 +723,9 @@ static const wchar_t* const k_str_es[] = {
     L"GPU (Experimental)",
     L"Generación de cuadros",
     L"Desactivada",
-    L"FSR 3.1 (Experimental)",
+    L"FSR 3.1",
+    L"Atajos", L"ATAJOS DEL JUEGO", L"Atajos que funcionan durante la partida, en el teclado y en el mando.", L"Teclado", L"Mando", L"Qué hace", L"Abre el menú de opciones del juego (pantalla, audio, SRT, salir).", L"Abre el menú de objetos para poner armas y objetos en el inventario. Actívalo en %s.", L"Abre la ventana de mapas de prueba para ir a una sala. Actívala en %s.", L"Muestra u oculta el panel SRT (vida, inventario y enemigos).", L"Activa o desactiva las texturas del mod al instante.", L"Hace una captura; se guarda en la carpeta screenshots, junto al juego.", L"En el mando: mantén primero los cuatro botones de hombro y luego pulsa el botón indicado.",
+    L"30 FPS es el original: la misma experiencia que en PlayStation 3, donde el juego va a 30 FPS en 720p.", L"60 FPS hace el juego más fluido. Si el PC no mantiene los 60 FPS, el juego va más lento, como Resident Evil 4 Ultimate HD Edition (2014).", L"Con la generación de fotogramas (FSR 3.1), si el PC mantiene los 60 FPS, el juego puede llegar a hasta 120 FPS.",
 };
 static_assert(sizeof k_str_es / sizeof k_str_es[0] == S_COUNT, "k_str_es: one text per StrId");
 
@@ -827,7 +835,7 @@ static const wchar_t* const k_str_ja[] = {
     L"フォルダー内の PNG を元のテクスチャの代わりに使います。表示されたときだけ読み込むので、大きな Mod でも重くなりません。各バージョンは専用のサブフォルダー（NPEB00553、NPJB00135、NPUB30467）を、なければフォルダー自体を読みます。",
     L"訪れた部屋のテクスチャを抽出",
     L"プレイ中に読み込まれた部屋、キャラクター、エフェクトの新しいテクスチャをPNGで保存します。必要な部屋を訪れてください。未訪問の部屋は抽出されません。",
-    L"名前の先頭のコードを変えずにPNGを編集し、バージョン別フォルダーに置いてください。一括抽出は保存済みテクスチャが対象です。ゲームが生成する画像はプレイ中の抽出が必要です。 反射の各面は参照用のreference/cubemapsに保存します。現在の置き換え対象は2Dテクスチャです。",
+    L"名前の先頭のコードを変えずにPNGを編集し、バージョン別フォルダーに置いてください。一括抽出は保存済みテクスチャが対象です。ゲームが生成する画像はプレイ中の抽出が必要です。 反射の各面は参照用のreference/cubemapsに保存します。現在の置き換え対象は2Dテクスチャです。" L" MODのヒント：「全マップのテクスチャを抽出」を使い、PS2版コード：ベロニカのテクスチャパックで置き換えると多くの場合使えます。名前が異なるため、各テクスチャを対応する抽出ファイル名に一つずつ変更してください。",
     L"抽出テクスチャの保存先",
     L"これまでに抽出したテクスチャ: %d 枚",
     L"Mod テクスチャ：オン",
@@ -886,7 +894,7 @@ static const wchar_t* const k_str_ja[] = {
     L"テスト用マップを有効化 (F7)",
     L"テスト用マップ: 有効 (F7)",
     L"マップ一覧を開く",
-    L"60 FPS（実験的）",
+    L"60 FPS",
     L"GPU で頂点処理（実験的）", L"ゲームの頂点変換をグラフィックカードで行います。重い部屋で FPS が大きく向上します。ゲーム起動時に適用されます。",
     L"異方性フィルタリング",
     L"シャープネス (FSR 1 RCAS)",
@@ -930,7 +938,9 @@ static const wchar_t* const k_str_ja[] = {
     L"GPU（実験的）",
     L"フレーム生成",
     L"オフ",
-    L"FSR 3.1（実験的）",
+    L"FSR 3.1",
+    L"ショートカット", L"ゲーム中のショートカット", L"プレイ中にキーボードとコントローラーで使えるショートカットです。", L"キーボード", L"コントローラー", L"機能", L"ゲームのオプションメニューを開きます（画面、音声、SRT、終了）。", L"アイテムメニューを開き、武器やアイテムをインベントリに入れます。「%s」で有効にしてください。", L"テストマップのウィンドウを開き、部屋へ移動します。「%s」で有効にしてください。", L"SRTパネル（体力、インベントリ、敵）を表示・非表示にします。", L"MODテクスチャをすぐにオン・オフします。", L"スクリーンショットを撮ります。ゲームの横のscreenshotsフォルダーに保存されます。", L"コントローラー：先に4つのショルダーボタンを押したまま、表示のボタンを押します。",
+    L"30 FPSはオリジナルです。PlayStation 3と同じ体験で、ゲームは720p・30 FPSで動作します。", L"60 FPSはより滑らかになります。PCが60 FPSを保てないと、Resident Evil 4 Ultimate HD Edition（2014）のようにゲームが遅くなります。", L"フレーム生成（FSR 3.1）を使うと、PCが60 FPSを保てれば、ゲームは最大120 FPSに達します。",
 };
 static_assert(sizeof k_str_ja / sizeof k_str_ja[0] == S_COUNT, "k_str_ja: one text per StrId");
 
@@ -1094,7 +1104,7 @@ static const wchar_t* const k_str_fr[] = {
     L"Utilise les PNG du dossier à la place des textures d'origine, en chargeant chacun seulement quand il apparaît : les gros mods ne pèsent rien. Chaque version lit son sous-dossier (NPEB00553, NPJB00135, NPUB30467) ou, à défaut, le dossier lui-même.",
     L"Extraire les textures des salles visitées",
     L"Enregistre en PNG les nouvelles textures chargées en jeu : salles, personnages et effets. Visitez les salles souhaitées ; les autres ne sont pas extraites.",
-    L"Modifiez les PNG en gardant le code au début du nom et placez-les dans le sous-dossier de la version. L’extraction complète lit les textures stockées ; les images créées par le jeu nécessitent une extraction en jouant. Les faces des reflets vont dans reference/cubemaps pour référence ; le remplacement prend en charge les textures 2D.",
+    L"Modifiez les PNG en gardant le code au début du nom et placez-les dans le sous-dossier de la version. L’extraction complète lit les textures stockées ; les images créées par le jeu nécessitent une extraction en jouant. Les faces des reflets vont dans reference/cubemaps pour référence ; le remplacement prend en charge les textures 2D." L" Astuce pour les mods : utilisez « Extraire les textures de toutes les cartes » et remplacez-les par des textures de packs Code: Veronica PS2, qui fonctionnent généralement ici. Les noms diffèrent : renommez chaque texture, une par une, avec le nom du fichier extrait correspondant.",
     L"Dossier des textures extraites",
     L"%d textures extraites jusqu’ici",
     L"Textures du mod activées",
@@ -1153,7 +1163,7 @@ static const wchar_t* const k_str_fr[] = {
     L"Activer les cartes de test (F7)",
     L"Cartes de test : activées (F7)",
     L"Ouvrir la liste des cartes",
-    L"60 FPS (expérimental)",
+    L"60 FPS",
     L"Sommets sur le GPU (expérimental)", L"La carte graphique convertit les sommets du jeu. Bien plus d'images par seconde dans les salles lourdes. S'applique au lancement du jeu.",
     L"Filtrage anisotrope",
     L"Netteté (FSR 1 RCAS)",
@@ -1197,7 +1207,9 @@ static const wchar_t* const k_str_fr[] = {
     L"GPU (expérimental)",
     L"Génération d’images",
     L"Désactivée",
-    L"FSR 3.1 (Expérimental)",
+    L"FSR 3.1",
+    L"Raccourcis", L"RACCOURCIS DU JEU", L"Raccourcis utilisables pendant la partie, au clavier et à la manette.", L"Clavier", L"Manette", L"Action", L"Ouvre le menu des options du jeu (affichage, audio, SRT, quitter).", L"Ouvre le menu des objets pour mettre armes et objets dans l'inventaire. À activer dans %s.", L"Ouvre la fenêtre des cartes de test pour aller dans une salle. À activer dans %s.", L"Affiche ou masque le panneau SRT (santé, inventaire et ennemis).", L"Active ou désactive les textures du mod immédiatement.", L"Prend une capture d'écran ; elle va dans le dossier screenshots, à côté du jeu.", L"À la manette : maintenez d'abord les quatre gâchettes et boutons d'épaule, puis appuyez sur le bouton indiqué.",
+    L"30 FPS est l'original : la même expérience que sur PlayStation 3, où le jeu tourne à 30 FPS en 720p.", L"60 FPS rend le jeu plus fluide. Si le PC ne tient pas 60 FPS, le jeu ralentit, comme Resident Evil 4 Ultimate HD Edition (2014).", L"Avec la génération d'images (FSR 3.1), si le PC tient 60 FPS, le jeu peut atteindre jusqu'à 120 FPS.",
 };
 static_assert(sizeof k_str_fr / sizeof k_str_fr[0] == S_COUNT, "k_str_fr: one text per StrId");
 
@@ -1361,7 +1373,7 @@ static const wchar_t* const k_str_de[] = {
     L"Verwendet die PNGs im Ordner statt der Originaltexturen und lädt jede erst, wenn sie erscheint: große Mods belasten nicht. Jede Version liest ihren Unterordner (NPEB00553, NPJB00135, NPUB30467) oder, falls keiner existiert, den Ordner selbst.",
     L"Texturen besuchter Räume extrahieren",
     L"Speichert neue, beim Spielen geladene Texturen als PNG: Räume, Figuren und Effekte. Besuchen Sie die gewünschten Räume; unbesuchte Räume werden nicht extrahiert.",
-    L"Bearbeiten Sie PNGs, behalten Sie den Code am Namensanfang und legen Sie sie im Versionsunterordner ab. Die Gesamtextraktion liest gespeicherte Texturen; vom Spiel erzeugte Bilder müssen während des Spielens extrahiert werden. Reflexionsflächen stehen unter reference/cubemaps zur Ansicht; ersetzt werden derzeit 2D-Texturen.",
+    L"Bearbeiten Sie PNGs, behalten Sie den Code am Namensanfang und legen Sie sie im Versionsunterordner ab. Die Gesamtextraktion liest gespeicherte Texturen; vom Spiel erzeugte Bilder müssen während des Spielens extrahiert werden. Reflexionsflächen stehen unter reference/cubemaps zur Ansicht; ersetzt werden derzeit 2D-Texturen." L" Mod-Tipp: Nutze „Texturen aller Karten extrahieren“ und ersetze sie durch Texturen aus Code: Veronica PS2-Texturpaketen, die hier meist funktionieren. Die Namen unterscheiden sich: Benenne jede Textur einzeln nach der passenden extrahierten Datei um.",
     L"Ordner extrahierter Texturen",
     L"Bisher %d Texturen extrahiert",
     L"Mod-Texturen an",
@@ -1420,7 +1432,7 @@ static const wchar_t* const k_str_de[] = {
     L"Testkarten aktivieren (F7)",
     L"Testkarten: aktiviert (F7)",
     L"Kartenliste öffnen",
-    L"60 FPS (Experimentell)",
+    L"60 FPS",
     L"Vertices auf der GPU (experimentell)", L"Die Grafikkarte wandelt die Vertices des Spiels um. Deutlich mehr FPS in aufwendigen Räumen. Gilt ab dem Spielstart.",
     L"Anisotrope Filterung",
     L"Schärfe (FSR 1 RCAS)",
@@ -1464,7 +1476,9 @@ static const wchar_t* const k_str_de[] = {
     L"GPU (experimentell)",
     L"Frame-Generierung",
     L"Aus",
-    L"FSR 3.1 (Experimentell)",
+    L"FSR 3.1",
+    L"Tastenkürzel", L"TASTENKÜRZEL IM SPIEL", L"Kürzel, die während des Spiels auf Tastatur und Controller funktionieren.", L"Tastatur", L"Controller", L"Funktion", L"Öffnet das Optionsmenü des Spiels (Anzeige, Audio, SRT, Beenden).", L"Öffnet das Gegenstandsmenü, um Waffen und Gegenstände ins Inventar zu legen. Unter %s aktivieren.", L"Öffnet das Testkarten-Fenster, um in einen Raum zu gehen. Unter %s aktivieren.", L"Zeigt oder verbirgt das SRT-Panel (Gesundheit, Inventar und Gegner).", L"Schaltet Mod-Texturen sofort ein oder aus.", L"Macht einen Screenshot; er landet im Ordner screenshots neben dem Spiel.", L"Am Controller: zuerst die vier Schultertasten halten, dann die angezeigte Taste drücken.",
+    L"30 FPS ist das Original: dasselbe Erlebnis wie auf der PlayStation 3, wo das Spiel mit 30 FPS in 720p läuft.", L"60 FPS macht das Spiel flüssiger. Hält der PC keine 60 FPS, läuft das Spiel langsamer, wie Resident Evil 4 Ultimate HD Edition (2014).", L"Mit Frame-Generierung (FSR 3.1) kann das Spiel bis zu 120 FPS erreichen, wenn der PC 60 FPS hält.",
 };
 static_assert(sizeof k_str_de / sizeof k_str_de[0] == S_COUNT, "k_str_de: one text per StrId");
 
@@ -1628,7 +1642,7 @@ static const wchar_t* const k_str_it[] = {
     L"Usa i PNG della cartella al posto delle texture originali, caricando ciascuno solo quando appare: le mod grandi non pesano. Ogni versione legge la propria sottocartella (NPEB00553, NPJB00135, NPUB30467) o, se manca, la cartella stessa.",
     L"Estrai texture dalle stanze visitate",
     L"Salva in PNG le nuove texture caricate durante il gioco, incluse stanze, personaggi ed effetti. Visita le stanze desiderate; quelle non visitate non vengono estratte.",
-    L"Modifica i PNG mantenendo il codice iniziale del nome e inseriscili nella sottocartella della versione. L’estrazione completa legge le texture memorizzate; le immagini create dal gioco richiedono l’estrazione durante la partita. Le facce dei riflessi sono in reference/cubemaps per consultazione; la sostituzione supporta texture 2D.",
+    L"Modifica i PNG mantenendo il codice iniziale del nome e inseriscili nella sottocartella della versione. L’estrazione completa legge le texture memorizzate; le immagini create dal gioco richiedono l’estrazione durante la partita. Le facce dei riflessi sono in reference/cubemaps per consultazione; la sostituzione supporta texture 2D." L" Consiglio per i mod: usa «Estrai texture da tutte le mappe» e sostituiscile con le texture dei pacchetti di Code: Veronica per PS2, che di solito funzionano qui. I nomi sono diversi: rinomina ogni texture, una per una, con il nome del file estratto corrispondente.",
     L"Cartella texture estratte",
     L"%d texture estratte finora",
     L"Texture della mod attive",
@@ -1687,7 +1701,7 @@ static const wchar_t* const k_str_it[] = {
     L"Attiva mappe di test (F7)",
     L"Mappe di test: attive (F7)",
     L"Apri elenco mappe",
-    L"60 FPS (sperimentale)",
+    L"60 FPS",
     L"Vertici sulla GPU (sperimentale)", L"La scheda video converte i vertici del gioco. Molti più FPS nelle stanze pesanti. Si applica all'avvio del gioco.",
     L"Filtro anisotropico",
     L"Nitidezza (FSR 1 RCAS)",
@@ -1731,7 +1745,9 @@ static const wchar_t* const k_str_it[] = {
     L"GPU (sperimentale)",
     L"Generazione fotogrammi",
     L"Disattivata",
-    L"FSR 3.1 (Sperimentale)",
+    L"FSR 3.1",
+    L"Scorciatoie", L"SCORCIATOIE DI GIOCO", L"Scorciatoie che funzionano durante il gioco, da tastiera e controller.", L"Tastiera", L"Controller", L"Cosa fa", L"Apre il menu opzioni del gioco (schermo, audio, SRT, esci).", L"Apre il menu oggetti per mettere armi e oggetti nell'inventario. Attivalo in %s.", L"Apre la finestra delle mappe di prova per andare in una stanza. Attivala in %s.", L"Mostra o nasconde il pannello SRT (salute, inventario e nemici).", L"Attiva o disattiva subito le texture della mod.", L"Scatta uno screenshot; finisce nella cartella screenshots, accanto al gioco.", L"Con il controller: tieni prima premuti i quattro tasti dorsali, poi premi il tasto indicato.",
+    L"30 FPS è l'originale: la stessa esperienza di PlayStation 3, dove il gioco gira a 30 FPS in 720p.", L"60 FPS rende il gioco più fluido. Se il PC non mantiene i 60 FPS, il gioco rallenta, come Resident Evil 4 Ultimate HD Edition (2014).", L"Con la generazione dei fotogrammi (FSR 3.1), se il PC mantiene i 60 FPS, il gioco può arrivare fino a 120 FPS.",
 };
 static_assert(sizeof k_str_it / sizeof k_str_it[0] == S_COUNT, "k_str_it: one text per StrId");
 
@@ -1895,7 +1911,7 @@ static const wchar_t* const k_str_pl[] = {
     L"Używa plików PNG z folderu zamiast oryginalnych tekstur i wczytuje każdy dopiero, gdy się pojawi: duże mody nie obciążają. Każda wersja czyta swój podfolder (NPEB00553, NPJB00135, NPUB30467) lub, gdy go nie ma, sam folder.",
     L"Wyodrębnij tekstury odwiedzonych pokoi",
     L"Zapisuje nowe tekstury wczytane podczas gry jako PNG: pokoje, postacie i efekty. Odwiedź wybrane pokoje; nieodwiedzone nie zostaną wyodrębnione.",
-    L"Edytuj PNG, zachowując kod na początku nazwy, i umieść je w podfolderze wersji. Pełne wyodrębnianie odczytuje zapisane tekstury; obrazy tworzone przez grę wymagają wyodrębniania podczas gry. Ściany odbić trafiają do reference/cubemaps do podglądu; podmiana obsługuje tekstury 2D.",
+    L"Edytuj PNG, zachowując kod na początku nazwy, i umieść je w podfolderze wersji. Pełne wyodrębnianie odczytuje zapisane tekstury; obrazy tworzone przez grę wymagają wyodrębniania podczas gry. Ściany odbić trafiają do reference/cubemaps do podglądu; podmiana obsługuje tekstury 2D." L" Wskazówka dla modów: użyj „Wyodrębnij tekstury wszystkich map” i zastąp je teksturami z paczek Code: Veronica na PS2, które zwykle tu działają. Nazwy są inne: zmień nazwę każdej tekstury, jedna po drugiej, na nazwę odpowiadającego pliku wyodrębnionego.",
     L"Folder wyodrębnionych tekstur",
     L"Dotąd wyodrębniono %d tekstur",
     L"Tekstury moda włączone",
@@ -1954,7 +1970,7 @@ static const wchar_t* const k_str_pl[] = {
     L"Włącz mapy testowe (F7)",
     L"Mapy testowe: włączone (F7)",
     L"Otwórz listę map",
-    L"60 FPS (eksperymentalne)",
+    L"60 FPS",
     L"Wierzchołki na GPU (eksperymentalne)", L"Karta graficzna przetwarza wierzchołki gry. Znacznie więcej FPS w ciężkich pomieszczeniach. Działa od uruchomienia gry.",
     L"Filtrowanie anizotropowe",
     L"Ostrość (FSR 1 RCAS)",
@@ -1998,7 +2014,9 @@ static const wchar_t* const k_str_pl[] = {
     L"GPU (eksperymentalna)",
     L"Generowanie klatek",
     L"Wyłączone",
-    L"FSR 3.1 (Eksperymentalne)",
+    L"FSR 3.1",
+    L"Skróty", L"SKRÓTY W GRZE", L"Skróty działające podczas gry, na klawiaturze i kontrolerze.", L"Klawiatura", L"Kontroler", L"Działanie", L"Otwiera menu opcji gry (obraz, dźwięk, SRT, wyjście).", L"Otwiera menu przedmiotów, by dodać broń i przedmioty do ekwipunku. Włącz w: %s.", L"Otwiera okno map testowych, by przejść do pokoju. Włącz w: %s.", L"Pokazuje lub ukrywa panel SRT (zdrowie, ekwipunek i wrogowie).", L"Od razu włącza lub wyłącza tekstury moda.", L"Robi zrzut ekranu; trafia do folderu screenshots obok gry.", L"Na kontrolerze: najpierw przytrzymaj cztery przyciski ramion, potem naciśnij wskazany przycisk.",
+    L"30 FPS to oryginał: to samo doświadczenie co na PlayStation 3, gdzie gra działa w 30 FPS i 720p.", L"60 FPS daje płynniejszą grę. Jeśli PC nie utrzyma 60 FPS, gra zwalnia, jak w Resident Evil 4 Ultimate HD Edition (2014).", L"Z generowaniem klatek (FSR 3.1), jeśli PC utrzyma 60 FPS, gra może osiągnąć do 120 FPS.",
 };
 static_assert(sizeof k_str_pl / sizeof k_str_pl[0] == S_COUNT, "k_str_pl: one text per StrId");
 
@@ -2162,7 +2180,7 @@ static const wchar_t* const k_str_tr[] = {
     L"Klasördeki PNG'leri orijinal dokuların yerine kullanır ve her birini yalnızca göründüğünde yükler: büyük modlar yük olmaz. Her sürüm kendi alt klasörünü (NPEB00553, NPJB00135, NPUB30467), yoksa klasörün kendisini okur.",
     L"Ziyaret edilen odaların dokularını çıkar",
     L"Oyun sırasında yüklenen oda, karakter ve efektlerin yeni dokularını PNG olarak kaydeder. İstenen odaları ziyaret edin; ziyaret edilmeyen odalar çıkarılmaz.",
-    L"PNG’leri adın başındaki kodu koruyarak düzenleyin ve sürüm alt klasörüne koyun. Tam çıkarma kayıtlı dokuları okur; oyunun oluşturduğu görüntüler oyun sırasında çıkarılmalıdır. Yansıma yüzleri başvuru için reference/cubemaps içine kaydedilir; değiştirme şu an 2D dokuları destekler.",
+    L"PNG’leri adın başındaki kodu koruyarak düzenleyin ve sürüm alt klasörüne koyun. Tam çıkarma kayıtlı dokuları okur; oyunun oluşturduğu görüntüler oyun sırasında çıkarılmalıdır. Yansıma yüzleri başvuru için reference/cubemaps içine kaydedilir; değiştirme şu an 2D dokuları destekler." L" Mod ipucu: “Tüm haritaların dokularını çıkar” seçeneğini kullanın ve bunları genellikle burada çalışan Code: Veronica PS2 doku paketleriyle değiştirin. Adlar farklıdır: her dokuyu tek tek, karşılık gelen çıkarılmış dosyanın adıyla yeniden adlandırın.",
     L"Çıkarılan dokular klasörü",
     L"Şimdiye kadar %d doku çıkarıldı",
     L"Mod dokuları açık",
@@ -2221,7 +2239,7 @@ static const wchar_t* const k_str_tr[] = {
     L"Test haritalarını etkinleştir (F7)",
     L"Test haritaları: etkin (F7)",
     L"Harita listesini aç",
-    L"60 FPS (Deneysel)",
+    L"60 FPS",
     L"Köşe noktaları GPU'da (deneysel)", L"Ekran kartı oyunun köşe noktalarını dönüştürür. Ağır odalarda çok daha yüksek FPS. Oyun başlatılırken uygulanır.",
     L"Anizotropik filtreleme",
     L"Keskinlik (FSR 1 RCAS)",
@@ -2265,7 +2283,9 @@ static const wchar_t* const k_str_tr[] = {
     L"GPU (deneysel)",
     L"Kare üretimi",
     L"Kapalı",
-    L"FSR 3.1 (Deneysel)",
+    L"FSR 3.1",
+    L"Kısayollar", L"OYUN KISAYOLLARI", L"Oyun sırasında klavyede ve kontrolcüde çalışan kısayollar.", L"Klavye", L"Kontrolcü", L"Ne yapar", L"Oyunun seçenekler menüsünü açar (ekran, ses, SRT, çıkış).", L"Silah ve eşyaları envantere koymak için eşya menüsünü açar. %s bölümünden etkinleştirin.", L"Bir odaya gitmek için test haritaları penceresini açar. %s bölümünden etkinleştirin.", L"SRT panelini (sağlık, envanter ve düşmanlar) gösterir veya gizler.", L"Mod dokularını anında açar veya kapatır.", L"Ekran görüntüsü alır; oyunun yanındaki screenshots klasörüne kaydedilir.", L"Kontrolcüde: önce dört omuz tuşunu basılı tutun, sonra gösterilen tuşa basın.",
+    L"30 FPS orijinaldir: oyunun 720p'de 30 FPS çalıştığı PlayStation 3 ile aynı deneyim.", L"60 FPS oyunu daha akıcı yapar. PC 60 FPS'yi koruyamazsa oyun, Resident Evil 4 Ultimate HD Edition'daki (2014) gibi yavaşlar.", L"Kare oluşturma (FSR 3.1) ile PC 60 FPS'yi korursa oyun 120 FPS'ye kadar çıkabilir.",
 };
 static_assert(sizeof k_str_tr / sizeof k_str_tr[0] == S_COUNT, "k_str_tr: one text per StrId");
 
@@ -2429,7 +2449,7 @@ static const wchar_t* const k_str_ar[] = {
     L"يستخدم ملفات PNG في المجلد بدل الخامات الأصلية، ويحمّل كل ملف عند ظهوره فقط، فلا تثقل التعديلات الكبيرة. تقرأ كل نسخة مجلدها الفرعي (NPEB00553 وNPJB00135 وNPUB30467) أو المجلد نفسه إن لم يوجد.",
     L"استخراج خامات الغرف التي تزورها",
     L"يحفظ الخامات الجديدة المحملة أثناء اللعب بصيغة PNG، بما فيها الغرف والشخصيات والمؤثرات. زر الغرف المطلوبة؛ لا تُستخرج الغرف التي لم تزرها.",
-    L"عدّل ملفات PNG مع إبقاء الرمز في بداية الاسم وضعها في المجلد الفرعي للإصدار. الاستخراج الكامل يقرأ الخامات المخزنة؛ الصور التي تنشئها اللعبة تتطلب الاستخراج أثناء اللعب. تُحفظ أوجه الانعكاسات في reference/cubemaps للمرجع؛ الاستبدال الحالي يدعم الخامات ثنائية الأبعاد.",
+    L"عدّل ملفات PNG مع إبقاء الرمز في بداية الاسم وضعها في المجلد الفرعي للإصدار. الاستخراج الكامل يقرأ الخامات المخزنة؛ الصور التي تنشئها اللعبة تتطلب الاستخراج أثناء اللعب. تُحفظ أوجه الانعكاسات في reference/cubemaps للمرجع؛ الاستبدال الحالي يدعم الخامات ثنائية الأبعاد." L" نصيحة للتعديلات: استخدم «استخراج خامات جميع الخرائط» ثم استبدلها بخامات حزم Code: Veronica لـ PS2، فهي تعمل هنا عادةً. الأسماء مختلفة: أعد تسمية كل خامة واحدةً تلو الآخر باسم الملف المستخرج المطابق.",
     L"مجلد الخامات المستخرجة",
     L"استُخرجت %d خامة حتى الآن",
     L"خامات التعديل مفعّلة",
@@ -2488,7 +2508,7 @@ static const wchar_t* const k_str_ar[] = {
     L"تفعيل خرائط الاختبار (F7)",
     L"خرائط الاختبار: مفعّلة (F7)",
     L"فتح قائمة الخرائط",
-    L"60 FPS (تجريبي)",
+    L"60 FPS",
     L"معالجة الرؤوس على GPU (تجريبي)", L"تحوّل بطاقة الرسومات رؤوس اللعبة. معدل إطارات أعلى بكثير في الغرف الثقيلة. يُطبَّق عند تشغيل اللعبة.",
     L"التصفية متباينة الخواص",
     L"الحدّة (FSR 1 RCAS)",
@@ -2532,7 +2552,9 @@ static const wchar_t* const k_str_ar[] = {
     L"GPU (تجريبي)",
     L"توليد الإطارات",
     L"إيقاف",
-    L"FSR 3.1 (تجريبي)",
+    L"FSR 3.1",
+    L"الاختصارات", L"اختصارات اللعبة", L"اختصارات تعمل أثناء اللعب على لوحة المفاتيح ووحدة التحكم.", L"لوحة المفاتيح", L"وحدة التحكم", L"الوظيفة", L"يفتح قائمة خيارات اللعبة (الشاشة، الصوت، SRT، الخروج).", L"يفتح قائمة العناصر لوضع الأسلحة والعناصر في المخزون. فعّلها من %s.", L"يفتح نافذة الخرائط التجريبية للانتقال إلى غرفة. فعّلها من %s.", L"يُظهر لوحة SRT (الصحة والمخزون والأعداء) أو يخفيها.", L"يشغّل خامات التعديل أو يوقفها فورًا.", L"يلتقط صورة للشاشة وتُحفظ في مجلد screenshots بجوار اللعبة.", L"على وحدة التحكم: اضغط أولًا مع الاستمرار على أزرار الكتف الأربعة ثم اضغط الزر المذكور.",
+    L"30 FPS هو الأصلي: نفس تجربة PlayStation 3 حيث تعمل اللعبة بدقة 720p و30 إطارًا في الثانية.", L"60 FPS يجعل اللعبة أكثر سلاسة. إذا لم يحافظ الحاسوب على 60 FPS تصبح اللعبة أبطأ، كما في Resident Evil 4 Ultimate HD Edition (2014).", L"مع توليد الإطارات (FSR 3.1)، إذا حافظ الحاسوب على 60 FPS يمكن أن تصل اللعبة إلى 120 FPS.",
 };
 static_assert(sizeof k_str_ar / sizeof k_str_ar[0] == S_COUNT, "k_str_ar: one text per StrId");
 
@@ -2696,7 +2718,7 @@ static const wchar_t* const k_str_zh[] = {
     L"用文件夹中的 PNG 代替原始纹理，每张只在出现时才加载，大型模组也不会拖慢游戏。每个版本读取各自的子文件夹（NPEB00553、NPJB00135、NPUB30467），没有时读取文件夹本身。",
     L"提取已访问房间的纹理",
     L"将游戏过程中加载的新纹理保存为PNG，包括房间、角色和特效。请进入所需房间；未访问的房间不会被提取。",
-    L"编辑PNG时保留文件名开头的代码，并放入对应版本的子文件夹。完整提取只读取已存储的纹理；游戏动态生成的图像需要在游玩时提取。 反射各面保存在reference/cubemaps中供参考；目前仅支持替换2D纹理。",
+    L"编辑PNG时保留文件名开头的代码，并放入对应版本的子文件夹。完整提取只读取已存储的纹理；游戏动态生成的图像需要在游玩时提取。 反射各面保存在reference/cubemaps中供参考；目前仅支持替换2D纹理。" L" 模组提示：使用“提取所有地图的纹理”，再用 PS2 版《生化危机 维罗尼卡》的纹理包替换，通常可以使用。名称不同：需将每个纹理逐一重命名为对应提取文件的名称。",
     L"提取纹理文件夹",
     L"目前已提取 %d 张纹理",
     L"模组纹理：开",
@@ -2755,7 +2777,7 @@ static const wchar_t* const k_str_zh[] = {
     L"启用测试地图 (F7)",
     L"测试地图：已启用 (F7)",
     L"打开地图列表",
-    L"60 FPS（实验性）",
+    L"60 FPS",
     L"GPU 顶点处理（实验性）", L"由显卡转换游戏的顶点。在复杂房间中帧率大幅提升。启动游戏时生效。",
     L"各向异性过滤",
     L"锐化 (FSR 1 RCAS)",
@@ -2799,7 +2821,9 @@ static const wchar_t* const k_str_zh[] = {
     L"GPU（实验性）",
     L"帧生成",
     L"关闭",
-    L"FSR 3.1（实验性）",
+    L"FSR 3.1",
+    L"快捷键", L"游戏快捷键", L"游戏中可在键盘和手柄上使用的快捷键。", L"键盘", L"手柄", L"功能", L"打开游戏选项菜单（画面、音频、SRT、退出）。", L"打开物品菜单，把武器和物品放入物品栏。需在“%s”中启用。", L"打开测试地图窗口以前往某个房间。需在“%s”中启用。", L"显示或隐藏 SRT 面板（体力、物品栏和敌人）。", L"立即开启或关闭模组纹理。", L"截图，保存在游戏旁边的 screenshots 文件夹中。", L"手柄：先按住四个肩键，再按所示按键。",
+    L"30 FPS 是原版：与 PlayStation 3 相同的体验，游戏以 720p、30 FPS 运行。", L"60 FPS 让游戏更流畅。如果电脑无法稳定在 60 FPS，游戏会变慢，就像《Resident Evil 4 Ultimate HD Edition》（2014）。", L"开启帧生成（FSR 3.1）后，如果电脑能稳定在 60 FPS，游戏最高可达 120 FPS。",
 };
 static_assert(sizeof k_str_zh / sizeof k_str_zh[0] == S_COUNT, "k_str_zh: one text per StrId");
 
@@ -2963,7 +2987,7 @@ static const wchar_t* const k_str_ko[] = {
     L"폴더의 PNG를 원래 텍스처 대신 사용하며, 각각 화면에 나올 때만 불러오므로 큰 모드도 부담이 없습니다. 각 버전은 자기 하위 폴더(NPEB00553, NPJB00135, NPUB30467)를, 없으면 폴더 자체를 읽습니다.",
     L"방문한 방의 텍스처 추출",
     L"플레이 중 불러온 방, 캐릭터, 효과의 새 텍스처를 PNG로 저장합니다. 필요한 방을 방문하세요. 방문하지 않은 방은 추출되지 않습니다.",
-    L"PNG 이름 앞의 코드를 유지하며 편집한 뒤 버전 하위 폴더에 넣으세요. 전체 추출은 저장된 텍스처를 읽습니다. 게임에서 생성한 이미지는 플레이 중 추출해야 합니다. 반사 면은 참고용으로 reference/cubemaps에 저장됩니다. 현재 교체 기능은 2D 텍스처를 지원합니다.",
+    L"PNG 이름 앞의 코드를 유지하며 편집한 뒤 버전 하위 폴더에 넣으세요. 전체 추출은 저장된 텍스처를 읽습니다. 게임에서 생성한 이미지는 플레이 중 추출해야 합니다. 반사 면은 참고용으로 reference/cubemaps에 저장됩니다. 현재 교체 기능은 2D 텍스처를 지원합니다." L" 모드 팁: “모든 맵의 텍스처 추출”을 사용한 뒤, 보통 여기서도 작동하는 PS2판 코드: 베로니카 텍스처 팩으로 교체하세요. 이름이 다르므로 각 텍스처를 해당하는 추출 파일 이름으로 하나씩 바꿔야 합니다.",
     L"추출한 텍스처 폴더",
     L"지금까지 추출한 텍스처 %d개",
     L"모드 텍스처 켜짐",
@@ -3022,7 +3046,7 @@ static const wchar_t* const k_str_ko[] = {
     L"테스트 맵 사용 (F7)",
     L"테스트 맵: 사용 중 (F7)",
     L"맵 목록 열기",
-    L"60 FPS (실험적)",
+    L"60 FPS",
     L"GPU 정점 처리 (실험적)", L"그래픽 카드가 게임의 정점을 변환합니다. 무거운 방에서 FPS가 크게 오릅니다. 게임 시작 시 적용됩니다.",
     L"이방성 필터링",
     L"선명도 (FSR 1 RCAS)",
@@ -3066,7 +3090,9 @@ static const wchar_t* const k_str_ko[] = {
     L"GPU (실험적)",
     L"프레임 생성",
     L"끄기",
-    L"FSR 3.1 (실험적)",
+    L"FSR 3.1",
+    L"단축키", L"게임 단축키", L"플레이 중 키보드와 컨트롤러에서 쓸 수 있는 단축키입니다.", L"키보드", L"컨트롤러", L"기능", L"게임 옵션 메뉴를 엽니다(화면, 오디오, SRT, 종료).", L"아이템 메뉴를 열어 무기와 아이템을 인벤토리에 넣습니다. %s에서 켜세요.", L"테스트 맵 창을 열어 방으로 이동합니다. %s에서 켜세요.", L"SRT 패널(체력, 인벤토리, 적)을 표시하거나 숨깁니다.", L"모드 텍스처를 즉시 켜거나 끕니다.", L"스크린샷을 찍습니다. 게임 옆 screenshots 폴더에 저장됩니다.", L"컨트롤러: 먼저 숄더 버튼 네 개를 누른 채로 표시된 버튼을 누르세요.",
+    L"30 FPS는 원본입니다. 게임이 720p, 30 FPS로 실행되는 PlayStation 3과 같은 경험입니다.", L"60 FPS는 더 부드럽습니다. PC가 60 FPS를 유지하지 못하면 Resident Evil 4 Ultimate HD Edition(2014)처럼 게임이 느려집니다.", L"프레임 생성(FSR 3.1)을 켜면 PC가 60 FPS를 유지할 경우 게임이 최대 120 FPS까지 나올 수 있습니다.",
 };
 static_assert(sizeof k_str_ko / sizeof k_str_ko[0] == S_COUNT, "k_str_ko: one text per StrId");
 
@@ -3230,7 +3256,7 @@ static const wchar_t* const k_str_ru[] = {
     L"Использует PNG из папки вместо исходных текстур и загружает каждый, только когда он появляется: большие моды не нагружают игру. Каждая версия читает свою подпапку (NPEB00553, NPJB00135, NPUB30467), а без неё саму папку.",
     L"Извлекать текстуры посещённых комнат",
     L"Сохраняет в PNG новые текстуры, загруженные во время игры: комнаты, персонажи и эффекты. Посетите нужные комнаты; непосещённые не извлекаются.",
-    L"Редактируйте PNG, сохраняя код в начале имени, и кладите их в подпапку версии. Полное извлечение читает сохранённые текстуры; создаваемые игрой изображения нужно извлекать во время игры. Грани отражений сохраняются в reference/cubemaps для просмотра; замена пока поддерживает текстуры 2D.",
+    L"Редактируйте PNG, сохраняя код в начале имени, и кладите их в подпапку версии. Полное извлечение читает сохранённые текстуры; создаваемые игрой изображения нужно извлекать во время игры. Грани отражений сохраняются в reference/cubemaps для просмотра; замена пока поддерживает текстуры 2D." L" Совет для модов: используйте «Извлечь текстуры всех карт» и замените их текстурами из пакетов Code: Veronica для PS2 — обычно они здесь работают. Имена разные: переименуйте каждую текстуру по одной в имя соответствующего извлечённого файла.",
     L"Папка извлечённых текстур",
     L"Извлечено текстур: %d",
     L"Текстуры мода включены",
@@ -3289,7 +3315,7 @@ static const wchar_t* const k_str_ru[] = {
     L"Включить тестовые карты (F7)",
     L"Тестовые карты: включены (F7)",
     L"Открыть список карт",
-    L"60 FPS (эксперим.)",
+    L"60 FPS",
     L"Вершины на GPU (эксперимент.)", L"Видеокарта преобразует вершины игры. Намного выше FPS в тяжёлых комнатах. Применяется при запуске игры.",
     L"Анизотропная фильтрация",
     L"Резкость (FSR 1 RCAS)",
@@ -3333,7 +3359,9 @@ static const wchar_t* const k_str_ru[] = {
     L"GPU (экспериментально)",
     L"Генерация кадров",
     L"Выкл.",
-    L"FSR 3.1 (Эксперимент.)",
+    L"FSR 3.1",
+    L"Горячие клавиши", L"ГОРЯЧИЕ КЛАВИШИ ИГРЫ", L"Сочетания, которые работают во время игры на клавиатуре и геймпаде.", L"Клавиатура", L"Геймпад", L"Действие", L"Открывает меню настроек игры (экран, звук, SRT, выход).", L"Открывает меню предметов, чтобы положить оружие и предметы в инвентарь. Включите в разделе «%s».", L"Открывает окно тестовых карт, чтобы перейти в комнату. Включите в разделе «%s».", L"Показывает или скрывает панель SRT (здоровье, инвентарь и враги).", L"Сразу включает или выключает текстуры мода.", L"Делает скриншот; он сохраняется в папку screenshots рядом с игрой.", L"На геймпаде: сначала зажмите четыре плечевые кнопки, затем нажмите указанную кнопку.",
+    L"30 FPS — оригинал: тот же опыт, что на PlayStation 3, где игра идёт в 720p при 30 FPS.", L"60 FPS делает игру плавнее. Если ПК не держит 60 FPS, игра замедляется, как в Resident Evil 4 Ultimate HD Edition (2014).", L"С генерацией кадров (FSR 3.1), если ПК держит 60 FPS, игра может достигать 120 FPS.",
 };
 static_assert(sizeof k_str_ru / sizeof k_str_ru[0] == S_COUNT, "k_str_ru: one text per StrId");
 

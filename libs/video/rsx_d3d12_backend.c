@@ -1125,8 +1125,12 @@ static void pose_init_recording(void) {
     {const char* e=getenv("CV_POSE_CONFLICT_FOLLOW");s_pose_conflict_follow=!(e&&!strcmp(e,"0"));
      fprintf(stderr,"[POSE-CONFLICT] v4 follow=%s; a conflicted draw half pulled by a seam moves whole\n",s_pose_conflict_follow?"on":"off (CV_POSE_CONFLICT_FOLLOW=0)");}
     {const char* off=getenv("CV_POSE_REPEAT_WORK");s_pose_history.repeat_work_disabled=off&&!strcmp(off,"0");}
+    {const char* scalar=getenv("CV_POSE_COMPARE_SCALAR");s_pose_history.position_compare_scalar=scalar&&!strcmp(scalar,"1");}
     {const char* stream=getenv("CV_POSE_STREAM_VECTORS");s_pose_history.stream_vectors=!stream||strcmp(stream,"0");}
-    fprintf(stderr,"[POSE-STREAM] v1 %s; exact position packing and stationary checks\n",s_pose_history.stream_vectors?"SSE2":"original");
+    fprintf(stderr,"[POSE-STREAM] v1 %s; exact strided packing and stationary thresholds; no temporal cache\n",s_pose_history.stream_vectors?"SSE2":"original");
+    fprintf(stderr,"[POSE-COMPARE] v1 exhaustive position check=%s; threshold and bitwise change retained\n",s_pose_history.position_compare_scalar?"scalar":"SSE2");
+    {const char* off=getenv("CV_POSE_REPEAT_REUSE");s_pose_history.repeat_reuse_disabled=!off||strcmp(off,"1");}
+    fprintf(stderr,"[POSE-EXACT-REUSE] v1 %s; complete small-position groups and unchanged weld chains\n",s_pose_history.repeat_reuse_disabled?"off":"on");
     s_pose_on=1;
     if(pose_compute_mode())fprintf(stderr,"[POSE-COMPUTE] v42 enabled; GPU geometry coherence/merge/alias/seams/output; CPU matching/topology/cameras; logic 30 Hz, target 60 Hz\n");
     else fprintf(stderr,"[POSE] v20 final position blend=%s; CPU matching/alias/seam safeguards; logic 30 Hz, target 60 Hz\n",s_pose_gpu_blend?"GPU":"CPU");
@@ -1319,6 +1323,9 @@ static void pose_interpolate_batch_for(const RenderBatch* rb) {
     }
     if(s_pose_profile) {
         static double totals[7],reported;static u32 count;static u64 camera_hits,camera_misses,camera_uncached,search_candidates,search_pruned,blocks_pruned;static u64 validated_vertices,reused_validations,sample_groups,position_hits,position_misses,position_bypass,cap_avoided;
+        static u64 history_reuse,weld_reuse,history_uncached,weld_uncached;
+        history_reuse+=s_pose_history.history_reuse_hits;history_uncached+=s_pose_history.history_reuse_misses;
+        weld_reuse+=s_pose_history.weld_reuse_hits;weld_uncached+=s_pose_history.weld_reuse_misses;
         cap_avoided+=s_pose_history.capped_searches_skipped;
         camera_hits+=s_pose_history.camera_hits;camera_misses+=s_pose_history.camera_misses;camera_uncached+=s_pose_history.camera_uncached;
         sample_groups+=s_pose_history.sample_groups_reused;position_hits+=s_pose_history.position_hits;position_misses+=s_pose_history.position_misses;position_bypass+=s_pose_history.position_uncached;
@@ -1334,6 +1341,8 @@ static void pose_interpolate_batch_for(const RenderBatch* rb) {
             validated_vertices=reused_validations=0;
             fprintf(stderr,"[POSE-BLOCKS] rejected_blocks=%.1f (counts/present; order and 128-visit cap retained)\n",(double)blocks_pruned/count);
             fprintf(stderr,"[POSE-CAP] v32 avoided_searches=%.1f (per present; >128-entry chains retain original fallback; ambiguity diagnostic excludes discarded searches)\n",(double)cap_avoided/count);
+            fprintf(stderr,"[POSE-EXACT-REUSE] history_hits=%.1f history_misses=%.1f weld_hits=%.1f weld_misses=%.1f (per present; original bounds/fallbacks retained)\n",(double)history_reuse/count,(double)history_uncached/count,(double)weld_reuse/count,(double)weld_uncached/count);
+            history_reuse=weld_reuse=history_uncached=weld_uncached=0;
             cap_avoided=0;
             fprintf(stderr,"[POSE-REUSE] sample_groups=%.1f position_hits=%.1f position_misses=%.1f position_bypass=%.1f (per present; exact samples, original search order/cap)\n",(double)sample_groups/count,(double)position_hits/count,(double)position_misses/count,(double)position_bypass/count);
             sample_groups=position_hits=position_misses=position_bypass=0;

@@ -367,7 +367,7 @@ Settings load_settings()
     s.res    = _wtoi(ini_get(L"tela", L"resolucao", L"1").c_str());
     s.aa     = _wtoi(ini_get(L"tela", L"antialias", L"0").c_str());
     s.fps    = _wtoi(ini_get(L"tela", L"fps", L"0").c_str()) == 1;
-    s.pose_device=_wtoi(ini_get(L"tela",L"interpolacao_gpu",L"0").c_str())==1;
+    s.pose_device=0;   // CPU interpolation only; a saved interpolacao_gpu=1 is ignored
     s.frame_generation=_wtoi(ini_get(L"tela",L"fsr_frame_generation",L"0").c_str())==1;
     if(pose_device_override()>=0)s.pose_device=pose_device_override();
     if(opt30_comparison())s.fps=0;   // this process only; saved FPS choice is preserved
@@ -630,9 +630,9 @@ Bitmap* load_png(const char* name)
 }
 
 /* ---------------------------------------------------------------- UI state */
-enum Page { P_INICIO, P_JOGO, P_CONTROLES, P_PATCHES, P_MODS, P_SRT, P_INVENTARIO, P_DESEMPENHO, P_AVANCADO, P_COUNT };
+enum Page { P_INICIO, P_JOGO, P_CONTROLES, P_ATALHOS, P_PATCHES, P_MODS, P_SRT, P_INVENTARIO, P_DESEMPENHO, P_AVANCADO, P_COUNT };
 /* Each page's name in the side bar. */
-const int k_nav[P_COUNT] = { S_NAV_HOME, S_NAV_GAME, S_NAV_CONTROLS, S_NAV_PATCHES, S_NAV_MODS, S_NAV_SRT, S_NAV_ITEMS, S_NAV_PERF, S_NAV_ADVANCED };
+const int k_nav[P_COUNT] = { S_NAV_HOME, S_NAV_GAME, S_NAV_CONTROLS, S_NAV_SHORTCUTS, S_NAV_PATCHES, S_NAV_MODS, S_NAV_SRT, S_NAV_ITEMS, S_NAV_PERF, S_NAV_ADVANCED };
 enum Capture { CAP_NONE, CAP_KEY, CAP_BTN };
 
 struct Hit { RectF r; int id; };
@@ -928,6 +928,9 @@ void section(Graphics& gr, const std::wstring& t, float x, float y, float w, con
 }
 
 
+/* Release shown under the sidebar, beside the credit. Bump it per release. */
+const wchar_t* const k_launcher_version = L"v1.0";
+
 /* ---------------------------------------------------------------- pages */
 void draw_sidebar(Graphics& gr, const Font& title, const Font& title2, const Font& nav, const Font& footer_font)
 {
@@ -944,6 +947,8 @@ void draw_sidebar(Graphics& gr, const Font& title, const Font& title2, const Fon
     }
     text(gr, T(S_CREDIT_KASTIEL), 22, H - 42.0f, footer_font, C_DIM,
          StringAlignmentNear, SIDE - 44.0f, 22);
+    text(gr, k_launcher_version, 22, H - 42.0f, footer_font, C_DIM,
+         StringAlignmentFar, SIDE - 44.0f, 22);
 }
 
 void draw_play(Graphics& gr, const Font& big, const Font& fsm)
@@ -1015,21 +1020,34 @@ void draw_inicio(Graphics& gr, const Font& head, const Font& body, const Font& c
     text(gr, T(S_SHARPNESS), x + 450, y, body, C_TEXT, StringAlignmentNear, 180, 30);   /* live */
     dropdown(gr, RectF(x + 630, y, 180, 30), sharp_name(g.s.sharpness / 10), ID_DD_SHARP, body);
     y += 44;
+    /* 60 FPS interpolation always runs on the CPU: no device choice here. */
     if((g.s.fps==1||pose_device_override()>=0)&&!opt30_comparison()) {
-        text(gr,T(S_POSE_DEVICE),x,y,body,C_TEXT,StringAlignmentNear,205,30);
-        dropdown(gr,RectF(x+210,y,200,30),pose_device_name(g.s.pose_device),(g.running||pose_device_override()>=0)?-1:ID_DD_POSE_DEVICE,body,!g.running&&pose_device_override()<0);
-        text(gr,T(S_FRAME_GEN),x+450,y,body,C_TEXT,StringAlignmentNear,180,30);
-        dropdown(gr,RectF(x+630,y,180,30),frame_generation_name(frame_generation_allowed()?g.s.frame_generation:0),(g.running||!frame_generation_allowed())?-1:ID_DD_FRAME_GEN,body,!g.running&&frame_generation_allowed());
+        text(gr,T(S_FRAME_GEN),x,y,body,C_TEXT,StringAlignmentNear,205,30);
+        dropdown(gr,RectF(x+210,y,200,30),frame_generation_name(frame_generation_allowed()?g.s.frame_generation:0),(g.running||!frame_generation_allowed())?-1:ID_DD_FRAME_GEN,body,!g.running&&frame_generation_allowed());
         y+=44;
     }
     y+=10;
-    /* Keep the supported releases visible independently of the selected game. */
-    text(gr, T(S_SUPPORTED_VERSIONS), x, H - 162.0f, fsm, C_DIM,
+    /* What the frame limit means: 30 is the PS3 original; 60 is smoother but
+     * slows the game if the PC can't hold it; frame generation doubles it. */
+    std::wstring fps_note = T(g.s.fps ? S_FPS_NOTE_60 : S_FPS_NOTE_30);
+    if (g.s.fps && g.s.frame_generation && frame_generation_allowed()) fps_note += L"\n" + std::wstring(T(S_FPS_NOTE_FG));
+    const float ny = y;
+    {   /* wraps, unlike text() */
+        const std::wstring shown = g_lang == LANG_AR ? L"‫" + fps_note + L"‬" : fps_note;
+        StringFormat sf; sf.SetAlignment(StringAlignmentNear); sf.SetLineAlignment(StringAlignmentNear);
+        SolidBrush nb(C_DIM);
+        gr.DrawString(shown.c_str(), -1, &fsm, RectF(x, ny, cw - 64, 54), &sf, &nb);
+    }
+    /* Keep the supported releases visible independently of the selected game,
+     * near the bottom but never over the lines above. */
+    const float vy = std::max(H - 162.0f, ny + 54.0f + 12.0f);
+    text(gr, T(S_SUPPORTED_VERSIONS), x, vy, fsm, C_DIM,
          StringAlignmentNear, cw - 64, 20);
     const std::wstring versions = std::wstring(T(S_REGION_EU)) + L": NPEB00553   ·   "
         + T(S_REGION_JP) + L": NPJB00135   ·   " + T(S_REGION_US) + L": NPUB30467";
-    text(gr, versions, x, H - 136.0f, fsm, C_DIM,
+    text(gr, versions, x, vy + 26.0f, fsm, C_DIM,
          StringAlignmentNear, cw - 64, 38);
+    g_page_end = std::max(g_page_end, vy + 64.0f);
 }
 
 void path_row(Graphics& gr, float x, float y, const std::wstring& label, const std::wstring& value,
@@ -1784,6 +1802,46 @@ void scan_tex_dir()
     g.tex_dumped = count_png(tex_dump_folder(), false);
 }
 
+/* Player shortcuts in the game (not the developer captures F9/F12): the keys
+ * from key_hook / the renderer, the controller chords from cv_launcher_controls. */
+void draw_atalhos(Graphics& gr, const Font& head, const Font& body, const Font& fsm)
+{
+    float x = SIDE + 32.0f, y = 34;
+    const float w = W - SIDE - 64.0f;
+    section(gr, T(S_SC_TITLE), x, y, w, head);
+    text(gr, T(S_SC_HINT), x, y + 32, fsm, C_DIM, StringAlignmentNear, w, 20);
+    y += 74;
+    const float kx = x, px = x + 130, ax = x + 330, aw = w - 330;
+    text(gr, T(S_SC_COL_KEY), kx, y, fsm, C_DIM, StringAlignmentNear, 120, 20);
+    text(gr, T(S_SC_COL_PAD), px, y, fsm, C_DIM, StringAlignmentNear, 190, 20);
+    text(gr, T(S_SC_COL_ACTION), ax, y, fsm, C_DIM, StringAlignmentNear, aw, 20);
+    y += 26;
+    const wchar_t* prefix = s_shortcut_xbox ? L"RB+RT+LB+LT+" : L"R1+R2+L1+L2+";
+    wchar_t items[300], maps[300];
+    swprintf(items, 300, T(S_SC_ITEMS), T(S_NAV_ITEMS));
+    swprintf(maps, 300, T(S_SC_MAPS), T(S_NAV_ADVANCED));
+    struct Row { const wchar_t* key; const wchar_t* ps; const wchar_t* xb; const wchar_t* what; };
+    const Row rows[] = {
+        { L"Insert / F5", L"L3", L"LS", T(S_SC_MENU) },
+        { L"F6", L"△", L"Y", items },
+        { L"F7", L"○", L"B", maps },
+        { L"F8", L"✕", L"A", T(S_SC_SRT) },
+        { L"F9", L"□", L"X", T(S_SC_TEX) },
+        { L"F10", L"R3", L"RS", T(S_SC_SHOT) },
+    };
+    SolidBrush line(Color(255, 46, 38, 38));
+    for (const Row& r : rows) {
+        gr.FillRectangle(&line, x, y - 4, w, 1.0f);
+        text(gr, r.key, kx, y, body, C_TEXT, StringAlignmentNear, 120, 40);
+        text(gr, std::wstring(prefix) + (s_shortcut_xbox ? r.xb : r.ps), px, y, body, C_TEXT, StringAlignmentNear, 190, 40);
+        text(gr, r.what, ax, y, fsm, C_TEXT, StringAlignmentNear, aw, 40);
+        y += 48;
+    }
+    gr.FillRectangle(&line, x, y - 4, w, 1.0f);
+    text(gr, T(S_SC_PAD_NOTE), x, y + 6, fsm, C_DIM, StringAlignmentNear, w, 40);
+    g_page_end = std::max(g_page_end, y + 50);
+}
+
 void draw_mods(Graphics& gr, const Font& head, const Font& body, const Font& fsm)
 {
     float x = SIDE + 32.0f, y = 34;
@@ -1823,8 +1881,8 @@ void draw_mods(Graphics& gr, const Font& head, const Font& body, const Font& fsm
     const std::wstring howto = g_lang == LANG_AR ? L"\u202B" + std::wstring(T(S_TEX_HOWTO)) + L"\u202C" : T(S_TEX_HOWTO);
     StringFormat sf; sf.SetAlignment(StringAlignmentNear); sf.SetLineAlignment(StringAlignmentNear);
     SolidBrush hb(C_DIM);
-    gr.DrawString(howto.c_str(), -1, &fsm, RectF(x, y, w, 110), &sf, &hb);
-    g_page_end=std::max(g_page_end,y+110);
+    gr.DrawString(howto.c_str(), -1, &fsm, RectF(x, y, w, 170), &sf, &hb);   /* help + PS2 texture pack tip */
+    g_page_end=std::max(g_page_end,y+170);
 }
 
 /* The page's scroll bar, at the window's right edge, and a fade above the
@@ -1890,6 +1948,7 @@ void paint(HDC hdc)
     if (g.page == P_INICIO) draw_inicio(gr, fHead, fBody, fCode, fSmall);
     else if (g.page == P_JOGO) draw_jogo(gr, fHead, fBody, fSmall);
     else if (g.page == P_CONTROLES) draw_controles(gr, fHead, fBody, fSmall, fCol);
+    else if (g.page == P_ATALHOS) draw_atalhos(gr, fHead, fBody, fSmall);
     else if (g.page == P_PATCHES) draw_patches(gr, fHead, fBody, fSmall);
     else if (g.page == P_DESEMPENHO) draw_desempenho(gr, fHead, fBody, fSmall);
     else if (g.page == P_MODS) draw_mods(gr, fHead, fBody, fSmall);

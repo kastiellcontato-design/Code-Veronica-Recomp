@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include "rsx_pose_compare.h"
 #if !defined(RSX_POSE_SCALAR_SAMPLES) && (defined(__SSE2__) || defined(_M_X64) || (defined(_M_IX86_FP) && _M_IX86_FP>=2))
 #include <emmintrin.h>
 #define RSX_POSE_VECTOR_SAMPLES 1
@@ -86,6 +87,8 @@ typedef struct {
 typedef struct { float lo[3],hi[3]; int32_t after; uint32_t count; } RsxPoseBlock;
 typedef struct { uint32_t previous,current,epoch; float transform; } RsxPoseCameraMemo;
 typedef struct {float x[16],y[16],z[16];} RsxPoseSamples;
+typedef struct {uint32_t current,previous,count,epoch,flags;} RsxPoseHistoryMemo;
+typedef struct {uint32_t vertex,camera,epoch;int32_t head;} RsxPoseWeldMemo;
 typedef struct {
     RsxPoseSamples samples;
     uint32_t count,indices[16],camera_id,sample_id;float xyz[16][3];const float* camera;
@@ -119,7 +122,12 @@ typedef struct {
     RsxPoseCameraMemo* position_memo; /* same pair/epoch layout, transform holds the exact sample sum */
     uint32_t position_hits,position_misses,position_uncached;
     int position_memo_disabled;
-    int stream_vectors; /* exact position packing and stationary checks */
+    int position_compare_scalar;
+    int stream_vectors; /* opt-in, exact positions and stationary checks */
+    int repeat_reuse_disabled;
+    RsxPoseHistoryMemo* history_memo;
+    RsxPoseWeldMemo* weld_memo;uint32_t weld_epoch;
+    uint32_t history_reuse_hits,history_reuse_misses,weld_reuse_hits,weld_reuse_misses;
     RsxPoseSamples* search_samples;
     uint32_t* search_epochs;
     uint32_t search_candidates,search_pruned,sample_groups_reused,search_blocks_pruned;
@@ -149,6 +157,7 @@ static inline void rsx_pose_destroy(RsxPoseHistory* h) {
     free(h->vertex_sources);free(h->camera_sources);free(h->used);free(h->stationary_draws);free(h->stationary_vertices);free(h->blocks);
     free(h->memo_heads);free(h->memo_next);free(h->memo_ids);free(h->memo_hashes);free(h->camera_memo);
     free(h->sample_heads);free(h->sample_next);free(h->sample_hashes);free(h->position_memo);
+    free(h->history_memo);free(h->weld_memo);
     free(h->search_samples);free(h->search_epochs);free(h->bucket_capped);free(h->camera_checked);free(h->coherence_hashes);free(h->weld_hashes);
     memset(h,0,sizeof *h);
 }
@@ -186,6 +195,9 @@ static inline int rsx_pose_init(RsxPoseHistory* h,uint32_t maxv,uint32_t maxd) {
     h->memo_hashes=(uint64_t*)malloc((size_t)maxd*sizeof(uint64_t));
     h->memo_slots=1;while(h->memo_slots<maxd*2)h->memo_slots*=2;
     h->camera_memo=(RsxPoseCameraMemo*)calloc(h->memo_slots,sizeof(RsxPoseCameraMemo));
+    /* Optional: allocation failure keeps the original computations. */
+    h->history_memo=(RsxPoseHistoryMemo*)calloc(h->memo_slots,sizeof(RsxPoseHistoryMemo));
+    h->weld_memo=(RsxPoseWeldMemo*)calloc(h->memo_slots,sizeof(RsxPoseWeldMemo));
     h->sample_heads=(int32_t*)malloc((size_t)h->buckets*sizeof(int32_t));
     h->sample_next=(int32_t*)malloc((size_t)maxd*sizeof(int32_t));
     h->sample_hashes=(uint64_t*)malloc((size_t)maxd*sizeof(uint64_t));
@@ -641,10 +653,32 @@ static inline void rsx_pose_share_world_stationary(RsxPoseHistory* h,const RsxPo
         }
     }
 }
+static inline int rsx_pose_history_compare(RsxPoseHistory* h,uint32_t current,uint32_t previous,
+                                          const float* xyz,const float* old,uint32_t count,int* changed) {
+    /* IDs for <=16 vertices compare ALL coordinates bit-for-bit, including
+     * count. Bigger draws only sample coordinates and must not use this cache.
+     * Epoch is specific to this pair of immutable snapshots, never cross-frame. */
+    if(!h->repeat_reuse_disabled&&h->history_memo&&count<=16) {
+        uint32_t slot=(current*2654435761u^previous*2246822519u^count)&(h->memo_slots-1);
+        RsxPoseHistoryMemo* m=h->history_memo+slot;
+        if(m->epoch==h->memo_epoch&&m->current==current&&m->previous==previous&&m->count==count) {
+            h->history_reuse_hits++;*changed|=(int)((m->flags>>1)&1u);return (int)(m->flags&1u);
+        }
+        int geometry_changed=0;
+        int jump=h->position_compare_scalar?rsx_pose_compare_scalar(xyz,old,count,&geometry_changed):
+            rsx_pose_compare_vectors(xyz,old,count,&geometry_changed);
+        m->current=current;m->previous=previous;m->count=count;
+        m->flags=(uint32_t)jump|((uint32_t)geometry_changed<<1);m->epoch=h->memo_epoch;
+        *changed|=geometry_changed;h->history_reuse_misses++;return jump;
+    }
+    return h->position_compare_scalar?rsx_pose_compare_scalar(xyz,old,count,changed):
+        rsx_pose_compare_vectors(xyz,old,count,changed);
+}
 static inline int rsx_pose_prepare(RsxPoseHistory* h,const RsxPoseFrame* f,double now) {
     RsxPoseSearchProfile* profile=h->search_profile;
     double profile_mark=profile?profile->clock():0;
     h->capped_searches_skipped=0;
+    h->history_reuse_hits=h->history_reuse_misses=h->weld_reuse_hits=h->weld_reuse_misses=0;
     h->validated_vertices=h->reused_validations=0;
     h->camera_hits=h->camera_misses=h->camera_uncached=0;h->camera_memo_disabled=0;
     h->position_hits=h->position_misses=h->position_uncached=0;h->position_memo_disabled=0;
@@ -665,7 +699,7 @@ static inline int rsx_pose_prepare(RsxPoseHistory* h,const RsxPoseFrame* f,doubl
     memset(h->heads,0xFF,(size_t)h->buckets*sizeof(int32_t));memset(h->used,0,h->maxd);
     memset(h->bucket_capped,0,h->buckets);
     memset(h->sample_heads,0xFF,(size_t)h->buckets*sizeof(int32_t));
-    if(++h->memo_epoch==0){memset(h->camera_memo,0,(size_t)h->memo_slots*sizeof(RsxPoseCameraMemo));memset(h->position_memo,0,(size_t)h->memo_slots*sizeof(RsxPoseCameraMemo));memset(h->search_epochs,0,(size_t)h->maxd*sizeof(uint32_t));h->memo_epoch=1;}
+    if(++h->memo_epoch==0){memset(h->camera_memo,0,(size_t)h->memo_slots*sizeof(RsxPoseCameraMemo));memset(h->position_memo,0,(size_t)h->memo_slots*sizeof(RsxPoseCameraMemo));memset(h->search_epochs,0,(size_t)h->maxd*sizeof(uint32_t));if(h->history_memo)memset(h->history_memo,0,(size_t)h->memo_slots*sizeof(*h->history_memo));h->memo_epoch=1;}
     if(!reset)for(uint32_t i=0;i<s->nd;i++) {
         uint32_t bucket=rsx_pose_bucket(h,s->draws[i].key);
         h->next[i]=h->heads[bucket];h->heads[bucket]=(int32_t)i;
@@ -732,12 +766,7 @@ static inline int rsx_pose_prepare(RsxPoseHistory* h,const RsxPoseFrame* f,doubl
         const RsxPoseDraw* a=s->draws+best;
         const float *prevxyz=s->xyz+(size_t)a->first*3,*prevcam=s->cameras+(size_t)best*32;
         int changed=memcmp(cam,prevcam,32*sizeof(float))!=0,jump=0;
-        for(uint32_t k=0;k<b->count;k++) {
-            float distance=0;
-            for(int v=0;v<3;v++){float delta=xyz[(size_t)k*3+v]-prevxyz[(size_t)k*3+v];distance+=delta*delta;}
-            if(distance>64.f){jump=1;break;}
-            if(memcmp(xyz+(size_t)k*3,prevxyz+(size_t)k*3,3*sizeof(float)))changed=1;
-        }
+        jump=rsx_pose_history_compare(h,out->sample_ids[j],s->sample_ids[best],xyz,prevxyz,b->count,&changed);
         if(jump) {
             memcpy(old,xyz,(size_t)b->count*3*sizeof(float));memcpy(oldcam,cam,32*sizeof(float));
             rsx_pose_profile_section(profile,RSX_POSE_P_RESOLVE,&profile_mark);
@@ -1028,6 +1057,8 @@ static inline void rsx_pose_stationary_vertices(RsxPoseHistory* h,const RsxPoseF
 }
 static inline int rsx_pose_weld_recipe(RsxPoseHistory* h,const RsxPoseFrame* f,float* output,uint32_t* states,uint64_t* recipes) {
     h->seams=h->seam_conflicts=h->seam_components=h->seam_veto_vertices=0;
+    h->weld_reuse_hits=h->weld_reuse_misses=0;
+    if(++h->weld_epoch==0){if(h->weld_memo)memset(h->weld_memo,0,(size_t)h->memo_slots*sizeof(*h->weld_memo));h->weld_epoch=1;}
     rsx_pose_stationary_vertices(h,f);
     memset(h->vertex_groups,0,(size_t)f->nv*sizeof(uint32_t));
     memset(h->heads,0xFF,(size_t)h->buckets*sizeof(int32_t));
@@ -1038,12 +1069,25 @@ static inline int rsx_pose_weld_recipe(RsxPoseHistory* h,const RsxPoseFrame* f,f
         const RsxPoseDraw* d=f->draws+i;uint32_t camera=(uint32_t)h->camera_groups[i]+1;
         for(uint32_t k=0;k<d->count;k++) {
             uint32_t v=d->first+k;if(!states[v])continue;
+            int repeated_upload=h->vertex_groups[v]!=0;
             if(!h->vertex_groups[v]){
                 h->vertex_groups[v]=v+1;
                 if(!h->repeat_work_disabled)h->weld_hashes[v]=rsx_pose_hash_floats(1469598103934665603ull,f->vertices[v].xyz,3);
             }
             uint64_t key=(h->repeat_work_disabled?rsx_pose_hash_floats(1469598103934665603ull,f->vertices[v].xyz,3):h->weld_hashes[v])^camera;
             uint32_t bucket=rsx_pose_bucket(h,key),visits=0;int32_t group=-1;
+            RsxPoseWeldMemo* memo=NULL;
+            /* Only repeated uploads use the memo. An unchanged head proves
+             * the entire node chain is unchanged, so the old first match and
+             * 128-visit outcome are unchanged. The previous union is still
+             * connected: unions can merge components, never split them. */
+            if(repeated_upload&&!h->repeat_reuse_disabled&&h->weld_memo) {
+                memo=h->weld_memo+((v*2654435761u^camera*2246822519u)&(h->memo_slots-1));
+                if(memo->epoch==h->weld_epoch&&memo->vertex==v&&memo->camera==camera&&memo->head==h->heads[bucket]) {
+                    h->weld_reuse_hits++;continue;
+                }
+                h->weld_reuse_misses++;
+            }
             for(int32_t g=h->heads[bucket];g>=0;g=h->vertex_next[g]) {
                 if(++visits>128)return 0;
                 if(h->vertex_cameras[g]==camera&&rsx_pose_floats_equal(f->vertices[v].xyz,f->vertices[h->vertex_owners[g]].xyz,3)){group=g;break;}
@@ -1056,6 +1100,7 @@ static inline int rsx_pose_weld_recipe(RsxPoseHistory* h,const RsxPoseFrame* f,f
                 uint32_t a=rsx_pose_point_component(h,v),b=rsx_pose_point_component(h,h->vertex_owners[group]);
                 if(a<b)h->vertex_groups[b]=a+1;else if(b<a)h->vertex_groups[a]=b+1;
             }
+            if(memo){memo->vertex=v;memo->camera=camera;memo->head=h->heads[bucket];memo->epoch=h->weld_epoch;}
         }
     }
     /* Hash-node owners are no longer needed; map each upload to its root. */

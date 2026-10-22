@@ -144,6 +144,22 @@ Os 28 modelos foram regenerados nos seis idiomas. As 28 prévias foram renderiza
 
 Instalação concluída: executáveis normais JP/US/EU substituídos pelas compilações corrigidas, cópias SHA256 verificadas. Manifesto: work/appearance/fix-humanoids/production-installed.json. Caches dos três builds restaurados para CV_APPEARANCE=OFF e CV_CHARACTERS=ON. É necessário reiniciar o jogo para descartar os modelos e texturas em cache. Aguardando confirmação visual de gameplay do usuário.
 
+
+## 21/10/2026 — FSR com o replay de 60 FPS (correção de integração)
+
+Relato: 60 FPS com interpolação/replay foi aprovado pelo usuário, mas ligar FSR caiu para cerca de 23 FPS reais / 47 apresentações totais (42,7 ms). Não reduzir qualidade nem desfazer a otimização de 60 FPS.
+
+O log anterior registra `[POSE-REPLAY] v1 off` com FSR ativo. O gate do FSR desabilitava o replay e, por consequência, o produtor da pose e o passo nativo de um desenho por atualização. Isso voltava ao caminho mais caro de renderização do jogo. Agora, por padrão, ligar FSR conserva o replay: jogo a 30 atualizações/desenhos por segundo, duas apresentações reais do renderer com pose interpolada/registrada, e geração AMD sobre essas apresentações. O modo sem FSR conserva a mesma decisão e o mesmo cálculo de pose de antes. Nenhuma mudança nos vértices, costuras, triple buffer, relógio, qualidade ou resolução.
+
+`CV_FSR_GUEST=replay` explicita o novo padrão; `legacy` seleciona o caminho antigo para comparação; `30` conserva a alternativa de apenas uma apresentação real por atualização. `CV_POSE_REPLAY=0` continua disponível. A decisão ainda exige os três conjuntos de upload, como antes.
+
+Também foi preservada e compilada a alteração já presente em `rsx_fsr31.cpp`: sem a espera CPU por todas as apresentações do SDK a cada `begin`. `allowAsyncWorkloads=false` mantém a geração na fila do jogo; captura e recriação de recursos continuam esperando. `CV_FSR_WAIT_PRESENTS=1` restaura a espera antiga. Não ativar esse override para medir a correção.
+
+Marcadores: `[POSE-REPLAY] v2 on ... FSR=1` e `[FSR-FG] per-frame wait ... off`. Contagens de jobs não equivalem a FPS físico; o overlay continua usando o contador de Presents.
+
+Validação: compilação dos três executáveis normais e revisão da alteração limitada ao gate FSR. Sem testes isolados nem controle do jogo, conforme preferência do usuário. Desempenho e qualidade em gameplay ainda dependem da comparação do usuário na mesma sala. Não prometer 120 FPS: GPU, SDK e monitor podem limitar a apresentação. Logs em `work/fsr-replay-fix/build-{jp,us,eu}.log`. Backup em `appearance-backups/pre-fsr-replay-20261021/`. Sem commit/push.
+
+
 ## 22/10/2026 — biblioteca PC de saves
 F7 > Salvar aqui / Carregar save abre a biblioteca com miniaturas, data/hora, personagem e local. Um arquivo independente por save em CodeVeronicaLibrary/TITLE_ID dentro da pasta de saves configurada. Os 15 slots antigos ficam disponíveis só para leitura; o novo fluxo não abre UI da máquina de escrever. Snapshot local com os campos vivos do ator, conforme 00190BA8 EU e equivalentes JP/US; carregamento pelo reinício nativo, preservando o bit de load 0x200 e parando o banco de som 9. Não é savestate de toda a máquina. Detalhes, formato, referências e limites em SAVE-LIBRARY.md. JP/US/EU compilados (exit 0); sem teste isolado ou gameplay, sem alterar arquivos de save existentes e sem commit/push. FPS/interpolação/FSR mantidos.
 

@@ -688,3 +688,10 @@ if(WIN32)
                 "$<TARGET_FILE_DIR:code_veronica_fsr31_tests>/amd_fidelityfx_framegeneration_dx12.dll")
     endif()
 endif()
+
+if(WIN32)
+    add_executable(code_veronica_pose_compare_tests EXCLUDE_FROM_ALL tests/test_pose_compare.cpp)
+    target_include_directories(code_veronica_pose_compare_tests PRIVATE "${PS3RECOMP_DIR}/libs/video")
+    target_compile_options(code_veronica_pose_compare_tests PRIVATE /UNDEBUG -O2 -ffp-contract=off)
+endif()
+
