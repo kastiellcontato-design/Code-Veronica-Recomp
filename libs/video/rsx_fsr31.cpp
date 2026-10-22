@@ -41,6 +41,60 @@ struct State {
  ffxCreateContextDescFrameGenerationSwapChainForHwndDX12 create_swap{};
  DXGI_SWAP_CHAIN_DESC1 swap_desc{};
 } s;
+/* Generation runs on async compute by default: on the JP heavy room the
+ * serial path cost ~3.5 ms of the 16.7 ms real frame and the render thread
+ * waited 4-7 ms for the GPU (56-59 real FPS, 28-29 logic ticks); async kept
+ * 60 real FPS and 30 ticks with no GPU wait and no visible defect.
+ * CV_FSR_ASYNC=0 restores the game queue. Test switches: CV_FSR_GUARD=0 skips
+ * the conservative guard after the SDK output; CV_FSR_VECTORS=0 skips our
+ * image motion estimate (the SDK's own optical flow still runs, our motion
+ * input stays zero). */
+double now();
+bool env_on(const char* name,bool fallback){const char* e=getenv(name);return e&&*e?strcmp(e,"0")!=0:fallback;}
+bool async_on(){static int v=-1;if(v<0){v=env_on("CV_FSR_ASYNC",true);fprintf(stderr,"[FSR-FG] generation on %s\n",v?"async compute (CV_FSR_ASYNC=0: game queue)":"the game queue (CV_FSR_ASYNC=0)");}return v;}
+bool guard_on(){static int v=-1;if(v<0)v=env_on("CV_FSR_GUARD",true);return v;}
+bool vectors_on(){static int v=-1;if(v<0)v=env_on("CV_FSR_VECTORS",true);return v;}
+/* CV_FRAME_PROFILE=1: GPU timestamps around each FG stage, read 3 frames
+ * later (the renderer waits for its queue every frame). Async generation may
+ * still be running then; its numbers are approximate in that mode. */
+namespace Prof {
+enum{DEPTH0,DEPTH1,PREP0,PREP1,GEN0,GEN1,GUARD1,MARKS,SLOTS=4};
+ComPtr<ID3D12QueryHeap> heap;ComPtr<ID3D12Resource> readback;const uint64_t* mapped;double tick_ms;int state=-1;
+double sums[3];unsigned counts[3];double reported;bool written[SLOTS][MARKS];
+bool on(){
+ if(state<0){
+  state=0;if(!env_on("CV_FRAME_PROFILE",false))return false;
+  auto queue=s.create_swap.gameQueue;uint64_t hz=0;if(!queue||FAILED(queue->GetTimestampFrequency(&hz))||!hz)return false;
+  D3D12_QUERY_HEAP_DESC qd{};qd.Type=D3D12_QUERY_HEAP_TYPE_TIMESTAMP;qd.Count=SLOTS*MARKS;
+  D3D12_HEAP_PROPERTIES hp{};hp.Type=D3D12_HEAP_TYPE_READBACK;D3D12_RESOURCE_DESC d{};d.Dimension=D3D12_RESOURCE_DIMENSION_BUFFER;d.Width=SLOTS*MARKS*8;d.Height=1;d.DepthOrArraySize=1;d.MipLevels=1;d.SampleDesc.Count=1;d.Layout=D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+  void* p=nullptr;
+  if(FAILED(s.device->CreateQueryHeap(&qd,IID_PPV_ARGS(&heap)))||FAILED(s.device->CreateCommittedResource(&hp,D3D12_HEAP_FLAG_NONE,&d,D3D12_RESOURCE_STATE_COPY_DEST,nullptr,IID_PPV_ARGS(&readback)))||FAILED(readback->Map(0,nullptr,&p)))return false;
+  mapped=(const uint64_t*)p;tick_ms=1000.0/double(hz);state=1;
+  fprintf(stderr,"[FSR-GPU] timestamps on; async=%d guard=%d vectors=%d\n",async_on(),guard_on(),vectors_on());
+ }
+ return state==1;
+}
+unsigned slot(){return unsigned(s.id%SLOTS);}
+void mark(ID3D12GraphicsCommandList* cl,unsigned m){
+ if(!on())return;unsigned i=slot()*MARKS+m;cl->EndQuery(heap.Get(),D3D12_QUERY_TYPE_TIMESTAMP,i);
+ cl->ResolveQueryData(heap.Get(),D3D12_QUERY_TYPE_TIMESTAMP,i,1,readback.Get(),uint64_t(i)*8);written[slot()][m]=true;
+}
+void collect(){
+ if(!on())return;unsigned old=unsigned((s.id+1)%SLOTS);const uint64_t* t=mapped+old*MARKS;bool* w=written[old];
+ auto add=[&](int k,int a,int b){if(w[a]&&w[b]&&t[b]>=t[a]){sums[k]+=double(t[b]-t[a])*tick_ms;counts[k]++;}};
+ add(0,DEPTH0,DEPTH1);add(1,PREP0,PREP1);add(2,GEN0,GEN1);
+ double guard=0;unsigned guards=0;if(w[GEN1]&&w[GUARD1]&&t[GUARD1]>=t[GEN1]){guard=double(t[GUARD1]-t[GEN1])*tick_ms;guards=1;}
+ static double guard_sum;static unsigned guard_n;guard_sum+=guard;guard_n+=guards;
+ for(bool& x:written[old])x=false;
+ double t_now=now();if(!reported)reported=t_now;
+ if(t_now-reported>=5){
+  auto avg=[&](int k){return counts[k]?sums[k]/counts[k]:0.0;};
+  fprintf(stderr,"[FSR-GPU] per real frame: depth=%.3f our_vectors+prepare=%.3f sdk_generation=%.3f guard=%.3f ms (frames %u/%u/%u) async=%d guard=%d vectors=%d\n",
+   avg(0),avg(1),avg(2),guard_n?guard_sum/guard_n:0.0,counts[0],counts[1],counts[2],async_on(),guard_on(),vectors_on());
+  for(int k=0;k<3;k++){sums[k]=0;counts[k]=0;}guard_sum=0;guard_n=0;reported=t_now;
+ }
+}
+}
 double now(){LARGE_INTEGER t,f;QueryPerformanceCounter(&t);QueryPerformanceFrequency(&f);return double(t.QuadPart)/double(f.QuadPart);}
 void barrier(ID3D12GraphicsCommandList* cl,ID3D12Resource* r,D3D12_RESOURCE_STATES a,D3D12_RESOURCE_STATES b){
  if(a==b)return;D3D12_RESOURCE_BARRIER x{};x.Type=D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;x.Transition={r,D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,a,b};cl->ResourceBarrier(1,&x);
@@ -176,12 +230,15 @@ void compute(ID3D12GraphicsCommandList* cl,unsigned phase,unsigned sw,unsigned s
  unsigned w=phase<2?s.lw:s.qw,h=phase<2?s.lh:s.qh;unsigned k[]={w,h,sw,sh,s.reset?1u:0u};cl->SetComputeRoot32BitConstants(0,5,k,0);cl->SetComputeRootDescriptorTable(1,gpu(0));cl->SetComputeRootDescriptorTable(2,gpu(8));cl->Dispatch((w+7)/8,(h+7)/8,1);
 }
 ffxReturnCode_t generate(ffxDispatchDescFrameGeneration* params,void*){
+ auto profiled=(ID3D12GraphicsCommandList*)params->commandList;
+ if(profiled)Prof::mark(profiled,Prof::GEN0);
  auto rc=s.dispatch(&s.fg,&params->header);
+ if(profiled)Prof::mark(profiled,Prof::GEN1);
  if(!rc&&params->numGeneratedFrames){
   FsrCapture::before(params,s.device,s.hudless.Get(),s.motion.Get(),s.depth.Get());
   auto cl=(ID3D12GraphicsCommandList*)params->commandList;
   auto out=(ID3D12Resource*)params->outputs[0].resource;
-  if(out&&out->GetDesc().Format==DXGI_FORMAT_R8G8B8A8_UNORM){
+  if(guard_on()&&out&&out->GetDesc().Format==DXGI_FORMAT_R8G8B8A8_UNORM){
    uav(12,out,DXGI_FORMAT_R8G8B8A8_UNORM);
    // FSR output is restored by dispatch to the API resource state supplied
    // by its swapchain; transition around our final conservative guard.
@@ -192,6 +249,7 @@ ffxReturnCode_t generate(ffxDispatchDescFrameGeneration* params,void*){
    D3D12_RESOURCE_BARRIER fence{};fence.Type=D3D12_RESOURCE_BARRIER_TYPE_UAV;fence.UAV.pResource=out;cl->ResourceBarrier(1,&fence);
    barrier(cl,out,D3D12_RESOURCE_STATE_UNORDERED_ACCESS,from);
   }
+  Prof::mark(cl,Prof::GUARD1);
   FsrCapture::after(params);
   barrier(cl,s.hudless.Get(),D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,D3D12_RESOURCE_STATE_COPY_SOURCE);barrier(cl,s.previous_color.Get(),D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,D3D12_RESOURCE_STATE_COPY_DEST);
   cl->CopyResource(s.previous_color.Get(),s.hudless.Get());barrier(cl,s.previous_color.Get(),D3D12_RESOURCE_STATE_COPY_DEST,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);barrier(cl,s.hudless.Get(),D3D12_RESOURCE_STATE_COPY_SOURCE,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
@@ -231,8 +289,21 @@ extern "C" int rsx_fsr31_swapchain(void* dev,void* queue,void* factory,void* hwn
  if(FAILED(hr)){s.failed=true;return 0;}fprintf(stderr,"[FSR-FG] official AMD swapchain active; 30 FPS mode excluded\n");return 1;
 }
 extern "C" void rsx_fsr31_wait(){if(s.swap&&s.dispatch){ffxDispatchDescFrameGenerationSwapChainWaitForPresentsDX12 d{};d.header.type=FFX_API_DISPATCH_DESC_TYPE_FRAMEGENERATIONSWAPCHAIN_WAIT_FOR_PRESENTS_DX12;s.dispatch(&s.swap,&d.header);FsrCapture::flush();}}
+/* The SDK paces each real frame about half a frame after its generated one.
+ * Waiting for those presents before every real frame added that hold to the
+ * real frame time (in-game 42.7 ms per real frame instead of ~21). Generation
+ * runs on the game queue (allowAsyncWorkloads=false), after the frame that
+ * filled the inputs and before the next one rewrites them, so the reuse needs
+ * no CPU wait. Captures still wait: they map the SDK readback.
+ * CV_FSR_WAIT_PRESENTS=1 restores the per-frame wait. */
+static bool wait_each_frame(){
+ static int on=-1;
+ if(on<0){const char* e=getenv("CV_FSR_WAIT_PRESENTS");on=e&&!strcmp(e,"1");
+  fprintf(stderr,"[FSR-FG] per-frame wait for SDK presents %s\n",on?"on (CV_FSR_WAIT_PRESENTS=1)":"off; inputs reused in queue order");}
+ return on;
+}
 extern "C" int rsx_fsr31_begin(void* dev,unsigned w,unsigned h,unsigned scene,int reset){
- if(!s.swap||s.failed||!w||!h)return 0;rsx_fsr31_wait();if(unsigned error=s.callback_error.exchange(0)){fprintf(stderr,"[FSR-FG] generation error=%u; disabled\n",error);disable();s.failed=true;return 0;}s.device=(ID3D12Device*)dev;
+ if(!s.swap||s.failed||!w||!h)return 0;if(wait_each_frame()||FsrCapture::pending()||!s.ready)rsx_fsr31_wait();if(unsigned error=s.callback_error.exchange(0)){fprintf(stderr,"[FSR-FG] generation error=%u; disabled\n",error);disable();s.failed=true;return 0;}s.device=(ID3D12Device*)dev;
  s.reset=reset||s.scene!=scene||!s.have_previous;s.scene=scene;s.have_depth=s.have_color=false;
  if(s.ready&&s.width==w&&s.height==h)return 1;
  destroy_frame();s.width=w;s.height=h;s.qw=w;s.qh=h;s.lw=(w+3)/4;s.lh=(h+3)/4;s.reset=true;
@@ -258,8 +329,10 @@ fail:
 extern "C" void rsx_fsr31_depth(void* cmd,void* depth,unsigned w,unsigned h){
  if(!s.ready||!depth||!w||!h)return;auto cl=(ID3D12GraphicsCommandList*)cmd;auto r=(ID3D12Resource*)depth;
  auto desc=r->GetDesc();w=std::min(w,unsigned(desc.Width));h=std::min(h,desc.Height);srv(2,r,DXGI_FORMAT_R24_UNORM_X8_TYPELESS);
+ Prof::mark(cl,Prof::DEPTH0);
  barrier(cl,r,D3D12_RESOURCE_STATE_DEPTH_WRITE,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);barrier(cl,s.depth.Get(),D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
  compute(cl,2,w,h);barrier(cl,s.depth.Get(),D3D12_RESOURCE_STATE_UNORDERED_ACCESS,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);barrier(cl,r,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,D3D12_RESOURCE_STATE_DEPTH_WRITE);s.have_depth=true;
+ Prof::mark(cl,Prof::DEPTH1);
 }
 extern "C" void rsx_fsr31_hudless(void* cmd,void* color,unsigned state){
  if(!s.ready||!color)return;auto cl=(ID3D12GraphicsCommandList*)cmd;auto r=(ID3D12Resource*)color;auto d=r->GetDesc();
@@ -277,14 +350,17 @@ extern "C" void rsx_fsr31_frame(void* cmd,void* chain,int eligible){
  if(!s.fg)return;if(s.failed){disable();return;}auto cl=(ID3D12GraphicsCommandList*)cmd;s.chain=chain;
  bool active=eligible&&s.ready&&s.have_depth&&s.have_color;double t=now();float dt=s.previous_time?float((t-s.previous_time)*1000):16.667f;s.previous_time=t;
  s.reset=s.reset||dt>100||dt<1||!active;
- ffxConfigureDescFrameGeneration config{};config.header.type=FFX_API_CONFIGURE_DESC_TYPE_FRAMEGENERATION;config.swapChain=chain;config.frameGenerationEnabled=active;config.allowAsyncWorkloads=false;config.frameGenerationCallback=generate;config.frameID=++s.id;
+ ffxConfigureDescFrameGeneration config{};config.header.type=FFX_API_CONFIGURE_DESC_TYPE_FRAMEGENERATION;config.swapChain=chain;config.frameGenerationEnabled=active;config.allowAsyncWorkloads=async_on();config.frameGenerationCallback=generate;config.frameID=++s.id;Prof::collect();
  config.generationRect={0,0,int(s.width),int(s.height)};if(active)config.HUDLessColor=ffxApiGetResourceDX12(s.hudless.Get());
  if(s.configure(&s.fg,&config.header)){s.failed=true;disable();return;}
  if(!active){s.have_previous=false;return;}
+ Prof::mark(cl,Prof::PREP0);
+ if(vectors_on()){
  barrier(cl,s.luma.Get(),D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,D3D12_RESOURCE_STATE_UNORDERED_ACCESS);compute(cl,0,s.width,s.height);barrier(cl,s.luma.Get(),D3D12_RESOURCE_STATE_UNORDERED_ACCESS,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
  barrier(cl,s.candidates.Get(),D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,D3D12_RESOURCE_STATE_UNORDERED_ACCESS);compute(cl,1,s.width,s.height);barrier(cl,s.candidates.Get(),D3D12_RESOURCE_STATE_UNORDERED_ACCESS,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
  barrier(cl,s.motion.Get(),D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,D3D12_RESOURCE_STATE_UNORDERED_ACCESS);compute(cl,3,s.lw,s.lh);barrier(cl,s.motion.Get(),D3D12_RESOURCE_STATE_UNORDERED_ACCESS,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
  barrier(cl,s.luma.Get(),D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,D3D12_RESOURCE_STATE_COPY_SOURCE);barrier(cl,s.previous.Get(),D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,D3D12_RESOURCE_STATE_COPY_DEST);cl->CopyResource(s.previous.Get(),s.luma.Get());barrier(cl,s.previous.Get(),D3D12_RESOURCE_STATE_COPY_DEST,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);barrier(cl,s.luma.Get(),D3D12_RESOURCE_STATE_COPY_SOURCE,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+ }
  ffxDispatchDescFrameGenerationPrepareV2 p{};p.header.type=FFX_API_DISPATCH_DESC_TYPE_FRAMEGENERATION_PREPARE_V2;p.frameID=s.id;p.commandList=cl;p.renderSize={s.qw,s.qh};p.motionVectorScale={1,1};p.frameTimeDelta=std::clamp(dt,1.f,100.f);p.reset=s.reset;
  /* Recompiled RSX exposes arbitrary combined clip matrices, not world camera
   * metadata. Analytical 3.1 uses the normalized scene depth; no ML provider
@@ -292,6 +368,7 @@ extern "C" void rsx_fsr31_frame(void* cmd,void* chain,int eligible){
  p.cameraNear=1.f;p.cameraFar=100000.f;p.cameraFovAngleVertical=1.04719755f;p.viewSpaceToMetersFactor=1.f;p.cameraUp[1]=1;p.cameraRight[0]=1;p.cameraForward[2]=1;
  p.depth=ffxApiGetResourceDX12(s.depth.Get());p.motionVectors=ffxApiGetResourceDX12(s.motion.Get());
  auto rc=s.dispatch(&s.fg,&p.header);if(rc){fprintf(stderr,"[FSR-FG] prepare error=%u; disabled\n",rc);disable();s.failed=true;return;}
+ Prof::mark(cl,Prof::PREP1);
  s.have_previous=true;s.real++;s.resets+=s.reset;if(t-s.report_time>=5){fprintf(stderr,"[FSR-FG] real_frames=%llu generated_jobs=%llu resets=%llu (generated jobs are not native FPS)\n",s.real,s.generated.load(),s.resets);s.report_time=t;s.real=s.resets=0;s.generated=0;}
 }
 extern "C" void rsx_fsr31_shutdown(){

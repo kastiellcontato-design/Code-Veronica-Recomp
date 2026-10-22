@@ -12414,15 +12414,24 @@ static void rt_fence_wait(u64 v)
  * every tick twice. Each batch is presented twice: on arrival with the
  * interpolated pose (midpoint), then about half a guest frame later again
  * with its recorded positions. CV_POSE_REPLAY=0 restores the guest's own
- * second draw. FSR frame generation makes its own frames: no replay. */
+ * second draw. FSR retains this 60 FPS source path as well: the guest still
+ * draws once per 30 Hz tick and FSR receives both host presentations. Turning
+ * FG on must not restore the expensive twice-per-tick guest render loop.
+ * CV_FSR_GUEST="legacy" opts into that older path; "30" requests a single
+ * real presentation per tick with FSR doubling it. Without FG, unchanged. */
+static int s_replay_second = 1;
 int rsx_d3d12_pose_replay_enabled(void)
 {
     static int on = -1;
     if (on < 0) {
-        const char *r = getenv("CV_POSE_REPLAY"), *fg = getenv("CV_FSR_FRAME_GENERATION");
-        on = vp_sets() == 3 && !(r && !strcmp(r, "0")) && !(fg && !strcmp(fg, "1"));
-        fprintf(stderr, "[POSE-REPLAY] v1 %s; native 30 Hz guest draws, each batch presented interpolated then recorded%c",
-                on ? "on" : "off", 10);
+        const char *r = getenv("CV_POSE_REPLAY"), *fg = getenv("CV_FSR_FRAME_GENERATION"), *g = getenv("CV_FSR_GUEST");
+        const int fsr = fg && !strcmp(fg, "1");
+        const int fsr_replay = fsr && (!g || !*g || !strcmp(g, "replay"));
+        const int fsr_30 = fsr && g && !strcmp(g, "30");
+        on = vp_sets() == 3 && !(r && !strcmp(r, "0")) && (!fsr || fsr_replay || fsr_30);
+        s_replay_second = !fsr_30;
+        fprintf(stderr, "[POSE-REPLAY] v2 %s; native 30 Hz guest draws, each batch presented %s; FSR=%d%c",
+                on ? "on" : "off", s_replay_second ? "interpolated then recorded" : "once (FSR doubles)", fsr, 10);
     }
     return on;
 }
@@ -12531,7 +12540,7 @@ static DWORD WINAPI render_thread_main(LPVOID p)
         WaitForSingleObject(s_rt_work, INFINITE);
         if (s_rb.pose_seq) pose_thread_wait(s_rb.pose_seq);
         const u32 count = s_rb.count;
-        const int replay = s_rb.present && rsx_d3d12_pose_replay_enabled() && pose_overlap_on();
+        const int replay = s_rb.present && rsx_d3d12_pose_replay_enabled() && s_replay_second && pose_overlap_on();
         ps3_tl_begin(4);
         render_frame_impl();
         if (replay) {

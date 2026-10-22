@@ -79,4 +79,5 @@ inline void flush(){
  if(!c.requested.load()){c.buffer.Reset();c.bytes=0;}
 }
 inline void request(){c.requested.store(3);}
+inline bool pending(){return c.requested.load()||c.ready.load();}
 }

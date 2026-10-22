@@ -194,3 +194,104 @@ GPUs e versões EU/US. Não afirmar 2x efetivo nem qualidade sem artefatos.
 Generated_jobs mede trabalhos despachados, não refresh efetivo do monitor.
 O overlay FPS existente permanece contando quadros reais do renderizador;
 não confundir sua leitura com a taxa total apresentada pelo SDK.
+
+## 21/10/2026 — FSR com o replay de 60 FPS (correção de integração)
+
+Relato: 60 FPS com interpolação/replay foi aprovado pelo usuário, mas ligar FSR caiu para cerca de 23 FPS reais / 47 apresentações totais (42,7 ms). Não reduzir qualidade nem desfazer a otimização de 60 FPS.
+
+O log anterior registra `[POSE-REPLAY] v1 off` com FSR ativo. O gate do FSR desabilitava o replay e, por consequência, o produtor da pose e o passo nativo de um desenho por atualização. Isso voltava ao caminho mais caro de renderização do jogo. Agora, por padrão, ligar FSR conserva o replay: jogo a 30 atualizações/desenhos por segundo, duas apresentações reais do renderer com pose interpolada/registrada, e geração AMD sobre essas apresentações. O modo sem FSR conserva a mesma decisão e o mesmo cálculo de pose de antes. Nenhuma mudança nos vértices, costuras, triple buffer, relógio, qualidade ou resolução.
+
+`CV_FSR_GUEST=replay` explicita o novo padrão; `legacy` seleciona o caminho antigo para comparação; `30` conserva a alternativa de apenas uma apresentação real por atualização. `CV_POSE_REPLAY=0` continua disponível. A decisão ainda exige os três conjuntos de upload, como antes.
+
+Também foi preservada e compilada a alteração já presente em `rsx_fsr31.cpp`: sem a espera CPU por todas as apresentações do SDK a cada `begin`. `allowAsyncWorkloads=false` mantém a geração na fila do jogo; captura e recriação de recursos continuam esperando. `CV_FSR_WAIT_PRESENTS=1` restaura a espera antiga. Não ativar esse override para medir a correção.
+
+Marcadores: `[POSE-REPLAY] v2 on ... FSR=1` e `[FSR-FG] per-frame wait ... off`. Contagens de jobs não equivalem a FPS físico; o overlay continua usando o contador de Presents.
+
+Validação: compilação dos três executáveis normais e revisão da alteração limitada ao gate FSR. Sem testes isolados nem controle do jogo, conforme preferência do usuário. Desempenho e qualidade em gameplay ainda dependem da comparação do usuário na mesma sala. Não prometer 120 FPS: GPU, SDK e monitor podem limitar a apresentação. Logs em `work/fsr-replay-fix/build-{jp,us,eu}.log`. Backup em `appearance-backups/pre-fsr-replay-20261021/`. Sem commit/push.
+
+
+### Medição na sala pesada, mesma sessão (21/10/2026, 23:30)
+
+JP, 1080p, sala do primeiro save (mesa da oficina), câmera parada. Build com a correção acima
+(`[POSE-REPLAY] v2 on`, sem espera por apresentações). Cópia de diagnóstico com `CV_FRAME_PROFILE=1`,
+`CV_POSE_PROFILE=1` e `CV_FRAME_DETAIL=1` (tempo de GPU por categoria e por alvo). Valores por
+apresentação real, janelas de 5 s.
+
+| | FG ligado | FG desligado |
+|---|---|---|
+| intervalo do quadro real | 16,7–18,0 ms (~56–60) | 16,7 ms (60) |
+| lógica do jogo (tiques/s) | 27,1–29,8 | 29,9–30,0 |
+| GPU nas nossas listas (`[FRAME-GPU] lists`) | **12,7–13,2 ms** | 6,2–6,5 ms |
+| — `other_offscreen` | 9,6–10,6 ms | 5,2–5,4 ms |
+| — `post_display` (FSR: luma, busca, vetores, cópias) | 1,6–2,0 ms | 0,37–0,43 ms |
+| — sombras + alvo principal | ~0,35 ms | ~0,28 ms |
+| alvo 1920x1080 em 0x01C30000 | 3,0 ms | 1,2 ms |
+| alvo 1920x1080 em 0x01528000 | 3,0 ms | 1,6 ms |
+| thread de render: espera da GPU no início | 4,2–5,2 ms | 4,1–4,4 ms |
+| thread de render: build (prepass) | 6,9–7,6 ms (2,4–2,6) | 7,7–7,9 ms (2,7) |
+| pose no produtor (por lote) | 10,7 ms | 11,0–11,2 ms |
+
+Leitura:
+- Sem FG a sala tem folga: GPU ~6,3 ms em 16,7 ms; thread de render ~12,6 ms. Limite = os 60 FPS.
+- Com FG os **mesmos** desenhos levam cerca do dobro do tempo de GPU. O trabalho do SDK (geração,
+  cópias e apresentação do swapchain) roda ao mesmo tempo e não aparece nas nossas listas; os
+  timestamps medem tempo de parede na GPU, então a disputa infla todos os alvos. Os nossos passes
+  de FSR somam ~1,2–1,6 ms a mais. Com FG a GPU vira o gargalo (~13 ms + SDK por quadro real), e o
+  jogo às vezes cai abaixo de 30 tiques/s. No modo replay, o tempo do jogo anda mais devagar.
+- Com o replay, o FSR recebe 60 quadros reais e gera outros 60 (alvo de 120). Num monitor de 60 Hz,
+  metade disso não chega à tela. `CV_FSR_GUEST=30` (uma apresentação real por tique, o FSR dobra para
+  60) cortaria cerca de metade da GPU por segundo; ainda não foi medido nem avaliado visualmente.
+
+Logs: scratchpad da sessão (`runlog-B-fg.txt`, `runlog-C-sem-fg.txt`). Save JP conferido por hash.
+
+### O que são os alvos 1080p fora da tela (captura `rsxcap/frame_90` antiga da mesma sala, depois sobrescrita por um F12 em 21/10 23:39)
+
+São a renderização do próprio jogo em três passadas sobre a mesma geometria, com a profundidade
+compartilhada em 0x026E0000 (10.514 desenhos no quadro):
+
+| alvo | desenhos | o que faz | GPU sem FG | GPU com FG |
+|---|---|---|---|---|
+| 0x011A4000 | 2.331 | pré-passada só de profundidade (cmask=0) | 0,36–0,44 ms | 0,69 ms |
+| 0x01C30000 | 4.598 (≈2×) | máscara de um canal com blend; lê os mapas de sombra 1536x1536 | 1,16–1,19 ms | 3,0 ms |
+| 0x01528000 | 2.400 | cena final em cor completa, lê a máscara | 1,55–1,71 ms | 3,0 ms |
+
+Nenhum dos shaders dominantes usa `discard`, então o early-Z funciona sobre a pré-passada. O backend
+já agrupa estado: ~116 trocas de PSO e 126 barreiras por quadro (`[GPUCMD]`). Custo por desenho sem FG:
+~0,16 µs (profundidade), ~0,25 µs (máscara), ~0,67 µs (cor). Não há passada redundante do nosso lado
+para cortar sem mudar a imagem. Reduzir a resolução dos mapas de sombra ou da cena mudaria a imagem.
+
+Com o FG, **todos** os alvos ficam ~2x mais lentos, inclusive os pequenos (384x384: 0,17 → 0,36 ms).
+Uma desaceleração uniforme indica trabalho do FSR rodando ao mesmo tempo na GPU (geração, cópias e
+apresentação do swapchain AMD), e não um passe específico do jogo. Pela diferença, o FG custa algo
+como ~6 ms de GPU por quadro real. Para ganhar FPS real com o FG, o alvo é esse custo (o SDK e os
+nossos passes de vetores e proteção), não os três alvos do jogo. Falta medir diretamente o tempo
+de GPU da lista de geração.
+
+### Geração em async compute (22/10/2026)
+
+Medição na GPU por passe, com `CV_FRAME_PROFILE=1` (`[FSR-GPU]`, timestamps lidos 3 quadros depois).
+JP, cena 0x80030C00, mesmo ponto, FG ligado. Valores por quadro real:
+
+| | fila do jogo (antes) | async compute |
+|---|---|---|
+| conversão de profundidade | 0,07 ms | 0,03 ms |
+| nossos vetores + prepare do SDK | 1,35–1,38 ms | 0,70–0,72 ms |
+| geração do SDK | 1,8–2,2 ms | 1,35–1,37 ms |
+| proteção final | 0,09–0,11 ms | 0,08 ms |
+| intervalo do quadro real | 16,8–17,8 ms | 16,65–16,99 ms |
+| lógica do jogo | 28–29 tiques/s | 30,0 tiques/s |
+| thread de render esperando a GPU | 4–7 ms | ~0 ms |
+
+Ressalva: a carga das listas do jogo variou entre as janelas da referência (2,6–13,4 ms) e ficou
+estável na de async (~3,4 ms). O sinal mais confiável é a espera pela GPU, que zerou.
+
+`allowAsyncWorkloads` passou a ser `true` por padrão (`CV_FSR_ASYNC=0` volta à fila do jogo).
+Chaves de teste que ficaram, desligadas por padrão: `CV_FSR_GUARD=0` (sem a proteção final, 0,08 ms)
+e `CV_FSR_VECTORS=0` (sem os nossos vetores, <0,7 ms). Não compensam o risco para a imagem.
+Teste do usuário no atalho normal JP: FPS real bom e nenhum defeito nos quadros gerados.
+
+Ponto em aberto: sem a espera por apresentações, a geração assíncrona do quadro N pode, em teoria,
+coincidir com a escrita das entradas do quadro N+1 (hudless, profundidade, vetores e cópia final).
+A geração leva ~1,4 ms, e essas entradas só são reescritas no fim do quadro seguinte. Se surgir um
+defeito que só acontece com FG, comparar com `CV_FSR_ASYNC=0`; a correção seria alternar dois
+conjuntos de entradas.
