@@ -1,5 +1,5 @@
 /*
- * Button icons for Code Veronica: PlayStation, Xbox or keyboard.
+ * Button icons for Code Veronica: PlayStation, Xbox, keyboard or Nintendo Switch.
  *
  * Xbox. The PS3 release still carries the Xbox 360 port's art beside its own:
  *   window/button_guide.arc   buifba (Cross) / buifma (Circle)   and buifma_x (A) / buifba_x (B)
@@ -14,6 +14,13 @@
  * launcher maps to that PS3 button (PAD_KEYMAP), so they follow the player's
  * own key setup. The How to Play pages are redrawn the same way (see "How to
  * Play in keyboard mode").
+ *
+ * Switch. Nothing in the game either: its buttons are drawn here in the HD
+ * icons' style (the PlayStation button's dark disc, the Switch letter on it),
+ * paired by position like the rest -- B is the bottom button (Cross), A the
+ * right one (Circle), Y the left (Square), X the top (Triangle) -- and L1/R1
+ * read L/R. The pages without a Switch image of their own (How to Play) show
+ * the PlayStation one, redrawn with these buttons at the render resolution.
  *
  * The 360 manual describes the 360 layout (aim with RT, Status on Start),
  * and the controls follow the icons: see pad_phys_360_layout and the
@@ -53,10 +60,10 @@
  * reads its own data in file order; the game finds the art by name. The file
  * keeps its size.
  *
- * CV_BUTTON_ICONS = auto (default), ps, xbox or keyboard. Auto follows the
- * device used last (pad_last_input): keyboard keys, an Xbox controller's icons,
- * or PlayStation's; before any input, the connected controller's (keyboard
- * when there is none).
+ * CV_BUTTON_ICONS = auto (default), ps, xbox, switch or keyboard. Auto follows
+ * the device used last (pad_last_input): keyboard keys, an Xbox or Switch
+ * controller's icons, or PlayStation's; before any input, the connected
+ * controller's (keyboard when there is none).
  */
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -94,7 +101,7 @@ namespace {
 
 namespace fs = std::filesystem;
 
-enum { SET_PS = 0, SET_XBOX = 1, SET_KB = 2 };
+enum { SET_PS = 0, SET_XBOX = 1, SET_KB = 2, SET_SWITCH = 3, SET_COUNT = 4 };
 
 /* What the keyboard version of an image is built from. */
 enum { KB_NONE, KB_ICON32, KB_SCREEN_TEXT, KB_MAP, KB_MANUAL };
@@ -111,14 +118,16 @@ const Swap k_swaps[] = {
     { "/on_manual/on_manual.arc",   "On_Manual04p_BM_NOMIP", "On_Manual04x_BM_NOMIP", KB_MANUAL, 0 },
 };
 
-/* The controller's own set: Xbox for an XInput pad, else PlayStation. */
+/* A controller's own set: Xbox for an XInput pad, Switch for a Nintendo one,
+ * else PlayStation. */
+int kind_set(int kind) { return kind == PAD_KIND_XINPUT ? SET_XBOX : kind == PAD_KIND_SWITCH ? SET_SWITCH : SET_PS; }
+
 int pad_set()
 {
     const int last = pad_last_input();
-    if (last == PAD_KIND_XINPUT) return SET_XBOX;
-    if (last != PAD_KIND_NONE && last != PAD_INPUT_KEYBOARD) return SET_PS;
+    if (last != PAD_KIND_NONE && last != PAD_INPUT_KEYBOARD) return kind_set(last);
     PadPhys p;
-    return pad_phys_poll(0, &p) && p.kind == PAD_KIND_XINPUT ? SET_XBOX : SET_PS;
+    return pad_phys_poll(0, &p) ? kind_set(p.kind) : SET_PS;
 }
 
 int wanted_set()
@@ -127,13 +136,13 @@ int wanted_set()
     if (m && !strcmp(m, "xbox")) return SET_XBOX;
     if (m && !strcmp(m, "ps")) return SET_PS;
     if (m && !strcmp(m, "keyboard")) return SET_KB;
+    if (m && !strcmp(m, "switch")) return SET_SWITCH;
     const int last = pad_last_input();
     if (last == PAD_INPUT_KEYBOARD) return SET_KB;
-    if (last == PAD_KIND_XINPUT) return SET_XBOX;
-    if (last != PAD_KIND_NONE) return SET_PS;
+    if (last != PAD_KIND_NONE) return kind_set(last);
     PadPhys p;
     if (!pad_phys_poll(0, &p)) return SET_KB;   /* no controller at all */
-    return p.kind == PAD_KIND_XINPUT ? SET_XBOX : SET_PS;
+    return kind_set(p.kind);
 }
 
 bool ends_with(const std::string& s, const char* tail)
@@ -557,6 +566,62 @@ std::vector<Rgba> keycap(const std::wstring& label, int w, int h, float cw, floa
     });
 }
 
+/* ---- Switch buttons --------------------------------------------------------
+ * The face buttons, by position: B bottom (Cross), A right (Circle), Y left
+ * (Square), X top (Triangle). */
+const wchar_t* switch_letter(int action)
+{
+    return action == PA_CROSS ? L"B" : action == PA_CIRCLE ? L"A" : action == PA_SQUARE ? L"Y" : L"X";
+}
+
+Gdiplus::Bitmap* hd_pad_sheet();
+
+/* One in w x h at (x, y): the HD sheet's PlayStation disc and rim (vectors
+ * when the sheet is missing) with its symbol covered, and the letter in
+ * cream, lit from above. */
+void switch_pad(Gdiplus::Graphics& g, int action, float x, float y, float w, float h)
+{
+    using namespace Gdiplus;
+    const float cx = x + w / 2, cy = y + h / 2, r = std::min(w, h) / 2;
+    if (Bitmap* sheet = hd_pad_sheet()) {
+        auto state = g.Save(); g.SetInterpolationMode(InterpolationModeHighQualityBicubic);
+        ImageAttributes attr; attr.SetWrapMode(WrapModeTileFlipXY);
+        g.DrawImage(sheet, RectF(x, y, w, h), 53.0f, 69.0f, 349.0f, 345.0f, UnitPixel, &attr);   /* Cross */
+        g.Restore(state);
+    } else {
+        SolidBrush rim(Color(255, 58, 58, 62)), face(Color(255, 12, 12, 14));
+        g.FillEllipse(&rim, cx - r, cy - r, 2 * r, 2 * r);
+        g.FillEllipse(&face, cx - r * 0.86f, cy - r * 0.86f, r * 1.72f, r * 1.72f);
+    }
+    {   /* the face, without the Cross */
+        GraphicsPath face; face.AddEllipse(cx - r * 0.76f, cy - r * 0.76f, r * 1.52f, r * 1.52f);
+        PathGradientBrush pg(&face);
+        pg.SetCenterPoint(PointF(cx - r * 0.18f, cy - r * 0.24f));
+        pg.SetCenterColor(Color(255, 30, 30, 34));
+        Color edge(255, 7, 7, 9); int n = 1; pg.SetSurroundColors(&edge, &n);
+        g.FillPath(&pg, &face);
+    }
+    FontFamily ff(L"Segoe UI");
+    GraphicsPath glyph; StringFormat fmt(StringFormat::GenericTypographic());
+    glyph.AddString(switch_letter(action), -1, &ff, FontStyleBold, h * 0.58f, PointF(0, 0), &fmt);
+    RectF b; glyph.GetBounds(&b);
+    Matrix m; m.Translate(cx - b.Width / 2 - b.X, cy - b.Height / 2 - b.Y); glyph.Transform(&m);
+    {
+        GraphicsPath shadow; shadow.AddPath(&glyph, FALSE);
+        Matrix d; d.Translate(0, r * 0.05f); shadow.Transform(&d);
+        SolidBrush sb(Color(170, 0, 0, 0)); g.FillPath(&sb, &shadow);
+    }
+    glyph.GetBounds(&b);
+    LinearGradientBrush ink(PointF(0, b.Y), PointF(0, b.Y + b.Height + 1), Color(255, 252, 249, 240), Color(255, 214, 205, 186));
+    g.FillPath(&ink, &glyph);
+}
+
+/* A 32 x 32 Switch button, as the game's 32-px prompts are drawn. */
+std::vector<Rgba> switch_icon32(int action)
+{
+    return render_ss(32, 32, [&](Gdiplus::Graphics& g) { switch_pad(g, action, 2, 2, 28, 28); });
+}
+
 /* ---- the map screen -----------------------------------------------------
  * The map's atlas (mry/mp_dat0..4.arc, one per playable character) has the
  * PlayStation icons and "L1 ZOOM R1" painted into it, and no Xbox version in
@@ -566,7 +631,8 @@ std::vector<Rgba> keycap(const std::wstring& label, int w, int h, float cw, floa
  * come from the button guide's Xbox icons. The zoom labels become LT / RT,
  * where the 360 layout puts zoom. The keyboard version puts keycaps in the
  * three cells and the zoom keys' names in the labels. Geometry checked for
- * every language and character (only DXT noise differs). */
+ * every language and character (only DXT noise differs). The Switch version
+ * puts its buttons in the cells and drops the 1s: "L ZOOM R". */
 const int MAP_W = 192, MAP_H = 192;
 const int CIRCLE_X = 159, CIRCLE_Y = 26, SQUARE_X = 159, SQUARE_Y = 62, CROSS_X = 159, CROSS_Y = 98;
 
@@ -719,6 +785,23 @@ std::vector<unsigned char> keyboard_map_atlas(const std::vector<unsigned char>& 
         label(PA_L1, 0, 16, Gdiplus::StringAlignmentNear);    /* x 0..15 */
         label(PA_R1, 107, 18, Gdiplus::StringAlignmentFar);   /* x 107..124 */
     }
+    return dxt5_reencode(dxt, orig, img.px, MAP_W, MAP_H);
+}
+
+/* The Switch version of a map atlas. */
+std::vector<unsigned char> switch_map_atlas(const std::vector<unsigned char>& dxt)
+{
+    if (dxt.size() != (size_t)MAP_W * MAP_H) return {};
+    MapImage img{ dxt5_decode(dxt.data(), MAP_W, MAP_H) };
+    const std::vector<Rgba> orig = img.px;
+    img.put_cell(CIRCLE_X, CIRCLE_Y, switch_icon32(PA_CIRCLE));
+    img.put_cell(SQUARE_X, SQUARE_Y, switch_icon32(PA_SQUARE));
+    img.put_cell(CROSS_X, CROSS_Y, switch_icon32(PA_CROSS));
+    if (img.at(12, 106).a > 200)   /* the 1 of "L1" (x 9..14, but the L's foot) and of "R1" (x 118..124) */
+        for (int y = 99; y <= 116; y++) {
+            for (int x = 9; x <= 14; x++) if (!(x == 9 && y >= 114)) img.at(x, y).a = 0;
+            for (int x = 118; x <= 124; x++) img.at(x, y).a = 0;
+        }
     return dxt5_reencode(dxt, orig, img.px, MAP_W, MAP_H);
 }
 
@@ -1351,7 +1434,7 @@ std::vector<unsigned char> keyboard_manual_page(const std::vector<unsigned char>
 
 /* ---- live switching ------------------------------------------------------ */
 struct Pair {
-    std::vector<unsigned char> img[3];   /* SET_PS, SET_XBOX, SET_KB (may be empty) */
+    std::vector<unsigned char> img[SET_COUNT];   /* SET_PS, SET_XBOX, SET_KB, SET_SWITCH (the last two may be empty) */
     int kb = KB_NONE, action = -1, manual_page = -1;
     bool jp_manual = false;
     uint64_t hd_revision = 1;
@@ -1372,11 +1455,40 @@ std::vector<Seen> s_seen;          /* guest offsets showing one of the pairs */
 int s_shown = -1;                  /* the set s_seen hold */
 
 /* The image a pair shows for set `want`: the How to Play pages have no
- * keyboard version and show the controller's. */
+ * keyboard version and show the controller's, and no Switch version, showing
+ * the PlayStation one (the HD pass draws Switch buttons on it: style()). */
+int style(const Pair& p, int want)
+{
+    return want == SET_KB && p.img[SET_KB].empty() ? pad_set() : want;
+}
 int target(const Pair& p, int want)
 {
-    if (want == SET_KB && p.img[SET_KB].empty()) return pad_set();
-    return want;
+    want = style(p, want);
+    return want == SET_SWITCH && p.img[SET_SWITCH].empty() ? SET_PS : want;
+}
+
+/* A pair's Switch image, where one is drawn at the game's size. */
+void make_switch(Pair& p)
+{
+    if (p.kb == KB_ICON32) {
+        p.img[SET_SWITCH] = dxt5_reencode({}, {}, switch_icon32(p.action), 32, 32);
+    } else if (p.kb == KB_MAP) {
+        p.img[SET_SWITCH] = switch_map_atlas(p.img[SET_PS]);
+    } else if (p.kb == KB_SCREEN_TEXT) {
+        const int W = 648, x0 = p.box[0], y0 = p.box[1], bw = p.box[2] - x0 + 1, bh = p.box[3] - y0 + 1;
+        if (p.img[SET_PS].size() != (size_t)W * 128 * 4 || bw <= 0 || bh <= 0) return;
+        const float side = (float)std::min(bw, bh) - 1;
+        const std::vector<Rgba> b = render_ss(bw, bh, [&](Gdiplus::Graphics& g) {
+            switch_pad(g, p.action, (bw - side) / 2, (bh - side) / 2, side, side); });
+        std::vector<unsigned char> out = p.img[SET_PS];
+        for (int y = 0; y < bh; y++)
+            for (int x = 0; x < bw; x++) {
+                const Rgba& c = b[(size_t)y * bw + x];
+                unsigned char* d = &out[((size_t)(y0 + y) * W + x0 + x) * 4];   /* A R G B */
+                d[0] = (unsigned char)c.a; d[1] = (unsigned char)c.r; d[2] = (unsigned char)c.g; d[3] = (unsigned char)c.b;
+            }
+        p.img[SET_SWITCH] = std::move(out);
+    }
 }
 
 /* Build (or rebuild, for a new key map) a pair's keyboard image. */
@@ -1448,6 +1560,7 @@ void load_pairs(const std::string& path, const std::string& key)
         if (p.kb==KB_MANUAL) p.manual_page = strstr(sw.ps,"Manual00") ? 0 : strstr(sw.ps,"Manual01") ? 1 : 4;
         if (p.kb == KB_SCREEN_TEXT) find_icon_box(p);
         if (p.kb != KB_MANUAL) make_keyboard(p);   /* pages: when first wanted (watcher) */
+        make_switch(p);
         std::lock_guard<std::mutex> l(s_mu);
         s_pairs.push_back(std::move(p));
         added++;
@@ -1472,6 +1585,7 @@ void load_map_pair(const std::string& path, const std::string& key)
     if (p.img[SET_XBOX].empty()) { fprintf(stderr, "[icons] %s: not the expected map atlas\n", path.c_str()); return; }
     p.kb = KB_MAP;
     make_keyboard(p);
+    make_switch(p);
     if (const char* dump = getenv("CV_ICONS_DUMP")) {   /* the generated atlases, raw DXT5, for checking */
         if (FILE* f = fopen(dump, "wb")) {
             fwrite(p.img[SET_XBOX].data(), 1, p.img[SET_XBOX].size(), f);
@@ -1491,10 +1605,10 @@ long fix_image(unsigned char* data, uint32_t nbytes, int want, bool* wrote = nul
     for (size_t i = 0; i < s_pairs.size(); i++) {
         const Pair& p = s_pairs[i];
         int cur = -1;
-        for (int k = 0; k < 3 && cur < 0; k++)
-            if (p.img[k].size() == nbytes && !memcmp(data, p.img[k].data(), nbytes)) cur = k;
+        for (int k = 0; k < SET_COUNT && cur < 0; k++)
+            if (!p.img[k].empty() && p.img[k].size() == nbytes && !memcmp(data, p.img[k].data(), nbytes)) cur = k;
         for (const auto& old : p.stale)
-            if (cur < 0 && old.size() == nbytes && !memcmp(data, old.data(), nbytes)) cur = 3;
+            if (cur < 0 && old.size() == nbytes && !memcmp(data, old.data(), nbytes)) cur = SET_COUNT;
         if (cur < 0) continue;
         const int t = target(p, want);
         if (t != cur && !p.img[t].empty()) {
@@ -1530,6 +1644,7 @@ Gdiplus::Bitmap* hd_pad_sheet() {
     return sheet.get();
 }
 void hd_pad(Gdiplus::Graphics& g,int set,int action,float x,float y,float w,float h) {
+    if(set==SET_SWITCH){switch_pad(g,action,x,y,w,h);return;}
     auto* sheet=hd_pad_sheet(); if(!sheet)return;
     int col=action==PA_CROSS?0:action==PA_CIRCLE?1:action==PA_SQUARE?2:3;
     // Tight artwork rectangles, excluding the sheet's transparent margins.
@@ -1680,7 +1795,7 @@ static void manual_shoulder(Gdiplus::Graphics& g,int set,int action,float x,floa
     using namespace Gdiplus;GraphicsPath path;cv_keycap::rounded(path,x+.6f,y+.6f,w-1.2f,h-1.2f,3.2f);
     LinearGradientBrush face(PointF(x,y),PointF(x,y+h),Color(255,250,251,248),Color(255,192,199,190));
     Pen edge(Color(255,70,81,70),1.0f);g.FillPath(&face,&path);g.DrawPath(&edge,&path);
-    const wchar_t* label=action==PA_L1?(set==SET_PS?L"L1":L"LT"):(set==SET_PS?L"R1":L"RT");
+    const wchar_t* label=action==PA_L1?(set==SET_SWITCH?L"L":set==SET_PS?L"L1":L"LT"):(set==SET_SWITCH?L"R":set==SET_PS?L"R1":L"RT");
     FontFamily ff(L"Segoe UI");GraphicsPath glyph;StringFormat fmt(StringFormat::GenericTypographic());
     glyph.AddString(label,-1,&ff,FontStyleBold,h*.70f,PointF(0,0),&fmt);RectF b;glyph.GetBounds(&b);
     Matrix m;m.Translate(x+(w-b.Width)*.5f-b.X,y+(h-b.Height)*.5f-b.Y);glyph.Transform(&m);
@@ -1701,9 +1816,35 @@ std::vector<unsigned char> japanese_keyboard_manual(const std::vector<unsigned c
     return dxt1_reencode(ps_dxt,orig,img,MAN_W,MAN_H);
 }
 
+/* The European pages' white L1 / R1 badges (the JP ones are in
+ * jp_manual_controls), found as the keyboard pages find them: for the Switch
+ * pages, which relabel them L / R. Page 1's controller is left alone. */
+static std::vector<ManualControl> manual_badges(const Pair& p,const std::vector<Rgba>& image,int W,int H) {
+    std::vector<ManualControl> out;
+    if(p.jp_manual)return out;
+    std::vector<unsigned char> light((size_t)W*H);
+    for(size_t i=0;i<light.size();++i)light[i]=(image[i].r+image[i].g+image[i].b)/3>150&&sat(image[i])<60;
+    std::vector<Comp> badges;
+    for(const Comp& c:components(light,W,H)){
+        const int w=c.x1-c.x0+1,h=c.y1-c.y0+1;
+        if(c.n<150||w<48||w>60||h<22||h>30)continue;
+        if(p.manual_page==0&&c.x0>430&&c.x1<835&&c.y0>260&&c.y1<575)continue;
+        badges.push_back(c);
+    }
+    for(const Comp& b:badges){
+        bool left=false,right=false;
+        for(const Comp& o:badges)
+            if(&o!=&b&&std::abs(o.y0-b.y0)<6){left=left||o.x0<b.x0;right=right||o.x0>b.x0;}
+        out.push_back({(float)b.x0-1,(float)b.y0-1,(float)(b.x1-b.x0+3),(float)(b.y1-b.y0+3),(right&&!left)?PA_L1:PA_R1});
+    }
+    return out;
+}
+
 /* Native-size source pages remain the authority for layout and translations.
- * Only the button overlays are rerasterized at the render resolution. */
-std::vector<Rgba> hd_image(const Pair& p,int set,int scale,int W,int H) {
+ * Only the button overlays are rerasterized at the render resolution. `set`
+ * is the image underneath, `draw` the buttons drawn on it (they differ for the
+ * pages a set has no image of: style() and target()). */
+std::vector<Rgba> hd_image(const Pair& p,int set,int draw,int scale,int W,int H) {
     std::vector<Rgba> base;
     if(p.kb==KB_SCREEN_TEXT) {
         base.resize((size_t)W*H);
@@ -1713,7 +1854,11 @@ std::vector<Rgba> hd_image(const Pair& p,int set,int scale,int W,int H) {
     else base=dxt5_decode(p.img[set].data(),W,H);
     std::vector<ManualIcon> manual;
     std::vector<ManualControl> controls;
-    if(p.kb==KB_MANUAL && set!=SET_KB){controls=jp_manual_controls(p,set);clear_manual_rects(base,W,H,controls);}
+    if(p.kb==KB_MANUAL && set!=SET_KB){
+        controls=jp_manual_controls(p,set);
+        if(draw==SET_SWITCH)for(const auto& c:manual_badges(p,base,W,H))controls.push_back(c);
+        clear_manual_rects(base,W,H,controls);
+    }
     if(p.kb==KB_MANUAL && set!=SET_KB){manual=manual_icons(p,set,base,W,H);clear_manual_icons(base,W,H,manual);}
     // GDI+ straight alpha input; DrawImage performs the scale in premultiplied space.
     Gdiplus::Bitmap original(W,H,PixelFormat32bppARGB);
@@ -1730,8 +1875,8 @@ std::vector<Rgba> hd_image(const Pair& p,int set,int scale,int W,int H) {
         Gdiplus::ImageAttributes attrs;attrs.SetWrapMode(Gdiplus::WrapModeTileFlipXY);
         g.DrawImage(&original,Gdiplus::RectF(0,0,(float)W,(float)H),0,0,(float)W,(float)H,Gdiplus::UnitPixel,&attrs);
         auto button=[&](int a,float x,float y,float w,float h){
-            if(set==SET_KB)cv_keycap::paint(g,key_label(key_for(a)),x,y,w,h,h*0.60f);
-            else hd_pad(g,set,a,x,y,w,h);
+            if(draw==SET_KB)cv_keycap::paint(g,key_label(key_for(a)),x,y,w,h,h*0.60f);
+            else hd_pad(g,draw,a,x,y,w,h);
         };
         auto erase=[&](float x,float y,float w,float h){
             auto state=g.Save();g.SetCompositingMode(Gdiplus::CompositingModeSourceCopy);
@@ -1751,12 +1896,12 @@ std::vector<Rgba> hd_image(const Pair& p,int set,int scale,int W,int H) {
             if(p.hd_keyboard.w>0)draw_keyboard(g,p.hd_keyboard.x,p.hd_keyboard.y,p.hd_keyboard.w,p.hd_keyboard.lit);
         }else if(p.kb==KB_MANUAL){
             for(const auto& c:controls){
-                if(c.action==PA_L1||c.action==PA_R1)manual_shoulder(g,set,c.action,c.x,c.y,c.w,c.h);
+                if(c.action==PA_L1||c.action==PA_R1)manual_shoulder(g,draw,c.action,c.x,c.y,c.w,c.h);
                 else manual_arrow(g,c.x,c.y,c.w,c.h,c.action);
             }
             for(const ManualIcon& m:manual){
                 const float cx=m.cx,cy=m.cy,side=m.side;const int a=m.action;
-                if(set==SET_PS&&m.white){
+                if(draw==SET_PS&&m.white){
                     Gdiplus::SolidBrush face(Gdiplus::Color(255,211,213,210));
                     Gdiplus::Pen ink(Gdiplus::Color(255,35,36,37),1.8f);
                     g.FillEllipse(&face,cx-side/2,cy-side/2,side,side);g.DrawEllipse(&ink,cx-side/2,cy-side/2,side,side);
@@ -1779,14 +1924,14 @@ uint64_t on_hd_image(const uint8_t* data,uint32_t nbytes,uint32_t W,uint32_t H,
     if(!((W==32&&H==32)||(W==MAP_W&&H==MAP_H)||(W==648&&H==128)||(W==MAN_W&&H==MAN_H)))return 0;
     std::lock_guard<std::mutex> lock(s_mu);
     for(size_t i=0;i<s_pairs.size();++i){
-        const Pair& p=s_pairs[i];const int set=target(p,s_shown<0?wanted_set():s_shown);
+        const Pair& p=s_pairs[i];const int want=s_shown<0?wanted_set():s_shown,set=target(p,want),draw=style(p,want);
         if(p.img[set].size()!=nbytes || memcmp(data,p.img[set].data(),nbytes))continue;
         if((p.kb==KB_ICON32&&(W!=32||H!=32))||(p.kb==KB_MAP&&(W!=MAP_W||H!=MAP_H))||
            (p.kb==KB_SCREEN_TEXT&&(W!=648||H!=128))||(p.kb==KB_MANUAL&&(W!=MAN_W||H!=MAN_H)))continue;
         const int scale=std::clamp((int)std::ceil(render_scale),p.kb==KB_ICON32?2:1,4);
-        const uint64_t id=((uint64_t)(i+1)<<40)|(p.hd_revision<<8)|(uint64_t)(set*8+scale);
+        const uint64_t id=((uint64_t)(i+1)<<40)|(p.hd_revision<<8)|(uint64_t)(draw*8+scale);
         if(id==previous)return id;
-        const auto rgba=hd_image(p,set,scale,(int)W,(int)H);
+        const auto rgba=hd_image(p,set,draw,scale,(int)W,(int)H);
         if(rgba.size()!=(size_t)W*H*scale*scale)return 0;
         auto* out=(texpack_image*)calloc(1,sizeof(texpack_image));if(!out)return 0;
         out->w=W*scale;out->h=H*scale;out->levels=1;out->bytes=rgba.size()*4;
@@ -1884,7 +2029,7 @@ void watcher()
                     }
                 if (!s_seen.empty())
                     fprintf(stderr, "[icons] switched to %s icons\n",
-                            want == SET_KB ? "keyboard" : want == SET_XBOX ? "Xbox" : "PlayStation");
+                            want == SET_KB ? "keyboard" : want == SET_XBOX ? "Xbox" : want == SET_SWITCH ? "Switch" : "PlayStation");
             }
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(250));

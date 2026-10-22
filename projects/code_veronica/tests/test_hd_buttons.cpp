@@ -26,7 +26,7 @@ int main(int argc,char** argv){
     const fs::path root=fs::u8path(argv[1]),out=fs::u8path(argv[2]);fs::create_directories(out);
     const auto guide=(root/"window/button_guide.arc").generic_string();load_pairs(guide,guide);assert(s_pairs.size()==2);
     int count=0;
-    for(size_t i=0;i<2;++i)for(int set=0;set<3;++set){s_shown=set;auto& p=s_pairs[i];auto before=p.img[set];
+    for(size_t i=0;i<2;++i)for(int set=0;set<SET_COUNT;++set){s_shown=set;auto& p=s_pairs[i];auto before=p.img[set];
         uint64_t last=0;
         for(float scale:{1.0f,1.5f,2.0f,3.0f,4.0f}){
             texpack_image* im=nullptr;uint64_t id=on_hd_image(p.img[set].data(),(uint32_t)p.img[set].size(),32,32,scale,0,&im);
@@ -51,12 +51,12 @@ int main(int argc,char** argv){
     _putenv_s("CV_HD_BUTTONS","0");assert(!on_hd_image(ps.data(),1024,32,32,2,0,&im)&&!im);_putenv_s("CV_HD_BUTTONS","");
     const auto screen=(root/"adv/screen_setting.arc").generic_string();load_pairs(screen,screen);assert(s_pairs.size()==3);
     auto& p=s_pairs[2];assert(p.box[2]>p.box[0]);
-    for(int set=0;set<3;++set){s_shown=set;assert(on_hd_image(p.img[set].data(),(uint32_t)p.img[set].size(),648,128,3,0,&im));
+    for(int set=0;set<SET_COUNT;++set){s_shown=set;assert(on_hd_image(p.img[set].data(),(uint32_t)p.img[set].size(),648,128,3,0,&im));
         assert(im&&im->w==1944&&im->h==384);png(im,(out/("screen_set_"+std::to_string(set)+".png")).wstring());release(im);im=nullptr;}
 
     const auto map=(root/"mry/mp_dat0.arc").generic_string();const size_t map_i=s_pairs.size();load_map_pair(map,map);
     assert(s_pairs.size()==map_i+1);
-    for(int set=0;set<3;++set){s_shown=set;auto& mp=s_pairs[map_i];
+    for(int set=0;set<SET_COUNT;++set){s_shown=set;auto& mp=s_pairs[map_i];
         assert(on_hd_image(mp.img[set].data(),(uint32_t)mp.img[set].size(),192,192,3,0,&im));
         assert(im&&im->w==576&&im->h==576);png(im,(out/("map_set_"+std::to_string(set)+".png")).wstring());release(im);im=nullptr;}
     const auto manual=(root/"on_manual/on_manual.arc").generic_string();const size_t man_i=s_pairs.size();load_pairs(manual,manual);
@@ -85,7 +85,7 @@ int main(int argc,char** argv){
         // only the surrounding instruction balloons receive new controls.
         for(int set:{SET_PS,SET_XBOX}){
             Pair reference=jp;reference.jp_manual=false;
-            const auto actual=hd_image(jp,set,1,1280,720),native=hd_image(reference,set,1,1280,720);
+            const auto actual=hd_image(jp,set,set,1,1280,720),native=hd_image(reference,set,set,1,1280,720);
             for(int y=260;y<560;++y)for(int x=450;x<832;++x){const size_t k=(size_t)y*1280+x;
                 assert(!memcmp(&actual[k],&native[k],sizeof(Rgba)));}
         }
@@ -123,9 +123,15 @@ int main(int argc,char** argv){
         verify(SET_XBOX,PA_SQUARE,japanese?859.5f:816.5f,207.5f);
         verify(SET_XBOX,PA_CROSS,japanese?926.5f:916.5f,494.5f);
     }
-    for(size_t page=man_i;page<s_pairs.size();++page)for(int set=0;set<3;++set){
+    for(size_t page=man_i;page<s_pairs.size();++page)for(int set=0;set<SET_COUNT;++set){
         s_shown=set;auto& mp=s_pairs[page];
-        if(set!=SET_KB){
+        if(set==SET_SWITCH){   // the PlayStation page underneath, its L1/R1 badges relabelled on the European ones
+            assert(mp.img[SET_SWITCH].empty()&&target(mp,SET_SWITCH)==SET_PS&&style(mp,SET_SWITCH)==SET_SWITCH);
+            const auto badges=manual_badges(mp,dxt1_decode(mp.img[SET_PS].data(),1280,720),1280,720);
+            std::printf("[MANUAL] page=%d switch badges=%zu\n",mp.manual_page,badges.size());
+            if(!japanese&&mp.manual_page==0)assert(badges.size()>=2);
+        }
+        if(set!=SET_KB&&set!=SET_SWITCH){
             const auto pixels=dxt1_decode(mp.img[set].data(),1280,720);
             const auto found=manual_icons(mp,set,pixels,1280,720);
             std::printf("[MANUAL] %s page=%d set=%d count=%zu\n",root.filename().string().c_str(),mp.manual_page,set,found.size());
@@ -141,11 +147,12 @@ int main(int argc,char** argv){
                 assert(inside);
             }
         }
-        assert(on_hd_image(mp.img[set].data(),(uint32_t)mp.img[set].size(),1280,720,1.5f,0,&im));
+        const auto& shown=mp.img[target(mp,set)];
+        assert(on_hd_image(shown.data(),(uint32_t)shown.size(),1280,720,1.5f,0,&im));
         assert(im&&im->w==2560&&im->h==1440);
         png(im,(out/("manual_page_"+std::to_string(mp.manual_page)+"_set_"+std::to_string(set)+".png")).wstring());
         release(im);im=nullptr;
     }
-    std::puts("[UI-HD TEST] PASS: PS/Xbox/keyboard, 720p-4K/scales, alpha, resource reuse, remapping, source preservation, unrelated/recycled data, opt-out, screen text, map atlas, manual pages.");
+    std::puts("[UI-HD TEST] PASS: PS/Xbox/keyboard/Switch, 720p-4K/scales, alpha, resource reuse, remapping, source preservation, unrelated/recycled data, opt-out, screen text, map atlas, manual pages.");
     return 0;
 }

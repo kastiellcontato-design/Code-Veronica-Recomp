@@ -4,9 +4,10 @@
  * One view of whatever gamepads are plugged in, independent of what the
  * guest's pad mapping does with them: Xbox controllers through XInput, and
  * Sony controllers (DualShock 4, DualSense, DualSense Edge -- USB and
- * Bluetooth) read directly over HID, so a PlayStation controller works with no
- * driver or wrapper installed. Buttons are named by POSITION (south = A on
- * Xbox, Cross on PlayStation), which is what lets one mapping serve both.
+ * Bluetooth) and Nintendo Switch ones (Pro Controller, Joy-Con) read directly
+ * over HID, so they work with no driver or wrapper installed. Buttons are named
+ * by POSITION (south = A on Xbox, Cross on PlayStation, B on Switch), which is
+ * what lets one mapping serve them all.
  *
  * Used by cellPad (the guest's pad) and by a title's launcher (button capture).
  */
@@ -28,7 +29,9 @@ enum {
     PB_COUNT
 };
 
-enum { PAD_KIND_NONE = 0, PAD_KIND_XINPUT = 1, PAD_KIND_DS4 = 2, PAD_KIND_DUALSENSE = 3 };
+/* PAD_KIND_SWITCH: a Pro Controller, a pair of Joy-Con (one pad) or one
+ * Joy-Con held sideways. */
+enum { PAD_KIND_NONE = 0, PAD_KIND_XINPUT = 1, PAD_KIND_DS4 = 2, PAD_KIND_DUALSENSE = 3, PAD_KIND_SWITCH = 4 };
 
 /* The device the player used last, as the guest's pad sees it (cellPad):
  * a PAD_KIND_* controller, PAD_INPUT_KEYBOARD, or PAD_KIND_NONE before any
@@ -51,7 +54,9 @@ int pad_phys_poll(int index, PadPhys* out);
 
 /* Set controller `index`'s motors (same numbering as pad_phys_poll): `large`
  * is the strong low-frequency motor, `weak` the weak high-frequency one,
- * 0..255 each. Sony pads are written only when the values change. */
+ * 0..255 each. Both are scaled by PAD_RUMBLE_SCALE, a percentage (default
+ * 100, 0 = off; read on every call, so a launcher can change it while the
+ * game runs). Sony pads are written only when the values change. */
 void pad_phys_rumble(int index, uint8_t large, uint8_t weak);
 void pad_phys_rumble_off(void);   /* every controller */
 

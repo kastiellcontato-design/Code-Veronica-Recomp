@@ -1162,7 +1162,8 @@ s32 cellPadSetActDirect(u32 port_no, CellPadActParam* param)
 
 #if PAD_BACKEND_XINPUT
     /* The PS3's small motor is on/off (0 or 1) and its large one 0..255.
-     * Xbox, DualShock 4 and DualSense pads -- pad_phys.c. While the options
+     * Xbox, DualShock 4, DualSense and Switch pads -- pad_phys.c, which also
+     * applies the launcher's strength (PAD_RUMBLE_SCALE). While the options
      * menu has the focus the game is paused, so keep the motors still. */
     if (port_no < PAD_MAX_HOST_PORTS && s_host_state[port_no].connected) {
         uint8_t large = param->motor[CELL_PAD_ACTUATOR_PARAM_LARGE];

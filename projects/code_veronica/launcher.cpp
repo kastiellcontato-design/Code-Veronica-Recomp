@@ -139,8 +139,8 @@ int g_lang = LANG_PT;        /* the language shown */
 int g_lang_pick = -1;        /* the choice: -1 = Sistema (follow Windows), else a Lang */
 bool s_shortcut_xbox=false;
 const wchar_t* T(int id) {
-    /* Controller hints name both pads, whatever is connected:
-     * "R1+R2+L1+L2+□" becomes "PS: R1+R2+L1+L2+□ · Xbox: RB+RT+LB+LT+X". */
+    /* Controller hints name every pad, whatever is connected: "R1+R2+L1+L2+□"
+     * becomes "PS: R1+R2+L1+L2+□ · Xbox: RB+RT+LB+LT+X · Switch: R+ZR+L+ZL+Y". */
     const wchar_t* original=k_str[g_lang][id];
     if(!wcsstr(original,L"R1+R2+L1+L2+")&&!wcsstr(original,L"L1/R1")&&!wcsstr(original,L"/A")&&!wcsstr(original,L"/X"))return original;
     static std::wstring hints[LANG_COUNT][S_COUNT];
@@ -149,9 +149,10 @@ const wchar_t* T(int id) {
         hint=original;
         const wchar_t* ps[]={L"R1+R2+L1+L2+L3",L"R1+R2+L1+L2+R3",L"R1+R2+L1+L2+△",L"R1+R2+L1+L2+○",L"R1+R2+L1+L2+✕",L"R1+R2+L1+L2+□",L"L1/R1",L"✕/A",L"□/X"};
         const wchar_t* xb[]={L"RB+RT+LB+LT+LS",L"RB+RT+LB+LT+RS",L"RB+RT+LB+LT+Y",L"RB+RT+LB+LT+B",L"RB+RT+LB+LT+A",L"RB+RT+LB+LT+X",L"LB/RB",L"A",L"X"};
+        const wchar_t* sw[]={L"R+ZR+L+ZL+LS",L"R+ZR+L+ZL+RS",L"R+ZR+L+ZL+X",L"R+ZR+L+ZL+A",L"R+ZR+L+ZL+B",L"R+ZR+L+ZL+Y",L"L/R",L"B",L"Y"};
         const wchar_t* ps_name[]={nullptr,nullptr,nullptr,nullptr,nullptr,nullptr,nullptr,L"✕",L"□"};
         for(int i=0;i<9;i++)for(size_t at=0;(at=hint.find(ps[i],at))!=std::wstring::npos;){
-            const std::wstring both=L"PS: "+std::wstring(ps_name[i]?ps_name[i]:ps[i])+L" · Xbox: "+xb[i];
+            const std::wstring both=L"PS: "+std::wstring(ps_name[i]?ps_name[i]:ps[i])+L" · Xbox: "+xb[i]+L" · Switch: "+sw[i];
             hint.replace(at,wcslen(ps[i]),both);at+=both.size();
         }
     }
@@ -214,7 +215,8 @@ struct Settings {
     int saturation = 100; /* 0..200 percent */
     int sharpness = 0;    /* FSR 1 RCAS, 0..100 percent in steps of 10; 0 off */
     bool patch[8] = {};    /* k_patches on/off */
-    int layout = 2;        /* button icons: 0 PlayStation, 1 Xbox, 2 automatic, 3 keyboard */
+    int layout = 2;        /* button icons: 0 PlayStation, 1 Xbox, 2 automatic, 3 keyboard, 4 Nintendo Switch */
+    int rumble = 100;      /* vibration strength, percent (PAD_RUMBLE_SCALE): 0 off .. 200 */
     bool overlay = false;  /* the performance overlay (rsx_perf_overlay.h) */
     int overlay_items = 3; /* bits of k_overlay_items: FPS and frame time */
     int overlay_corner = 1, overlay_layout = 0;   /* 0 tl, 1 tr, 2 bl, 3 br; 0 a row, 1 a column */
@@ -301,12 +303,14 @@ const int NROWS = sizeof k_rows / sizeof k_rows[0];
 const wchar_t* k_action_name[PA_COUNT] = {
     L"Cross", L"Circle", L"Square", L"Triangle", L"L1", L"R1", L"L2", L"R2", L"L3", L"R3",
     L"Select", L"Start", L"D-pad cima", L"D-pad baixo", L"D-pad esquerda", L"D-pad direita" };
-/* Physical buttons, by layout. */
-const wchar_t* k_pb_name[2][PB_COUNT] = {
+/* Physical buttons, by icon set (icon_layout): PlayStation, Xbox, Switch. */
+const wchar_t* k_pb_name[3][PB_COUNT] = {
     { L"Cross", L"Circle", L"Square", L"Triangle", L"L1", L"R1", L"L2", L"R2", L"L3", L"R3",
       L"Select", L"Start", L"D-pad cima", L"D-pad baixo", L"D-pad esquerda", L"D-pad direita", L"PS", L"Touchpad" },
     { L"A", L"B", L"X", L"Y", L"LB", L"RB", L"LT", L"RT", L"LS", L"RS",
-      L"Back", L"Start", L"D-pad cima", L"D-pad baixo", L"D-pad esquerda", L"D-pad direita", L"Guide", L"-" } };
+      L"Back", L"Start", L"D-pad cima", L"D-pad baixo", L"D-pad esquerda", L"D-pad direita", L"Guide", L"-" },
+    { L"B", L"A", L"Y", L"X", L"L", L"R", L"ZL", L"ZR", L"LS", L"RS",
+      L"Minus", L"Plus", L"D-pad cima", L"D-pad baixo", L"D-pad esquerda", L"D-pad direita", L"Home", L"Capture" } };
 /* The d-pad's names are translated; the rest are the buttons' own names. */
 std::wstring action_name(int a)
 {
@@ -431,6 +435,7 @@ Settings load_settings()
     s.saturation = _wtoi(ini_get(L"tela", L"saturacao", L"100").c_str());
     s.sharpness = std::clamp(_wtoi(ini_get(L"tela", L"nitidez", L"0").c_str()) / 10 * 10, 0, 100);
     s.layout = _wtoi(ini_get(L"controles", L"layout", L"2").c_str());
+    s.rumble = std::clamp(_wtoi(ini_get(L"controles", L"vibracao", L"100").c_str()), 0, 200);
     { std::wstring l = ini_get(L"launcher", L"idioma", L"system");
       int pick = -1;
       for (int i = 0; i < LANG_COUNT; i++) if (l == widen(k_lang_id[i])) pick = i;
@@ -443,7 +448,7 @@ Settings load_settings()
     s.brightness = std::clamp(s.brightness, -80, 80);
     s.contrast = std::clamp(s.contrast, 50, 180);
     s.saturation = std::clamp(s.saturation, 0, 200);
-    if (s.layout < 0 || s.layout > 3) s.layout = 2;
+    if (s.layout < 0 || s.layout > 4) s.layout = 2;
     /* First run: take the paths the old launcher script set, if any. */
     std::wstring def_game = env_w("PS3_VFS_ROOT");
     if (def_game.empty()) {
@@ -534,6 +539,7 @@ void save_settings(const Settings& s)
     ini_set(L"tela", L"saturacao", std::to_wstring(s.saturation));
     ini_set(L"tela", L"nitidez", std::to_wstring(s.sharpness));
     ini_set(L"controles", L"layout", std::to_wstring(s.layout));
+    ini_set(L"controles", L"vibracao", std::to_wstring(s.rumble));
     ini_set(L"launcher", L"idioma", g_lang_pick < 0 ? std::wstring(L"system") : widen(k_lang_id[g_lang_pick]));
     for (int i = 0; i < NPATCHES; i++)
         ini_set(L"patches", widen(k_patches[i].id).c_str(), s.patch[i] ? L"1" : L"0");
@@ -759,7 +765,7 @@ enum {
     ID_DD_UP = 390, ID_DD_DOWN = 391,
     ID_PLAY = 400, ID_RESUME, ID_QUIT,
     ID_GAME_BROWSE = 500, ID_GAME_OPEN, ID_RAP_BROWSE, ID_RAP_OPEN, ID_SAVE_BROWSE, ID_SAVE_OPEN, ID_SAVE_DEFAULT,
-    ID_LAYOUT_PS = 600, ID_LAYOUT_XB, ID_LAYOUT_AUTO, ID_LAYOUT_KB,
+    ID_LAYOUT_PS = 600, ID_LAYOUT_XB, ID_LAYOUT_AUTO, ID_LAYOUT_KB, ID_LAYOUT_SW, ID_RUMBLE,
     ID_KEY = 700, ID_BTN = 800, ID_RESTORE = 900, ID_PATCH = 1000,  /* + index (keys and buttons: action * slots + slot) */
     ID_TEST_ENABLE=2500, ID_TEST_OPEN,
     ID_FOCUS_PAUSE=2550, ID_SHOT_OPEN,
@@ -859,7 +865,7 @@ void text(Graphics& gr, const std::wstring& t, float x, float y, const Font& f, 
  * one style for both layouts: face buttons are a ring with the symbol or
  * letter in the controller's colour, shoulders/triggers are light shapes with
  * dark labels, sticks are rings, the d-pad is a cross with the pressed arm
- * lit. layout 0 = PlayStation, 1 = Xbox; pb is a PB_* position. */
+ * lit. layout 0 = PlayStation, 1 = Xbox, 2 = Switch; pb is a PB_* position. */
 const Color G_LINE(255, 205, 198, 190), G_FILL(255, 218, 212, 204), G_INK(255, 28, 22, 22),
             G_DIM(255, 92, 84, 80);
 
@@ -901,6 +907,11 @@ void btn_glyph(Graphics& gr, int layout, int pb, float x, float y, float s = 30.
         static const Color xb[4] = { Color(255, 110, 200, 80), Color(255, 240, 80, 70),
                                      Color(255, 70, 150, 245), Color(255, 245, 200, 50) };
         const int i = pb - PB_SOUTH;
+        if (layout == 2) {           /* Switch: one cream colour, B at the bottom, A on the right */
+            static const wchar_t* L[4] = { L"B", L"A", L"Y", L"X" };
+            g_label(gr, L[i], RectF(x, y, s, s), 12.0f * k, Color(255, 236, 228, 212));
+            break;
+        }
         if (layout == 1) {
             static const wchar_t* L[4] = { L"A", L"B", L"X", L"Y" };
             /* B's bowls sit right of its stem: centred by outline it still
@@ -921,7 +932,8 @@ void btn_glyph(Graphics& gr, int layout, int pb, float x, float y, float s = 30.
     case PB_L1: case PB_R1: {        /* bumper: a low rounded bar */
         RectF r(cx - 8.5f * k, cy - 4.5f * k, 17 * k, 9 * k);
         GraphicsPath* p = round_rect(r, 4 * k); gr.FillPath(&fill, p); delete p;
-        g_label(gr, layout ? (pb == PB_L1 ? L"LB" : L"RB") : (pb == PB_L1 ? L"L1" : L"R1"), r, 7.5f * k, G_INK);
+        g_label(gr, layout == 1 ? (pb == PB_L1 ? L"LB" : L"RB") : layout == 2 ? (pb == PB_L1 ? L"L" : L"R")
+                                : (pb == PB_L1 ? L"L1" : L"R1"), r, 7.5f * k, G_INK);
         break; }
     case PB_L2: case PB_R2: {        /* trigger: tall, rounded on top */
         RectF r(cx - 6 * k, cy - 7.5f * k, 12 * k, 15 * k);
@@ -933,8 +945,9 @@ void btn_glyph(Graphics& gr, int layout, int pb, float x, float y, float s = 30.
         p.AddLine(r.X + 2 * k, r.Y + r.Height, r.X, r.Y + r.Height - 2 * k);
         p.CloseFigure();
         gr.FillPath(&fill, &p);
-        g_label(gr, layout ? (pb == PB_L2 ? L"LT" : L"RT") : (pb == PB_L2 ? L"L2" : L"R2"),
-                RectF(r.X, r.Y + 2 * k, r.Width, r.Height - 2 * k), 7.0f * k, G_INK);
+        g_label(gr, layout == 1 ? (pb == PB_L2 ? L"LT" : L"RT") : layout == 2 ? (pb == PB_L2 ? L"ZL" : L"ZR")
+                                : (pb == PB_L2 ? L"L2" : L"R2"),
+                RectF(r.X, r.Y + 2 * k, r.Width, r.Height - 2 * k), (layout == 2 ? 6.0f : 7.0f) * k, G_INK);
         break; }
     case PB_L3: case PB_R3: {        /* stick: an inner ring */
         const float r2 = 8.5f * k;
@@ -959,7 +972,10 @@ void btn_glyph(Graphics& gr, int layout, int pb, float x, float y, float s = 30.
         GraphicsPath* ap = round_rect(arm, 1.2f * k); gr.FillPath(&fill, ap); delete ap;
         break; }
     case PB_SELECT: {
-        if (layout == 1) {           /* Xbox View: two overlapping windows */
+        if (layout == 2) {           /* Switch Minus */
+            Pen p(G_LINE, 2.0f * k); p.SetStartCap(LineCapRound); p.SetEndCap(LineCapRound);
+            gr.DrawLine(&p, cx - 5 * k, cy, cx + 5 * k, cy);
+        } else if (layout == 1) {    /* Xbox View: two overlapping windows */
             Pen p(G_LINE, 1.4f * k);
             gr.DrawRectangle(&p, cx - 5 * k, cy - 4.5f * k, 7 * k, 6 * k);
             SolidBrush bk(Color(255, 40, 34, 34)); gr.FillRectangle(&bk, cx - 2 * k, cy - 1.5f * k, 7 * k, 6 * k);
@@ -973,10 +989,27 @@ void btn_glyph(Graphics& gr, int layout, int pb, float x, float y, float s = 30.
             gr.DrawLine(&p, cx + 3.8f * k, cy - 2.8f * k, cx + 6 * k, cy - 5.6f * k);
         }
         break; }
-    case PB_START: {                 /* Options / Menu: three lines */
-        Pen p(G_LINE, 1.8f * k); p.SetStartCap(LineCapRound); p.SetEndCap(LineCapRound);
+    case PB_START: {                 /* Options / Menu: three lines; Switch Plus */
+        Pen p(G_LINE, layout == 2 ? 2.0f * k : 1.8f * k); p.SetStartCap(LineCapRound); p.SetEndCap(LineCapRound);
+        if (layout == 2) { gr.DrawLine(&p, cx - 5 * k, cy, cx + 5 * k, cy); gr.DrawLine(&p, cx, cy - 5 * k, cx, cy + 5 * k); break; }
         for (int i = -1; i <= 1; i++) gr.DrawLine(&p, cx - 5 * k, cy + i * 3.6f * k, cx + 5 * k, cy + i * 3.6f * k);
         break; }
+    case PB_HOME: case PB_TOUCH:
+        if (layout == 2) {           /* Switch Home (a house) and Capture (a ringed square) */
+            if (pb == PB_HOME) {
+                PointF house[7] = { PointF(cx, cy - 6 * k), PointF(cx + 6 * k, cy - 0.5f * k), PointF(cx + 4 * k, cy - 0.5f * k),
+                                    PointF(cx + 4 * k, cy + 5 * k), PointF(cx - 4 * k, cy + 5 * k),
+                                    PointF(cx - 4 * k, cy - 0.5f * k), PointF(cx - 6 * k, cy - 0.5f * k) };
+                gr.FillPolygon(&fill, house, 7);
+                SolidBrush door(Color(255, 40, 34, 34)); gr.FillRectangle(&door, cx - 1.3f * k, cy + 1.5f * k, 2.6f * k, 3.5f * k);
+            } else {
+                Pen p(G_LINE, 1.4f * k);
+                GraphicsPath* sq = round_rect(RectF(cx - 5.5f * k, cy - 5.5f * k, 11 * k, 11 * k), 2 * k); gr.DrawPath(&p, sq); delete sq;
+                gr.DrawEllipse(&p, cx - 2.8f * k, cy - 2.8f * k, 5.6f * k, 5.6f * k);
+            }
+            break;
+        }
+        [[fallthrough]];
     default:                         /* home / touchpad */
         g_label(gr, pb == PB_HOME ? (layout ? L"\u2302" : L"PS") : L"T", RectF(x, y, s, s), 9.0f * k, G_LINE);
         break;
@@ -1263,10 +1296,11 @@ bool region_ready(int i)
 int ready_count() { int n = 0; for (int i = 0; i < 3; i++) n += region_ready(i); return n; }
 bool g_version_picked = false;   /* a card was clicked this session (needed with 2+ ready versions) */
 
-/* A shortcut on all three: keyboard, PlayStation and Xbox controllers. */
-std::wstring shortcut_text(const wchar_t* key, const wchar_t* ps, const wchar_t* xbox)
+/* A shortcut on all four: keyboard, PlayStation, Xbox and Switch controllers. */
+std::wstring shortcut_text(const wchar_t* key, const wchar_t* ps, const wchar_t* xbox, const wchar_t* sw)
 {
-    return std::wstring(T(S_SC_COL_KEY)) + L": " + key + L"   ·   PlayStation: " + ps + L"   ·   Xbox: " + xbox;
+    return std::wstring(T(S_SC_COL_KEY)) + L": " + key + L"   ·   PlayStation: " + ps + L"   ·   Xbox: " + xbox +
+           L"   ·   Switch: " + sw;
 }
 
 void draw_jogo(Graphics& gr, const Font& head, const Font& body, const Font& fsm)
@@ -1390,7 +1424,7 @@ void draw_saves(Graphics& gr, const Font& head, const Font& body, const Font& fs
     section(gr,lx(design::SHOT_TITLE),x,y,w,head);
     y+=44;
     text(gr,lx(design::SHOT_DESC),x,y,fsm,C_DIM,StringAlignmentNear,w,20);
-    text(gr,shortcut_text(L"F10",L"R1+R2+L1+L2+R3",L"RB+RT+LB+LT+RS"),
+    text(gr,shortcut_text(L"F10",L"R1+R2+L1+L2+R3",L"RB+RT+LB+LT+RS",L"R+ZR+L+ZL+RS"),
          x,y+24,body,C_TEXT,StringAlignmentNear,w,24);
     button(gr,RectF(x,y+60,330,32),T(S_SHOT_OPEN),ID_SHOT_OPEN,body);
 }
@@ -1505,7 +1539,8 @@ void draw_radio(Graphics& gr, float x, float y, const std::wstring& t, bool on, 
 
 /* The connected controller, drawn as a vector in a 100 x 68 design box and
  * scaled into r: DualSense (light shell, dark centre band), DualShock 4 (one
- * tone, dark touchpad) or Xbox (rounder, offset sticks, logo button). */
+ * tone, dark touchpad), Xbox (rounder, offset sticks, logo button) or Switch
+ * (the Xbox outline as Joy-Con in a grip: neon blue and red halves). */
 void draw_controller(Graphics& gr, int kind, RectF r)
 {
     GraphicsState st = gr.Save();
@@ -1521,7 +1556,7 @@ void draw_controller(Graphics& gr, int kind, RectF r)
     auto cross = [&](Brush& b, float cx, float cy, float a, float w) {
         gr.FillRectangle(&b, cx - w / 2, cy - a, w, 2 * a); gr.FillRectangle(&b, cx - a, cy - w / 2, 2 * a, w); };
     GraphicsPath body;
-    if (kind == PAD_KIND_XINPUT) {
+    if (kind == PAD_KIND_XINPUT || kind == PAD_KIND_SWITCH) {
         body.StartFigure();
         body.AddLine(24.0f, 9.0f, 76.0f, 9.0f);
         body.AddBezier(76.0f, 9.0f, 88.0f, 9.0f, 95.0f, 16.0f, 96.0f, 28.0f);
@@ -1534,6 +1569,27 @@ void draw_controller(Graphics& gr, int kind, RectF r)
         body.AddBezier(8.0f, 64.0f, 2.0f, 58.0f, 2.0f, 44.0f, 4.0f, 28.0f);
         body.AddBezier(4.0f, 28.0f, 5.0f, 16.0f, 12.0f, 9.0f, 24.0f, 9.0f);
         body.CloseFigure();
+        if (kind == PAD_KIND_SWITCH) {
+            Region clip(&body); gr.SetClip(&clip, CombineModeIntersect);
+            SolidBrush blue(Color(255, 0, 165, 225)), red(Color(255, 240, 72, 64)), grip(Color(255, 70, 68, 72));
+            gr.FillRectangle(&blue, 0.0f, 0.0f, 44.0f, 68.0f);
+            gr.FillRectangle(&red, 56.0f, 0.0f, 44.0f, 68.0f);
+            gr.FillRectangle(&grip, 44.0f, 0.0f, 12.0f, 68.0f);
+            gr.ResetClip();
+            ring(pDark, 24, 26, 6.5f); disc(bDark, 24, 26, 3.6f);        /* left stick, high */
+            ring(pDark, 34, 39, 2.3f); ring(pDark, 34, 49, 2.3f);        /* the four arrow buttons */
+            ring(pDark, 29, 44, 2.3f); ring(pDark, 39, 44, 2.3f);
+            ring(pDark, 76, 19, 3.0f); ring(pDark, 83, 26, 3.0f);        /* X A B Y */
+            ring(pDark, 76, 33, 3.0f); ring(pDark, 69, 26, 3.0f);
+            ring(pDark, 66, 46, 6.5f); disc(bDark, 66, 46, 3.6f);        /* right stick, low */
+            Pen pm(dark, 1.4f);
+            gr.DrawLine(&pm, 38.0f, 15.0f, 42.0f, 15.0f);                /* minus */
+            gr.DrawLine(&pm, 58.0f, 15.0f, 62.0f, 15.0f); gr.DrawLine(&pm, 60.0f, 13.0f, 60.0f, 17.0f);   /* plus */
+            gr.DrawRectangle(&pm, 39.0f, 51.0f, 3.2f, 3.2f);              /* capture */
+            ring(pm, 61, 39, 1.8f);                                      /* home */
+            gr.Restore(st);
+            return;
+        }
         gr.FillPath(&bShell, &body);
         ring(pDark, 26, 27, 7.5f); ring(pDark, 26, 27, 4.5f);        /* left stick, high */
         ring(pDark, 62, 44, 7.5f); ring(pDark, 62, 44, 4.5f);        /* right stick, low */
@@ -1626,7 +1682,12 @@ void draw_pad_card(Graphics& gr, float x, float y, float w, float h, const Font&
 
 /* The icon set in use: the chosen one, or the connected controller's. */
 /* (Automatic and keyboard name the controller's own buttons in this table.) */
-int icon_layout() { return g.s.layout >= 2 ? (g.pad_kind == PAD_KIND_XINPUT ? 1 : 0) : g.s.layout; }
+int icon_layout()
+{
+    if (g.s.layout == 4) return 2;
+    if (g.s.layout < 2) return g.s.layout;
+    return g.pad_kind == PAD_KIND_XINPUT ? 1 : g.pad_kind == PAD_KIND_SWITCH ? 2 : 0;
+}
 
 /* The Xbox button that plays a PS3 role. Xbox icons come with the Xbox 360
  * layout (pad_phys_360_layout, set from set_icon_env): the L1/R1 roles sit on
@@ -1642,6 +1703,10 @@ int xbox_button(int pb)
 }
 int shown_button(int pb) { return icon_layout() == 1 ? xbox_button(pb) : pb; }
 
+RectF srt_slider_rect(int id);
+void srt_slider(Graphics& gr, int id, int value, int minimum, int maximum, const Font& body);
+float g_rumble_y = 0;   /* the vibration slider's top on the Controles page, in page coordinates */
+
 void draw_controles(Graphics& gr, const Font& head, const Font& body, const Font& fsm, const Font& col)
 {
     float x = SIDE + 32.0f, y = 22;
@@ -1655,7 +1720,7 @@ void draw_controles(Graphics& gr, const Font& head, const Font& body, const Font
     {
         const struct { std::wstring t; int layout, id; } opts[] = {
             { T(S_ICONS_AUTO), 2, ID_LAYOUT_AUTO }, { L"PlayStation", 0, ID_LAYOUT_PS },
-            { L"Xbox", 1, ID_LAYOUT_XB }, { T(S_ICONS_KB), 3, ID_LAYOUT_KB } };
+            { L"Xbox", 1, ID_LAYOUT_XB }, { L"Nintendo Switch", 4, ID_LAYOUT_SW }, { T(S_ICONS_KB), 3, ID_LAYOUT_KB } };
         StringFormat sf(StringFormat::GenericTypographic());
         float rx = x + 160;
         for (const auto& o : opts) {
@@ -1679,7 +1744,7 @@ void draw_controles(Graphics& gr, const Font& head, const Font& body, const Font
     const float kcol = PAD_KEY_SLOTS * kw + (PAD_KEY_SLOTS - 1) * kgap, bcol = PAD_BTN_SLOTS * bw + (PAD_BTN_SLOTS - 1) * bgap;
     /* The column whose icons the game shows is marked (red, underlined);
      * the other is dimmed. Automatic marks both. */
-    const bool kb_on = g.s.layout >= 2, pad_on = g.s.layout != 3;
+    const bool kb_on = g.s.layout == 2 || g.s.layout == 3, pad_on = g.s.layout != 3;
     text(gr, T(S_COL_GAME), c1, y, col, C_RED);
     text(gr, T(S_COL_KB), c2, y, col, kb_on ? C_RED : C_DIM);
     text(gr, T(S_COL_PAD), c3, y, col, pad_on ? C_RED : C_DIM);
@@ -1728,6 +1793,13 @@ void draw_controles(Graphics& gr, const Font& head, const Font& body, const Font
     float by = y + NROWS * rowh + 8;
     button(gr, RectF(x, by, 160, 32), T(S_RESTORE), ID_RESTORE, body);
     text(gr, T(S_CONTROLS_FOOT), x + 175, by, fsm, C_DIM, StringAlignmentNear, W - 280.0f - (x + 175), 32);
+    /* Vibration strength: applied at once (PAD_RUMBLE_SCALE); letting go of
+     * the slider gives a short test pulse. */
+    by += 48;
+    text(gr, std::wstring(lx(design::RUMBLE)) + L"  (0–200%)", x, by, body, C_TEXT, StringAlignmentNear, 300, 32);
+    g_rumble_y = by;
+    srt_slider(gr, ID_RUMBLE, g.s.rumble, 0, 200, body);
+    text(gr, lx(design::RUMBLE_HINT), x, by + 34, fsm, C_DIM, StringAlignmentNear, W - SIDE - 64.0f, 20);
 }
 
 /* The shader cache the D3D12 backend keeps under the working directory
@@ -1877,7 +1949,7 @@ void draw_avancado(Graphics& gr, const Font& head, const Font& body, const Font&
     y += 46;
     button(gr,RectF(x,y,390,32),T(g.s.test_tools?S_TEST_ENABLED:S_TEST_ENABLE),ID_TEST_ENABLE,body);
     button(gr,RectF(x+404,y,260,32),T(S_TEST_OPEN),ID_TEST_OPEN,body,false,g.s.test_tools&&g.running);
-    text(gr,shortcut_text(L"F7",L"R1+R2+L1+L2+○",L"RB+RT+LB+LT+B"),
+    text(gr,shortcut_text(L"F7",L"R1+R2+L1+L2+○",L"RB+RT+LB+LT+B",L"R+ZR+L+ZL+A"),
          x,y+40,fsm,C_DIM,StringAlignmentNear,w,20);
 }
 
@@ -1910,6 +1982,7 @@ void option_card(Graphics& gr, float x, float y, float w, float h, bool on, int 
 std::wstring srt_enemy_value(int n) {return n==0?T(S_AA_OFF):n==99?T(S_SRT_ALL):std::to_wstring(n);}
 std::wstring srt_language_value() {return g.s.srt_language?k_lang_name[cv_srt_i18n::selection(g.s.srt_language,g_lang)]:T(S_SRT_FOLLOW);}
 RectF srt_slider_rect(int id) {
+    if(id==ID_RUMBLE)return RectF(SIDE+32.f+310,g_rumble_y,360,32);
     const float w=W-SIDE-64.f,col=(w-24)/2,right=SIDE+32.f+col+24;
     return RectF(right,id==ID_SRT_SCALE?434.f:519.f,col-72,32);
 }
@@ -1964,32 +2037,34 @@ void draw_inventario(Graphics& gr,const Font& head,const Font& body,const Font& 
     section(gr,T(S_ITEMS_TITLE),x,34,w,head);
     text(gr,T(S_ITEMS_INTRO),x,70,fsm,C_DIM,StringAlignmentNear,w,24);
     option_card(gr,x,104,w,84,g.s.items_menu,ID_ITEMS_ENABLE,T(S_ITEMS_ENABLE_T),T(S_ITEMS_ENABLE_D),body,fsm);
-    /* How to use it: one row per action, keyboard / PlayStation / Xbox side by side. */
+    /* How to use it: one row per action, keyboard / PlayStation / Xbox / Switch side by side. */
     const float y=210;
     RectF card(x,y,w,236);GraphicsPath* cp=round_rect(card,6);
     SolidBrush cb(C_PANEL);gr.FillPath(&cb,cp);Pen cbd(C_FIELD_BD,1);gr.DrawPath(&cbd,cp);delete cp;
     text(gr,T(S_ITEMS_HOW_T),x+20,y+12,head,C_RED_HI,StringAlignmentNear,w-40,26);
     {
-        const float ax=x+20,kx=x+300,px=x+470,xx=x+690,hy=y+46;
-        text(gr,T(S_SC_COL_ACTION),ax,hy,fsm,C_DIM,StringAlignmentNear,270,20);
-        text(gr,T(S_SC_COL_KEY),kx,hy,fsm,C_DIM,StringAlignmentNear,160,20);
-        text(gr,L"PlayStation",px,hy,fsm,C_DIM,StringAlignmentNear,210,20);
-        text(gr,L"Xbox",xx,hy,fsm,C_DIM,StringAlignmentNear,w-(xx-x)-20,20);
-        struct Row{const wchar_t* what;const wchar_t* key;const wchar_t* ps;const wchar_t* xb;};
+        const float ax=x+20,kx=x+290,px=x+430,xx=x+600,sx=x+770,hy=y+46;
+        text(gr,T(S_SC_COL_ACTION),ax,hy,fsm,C_DIM,StringAlignmentNear,260,20);
+        text(gr,T(S_SC_COL_KEY),kx,hy,fsm,C_DIM,StringAlignmentNear,130,20);
+        text(gr,L"PlayStation",px,hy,fsm,C_DIM,StringAlignmentNear,160,20);
+        text(gr,L"Xbox",xx,hy,fsm,C_DIM,StringAlignmentNear,160,20);
+        text(gr,L"Nintendo Switch",sx,hy,fsm,C_DIM,StringAlignmentNear,w-(sx-x)-20,20);
+        struct Row{const wchar_t* what;const wchar_t* key;const wchar_t* ps;const wchar_t* xb;const wchar_t* sw;};
         const Row rows[]={
-            {lx(design::ITEM_OPEN),L"F6  /  Esc",L"R1+R2+L1+L2+\u25B3",L"RB+RT+LB+LT+Y"},
-            {lx(design::ITEM_CATEGORY),L"Q  /  E",L"L1  /  R1",L"LB  /  RB"},
-            {lx(design::ITEM_CHOOSE),L"\u2191 \u2193 \u2190 \u2192",lx(design::DPAD),lx(design::DPAD)},
-            {lx(design::ITEM_PUT),L"Enter",L"\u2715",L"A"},
-            {lx(design::ITEM_TAKE),L"R",L"\u25A1",L"X"},
+            {lx(design::ITEM_OPEN),L"F6  /  Esc",L"R1+R2+L1+L2+\u25B3",L"RB+RT+LB+LT+Y",L"R+ZR+L+ZL+X"},
+            {lx(design::ITEM_CATEGORY),L"Q  /  E",L"L1  /  R1",L"LB  /  RB",L"L  /  R"},
+            {lx(design::ITEM_CHOOSE),L"\u2191 \u2193 \u2190 \u2192",lx(design::DPAD),lx(design::DPAD),lx(design::DPAD)},
+            {lx(design::ITEM_PUT),L"Enter",L"\u2715",L"A",L"B"},
+            {lx(design::ITEM_TAKE),L"R",L"\u25A1",L"X",L"Y"},
         };
         SolidBrush line(Color(255,46,38,38));float ry=hy+26;
         for(const Row& r:rows){
             gr.FillRectangle(&line,x+20,ry-3,w-40,1.f);
-            text(gr,r.what,ax,ry,body,C_TEXT,StringAlignmentNear,270,30);
-            text(gr,r.key,kx,ry,body,C_TEXT,StringAlignmentNear,160,30);
-            text(gr,r.ps,px,ry,body,C_TEXT,StringAlignmentNear,210,30);
-            text(gr,r.xb,xx,ry,body,C_TEXT,StringAlignmentNear,w-(xx-x)-20,30);
+            text(gr,r.what,ax,ry,body,C_TEXT,StringAlignmentNear,260,30);
+            text(gr,r.key,kx,ry,body,C_TEXT,StringAlignmentNear,130,30);
+            text(gr,r.ps,px,ry,body,C_TEXT,StringAlignmentNear,160,30);
+            text(gr,r.xb,xx,ry,body,C_TEXT,StringAlignmentNear,160,30);
+            text(gr,r.sw,sx,ry,body,C_TEXT,StringAlignmentNear,w-(sx-x)-20,30);
             ry+=30;
         }
     }
@@ -2084,32 +2159,39 @@ void draw_atalhos(Graphics& gr, const Font& head, const Font& body, const Font& 
     section(gr, T(S_SC_TITLE), x, y, w, head);
     text(gr, T(S_SC_HINT), x, y + 32, fsm, C_DIM, StringAlignmentNear, w, 20);
     y += 74;
-    /* keyboard, PlayStation and Xbox side by side, whatever is connected */
-    const float kx = x, px = x + 110, xx = x + 280, ax = x + 450, aw = w - 450;
+    /* keyboard, PlayStation, Xbox and Switch side by side, whatever is connected */
+    const float kx = x, px = x + 110, xx = x + 260, sx = x + 410, ax = x + 560, aw = w - 560;
     text(gr, T(S_SC_COL_KEY), kx, y, fsm, C_DIM, StringAlignmentNear, 100, 20);
-    text(gr, L"PlayStation", px, y, fsm, C_DIM, StringAlignmentNear, 160, 20);
-    text(gr, L"Xbox", xx, y, fsm, C_DIM, StringAlignmentNear, 160, 20);
+    text(gr, L"PlayStation", px, y, fsm, C_DIM, StringAlignmentNear, 145, 20);
+    text(gr, L"Xbox", xx, y, fsm, C_DIM, StringAlignmentNear, 145, 20);
+    text(gr, L"Nintendo Switch", sx, y, fsm, C_DIM, StringAlignmentNear, 145, 20);
     text(gr, T(S_SC_COL_ACTION), ax, y, fsm, C_DIM, StringAlignmentNear, aw, 20);
     y += 26;
     wchar_t items[300], maps[300];
     swprintf(items, 300, T(S_SC_ITEMS), T(S_NAV_ITEMS));
     swprintf(maps, 300, T(S_SC_MAPS), T(S_NAV_ADVANCED));
-    struct Row { const wchar_t* key; const wchar_t* ps; const wchar_t* xb; const wchar_t* what; };
+    struct Row { const wchar_t* key; const wchar_t* ps; const wchar_t* xb; const wchar_t* sw; const wchar_t* what; };
     const Row rows[] = {
-        { L"Insert / F5", L"L3", L"LS", T(S_SC_MENU) },
-        { L"F6", L"△", L"Y", items },
-        { L"F7", L"○", L"B", maps },
-        { L"F8", L"✕", L"A", T(S_SC_SRT) },
-        { L"F9", L"□", L"X", T(S_SC_TEX) },
-        { L"F10", L"R3", L"RS", T(S_SC_SHOT) },
+        { L"Insert / F5", L"L3", L"LS", L"LS", T(S_SC_MENU) },
+        { L"F6", L"△", L"Y", L"X", items },
+        { L"F7", L"○", L"B", L"A", maps },
+        { L"F8", L"✕", L"A", L"B", T(S_SC_SRT) },
+        { L"F9", L"□", L"X", L"Y", T(S_SC_TEX) },
+        { L"F10", L"R3", L"RS", L"RS", T(S_SC_SHOT) },
     };
     SolidBrush line(Color(255, 46, 38, 38));
     for (const Row& r : rows) {
         gr.FillRectangle(&line, x, y - 4, w, 1.0f);
         text(gr, r.key, kx, y, body, C_TEXT, StringAlignmentNear, 100, 40);
-        text(gr, std::wstring(L"R1+R2+L1+L2+") + r.ps, px, y, body, C_TEXT, StringAlignmentNear, 160, 40);
-        text(gr, std::wstring(L"RB+RT+LB+LT+") + r.xb, xx, y, body, C_TEXT, StringAlignmentNear, 160, 40);
-        text(gr, r.what, ax, y, fsm, C_TEXT, StringAlignmentNear, aw, 40);
+        text(gr, std::wstring(L"R1+R2+L1+L2+") + r.ps, px, y, body, C_TEXT, StringAlignmentNear, 145, 40);
+        text(gr, std::wstring(L"RB+RT+LB+LT+") + r.xb, xx, y, body, C_TEXT, StringAlignmentNear, 145, 40);
+        text(gr, std::wstring(L"R+ZR+L+ZL+") + r.sw, sx, y, body, C_TEXT, StringAlignmentNear, 145, 40);
+        {   /* the action may take two lines in the narrower column */
+            const std::wstring what = g_lang == LANG_AR ? L"\u202B" + std::wstring(r.what) + L"\u202C" : std::wstring(r.what);
+            StringFormat sf; sf.SetLineAlignment(StringAlignmentCenter); sf.SetTrimming(StringTrimmingEllipsisWord);
+            if (g_lang == LANG_AR) sf.SetFormatFlags(StringFormatFlagsDirectionRightToLeft);
+            SolidBrush tb(C_TEXT); gr.DrawString(what.c_str(), -1, &fsm, RectF(ax, y - 2, aw, 44), &sf, &tb);
+        }
         y += 48;
     }
     gr.FillRectangle(&line, x, y - 4, w, 1.0f);
@@ -2396,8 +2478,18 @@ void toggle_textures(const char* by);
 void changed();
 void finish_srt_drag();
 
+/* The vibration strength, read by pad_phys_rumble on every call. */
+void set_rumble_env() { _putenv_s("PAD_RUMBLE_SCALE", std::to_string(g.s.rumble).c_str()); }
+/* A short pulse at the chosen strength on every controller (timer 7 stops it). */
+void rumble_test()
+{
+    for (int i = 0; i < PAD_PHYS_MAX; i++) pad_phys_rumble(i, 128, 64);
+    SetTimer(g.hwnd, 7, 400, NULL);
+}
+
 void apply_live(bool restore_menu = true)
 {
+    set_rumble_env();
     cv_test_tools_enable(g.s.test_tools);
     cv_item_menu_enable(g.s.items_menu);
     cv_cheats_set(g.s.patch[2],g.s.patch[3]);
@@ -2494,16 +2586,21 @@ void set_icon_env();
 
 void changed() { save_settings(g.s); g.play_msg.clear(); apply_live(); InvalidateRect(g.hwnd, NULL, FALSE); }
 
+/* The SRT's size and opacity, and the vibration strength (Controles). */
 void update_srt_slider(int id,int x) {
-    const RectF r=srt_slider_rect(id);int& value=id==ID_SRT_SCALE?g.s.srt_scale:g.s.srt_opacity;
-    const int next=cv_launcher_controls::slider_value(float(x),r.X+8,r.Width-16,id==ID_SRT_SCALE?50:0,id==ID_SRT_SCALE?200:100);
+    const RectF r=srt_slider_rect(id);
+    int& value=id==ID_RUMBLE?g.s.rumble:id==ID_SRT_SCALE?g.s.srt_scale:g.s.srt_opacity;
+    const int next=cv_launcher_controls::slider_value(float(x),r.X+8,r.Width-16,id==ID_SRT_SCALE?50:0,id==ID_SRT_OPACITY?100:200);
     if(next==value)return;
-    value=next;g.srt_drag_dirty=true;set_srt_env();InvalidateRect(g.hwnd,NULL,FALSE);
+    value=next;g.srt_drag_dirty=true;
+    if(id==ID_RUMBLE)set_rumble_env();else set_srt_env();
+    InvalidateRect(g.hwnd,NULL,FALSE);
 }
 void finish_srt_drag() {
     if(g.srt_drag<0)return;
-    const bool dirty=g.srt_drag_dirty;g.srt_drag=-1;g.srt_drag_dirty=false;
+    const bool dirty=g.srt_drag_dirty,rumble=g.srt_drag==ID_RUMBLE;g.srt_drag=-1;g.srt_drag_dirty=false;
     if(GetCapture()==g.hwnd)ReleaseCapture();
+    if(rumble)rumble_test();
     if(dirty)changed();else InvalidateRect(g.hwnd,NULL,FALSE);
 }
 
@@ -2602,8 +2699,8 @@ void click(int id)
     else if (id == ID_SAVE_OPEN) { std::error_code ec; fs::create_directories(save_folder(), ec); open_in_explorer(save_folder().wstring()); }
     else if (id == ID_GAME_OPEN) open_in_explorer(g.s.game);
     else if (id == ID_RAP_OPEN) open_in_explorer(g.s.rap);
-    else if (id == ID_LAYOUT_PS || id == ID_LAYOUT_XB || id == ID_LAYOUT_AUTO || id == ID_LAYOUT_KB) {
-        g.s.layout = id == ID_LAYOUT_AUTO ? 2 : id == ID_LAYOUT_KB ? 3 : id - ID_LAYOUT_PS;
+    else if (id == ID_LAYOUT_PS || id == ID_LAYOUT_XB || id == ID_LAYOUT_AUTO || id == ID_LAYOUT_KB || id == ID_LAYOUT_SW) {
+        g.s.layout = id == ID_LAYOUT_AUTO ? 2 : id == ID_LAYOUT_KB ? 3 : id == ID_LAYOUT_SW ? 4 : id - ID_LAYOUT_PS;
         set_icon_env();   /* the game reads it when it next loads a screen with icons */
         changed();
     }
@@ -2775,6 +2872,12 @@ LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp)
         TRACKMOUSEEVENT t = { sizeof t, TME_LEAVE, h, 0 }; TrackMouseEvent(&t);
         return 0; }
     case WM_MOUSEWHEEL:
+        if(g.page==P_CONTROLES && g.open_dd<0) {
+            POINT p={GET_X_LPARAM(lp),GET_Y_LPARAM(lp)};ScreenToClient(h,&p);
+            if(hit_at(logical_x(p.x),logical_y(p.y))==ID_RUMBLE) {
+                g.s.rumble=std::clamp(g.s.rumble+(GET_WHEEL_DELTA_WPARAM(wp)>0?5:-5),0,200);set_rumble_env();changed();return 0;
+            }
+        }
         if(g.page==P_SRT && g.open_dd<0) {
             POINT p={GET_X_LPARAM(lp),GET_Y_LPARAM(lp)};ScreenToClient(h,&p);p.x=logical_x(p.x);p.y=logical_y(p.y);const int id=hit_at(p.x,p.y);
             if(id==ID_SRT_OPACITY) {
@@ -2800,7 +2903,7 @@ LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp)
     case WM_SETCURSOR: if (LOWORD(lp) == HTCLIENT) return TRUE; break;
     case WM_LBUTTONDOWN: {
         const int id=hit_at(logical_x(GET_X_LPARAM(lp)),logical_y(GET_Y_LPARAM(lp)));
-        if(g.page==P_SRT&&g.open_dd<0&&(id==ID_SRT_SCALE||id==ID_SRT_OPACITY)) {
+        if(g.open_dd<0&&((g.page==P_SRT&&(id==ID_SRT_SCALE||id==ID_SRT_OPACITY))||(g.page==P_CONTROLES&&id==ID_RUMBLE))) {
             g.srt_drag=id;g.srt_drag_dirty=false;SetCapture(h);
             update_srt_slider(id,logical_x(GET_X_LPARAM(lp)));InvalidateRect(h,NULL,FALSE);return 0;
         }
@@ -2848,6 +2951,7 @@ LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp)
         if (g.running) { ShowWindow(h, SW_HIDE); quit_game(); return 0; }
         break;
     case WM_TIMER: {
+        if (wp == 7) { KillTimer(h, 7); pad_phys_rumble_off(); return 0; }   /* rumble_test's pulse ends */
         if (wp == 2) {
             KillTimer(h, 2);
             if (GetForegroundWindow() == h || IsWindowVisible(h)) show_menu();
@@ -2889,14 +2993,15 @@ LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp)
         for (int i = 0; i < PAD_PHYS_MAX; i++) {
             PadPhys p; if (!pad_phys_poll(i, &p)) continue;
             if (cnt++ == 0)
-                st = (p.kind == PAD_KIND_XINPUT) ? L"Xbox"
+                st = (p.kind == PAD_KIND_XINPUT) ? L"Xbox" : (p.kind == PAD_KIND_SWITCH) ? L"Nintendo Switch"
                    : (p.kind == PAD_KIND_DS4) ? L"DualShock 4" : L"DualSense";
         }
         int kind = 0;
         for (int i = 0; i < PAD_PHYS_MAX && !kind; i++) { PadPhys p; if (pad_phys_poll(i, &p)) kind = p.kind; }
-        if (const char* pv = getenv("CV_PAD_PREVIEW")) {   /* show a model without that controller (1..3) */
+        if (const char* pv = getenv("CV_PAD_PREVIEW")) {   /* show a model without that controller (1..4) */
             kind = atoi(pv); cnt = kind ? 1 : 0;
-            st = kind == PAD_KIND_XINPUT ? L"Xbox" : kind == PAD_KIND_DS4 ? L"DualShock 4" : kind ? L"DualSense" : L"";
+            st = kind == PAD_KIND_XINPUT ? L"Xbox" : kind == PAD_KIND_DS4 ? L"DualShock 4" : kind == PAD_KIND_SWITCH ? L"Nintendo Switch"
+               : kind ? L"DualSense" : L"";
         }
         bool redraw = st != g.pad_status || cnt != g.pad_count || kind != g.pad_kind;
         if(g.page==P_MODS && IsWindowVisible(h) && g.s.tex_dump) {
@@ -2947,11 +3052,12 @@ void set_env(const char* k, const std::string& v) { _putenv_s(k, v.c_str()); }
 /* In-game icons (button_icons.cpp): auto follows the first controller. */
 void set_icon_env()
 {
-    const char* v = g.s.layout == 3 ? "keyboard" : g.s.layout == 2 ? "auto" : g.s.layout == 1 ? "xbox" : "ps";
+    const char* v = g.s.layout == 4 ? "switch" : g.s.layout == 3 ? "keyboard" : g.s.layout == 2 ? "auto" : g.s.layout == 1 ? "xbox" : "ps";
     set_env("CV_BUTTON_ICONS", v);
     /* The controls follow the icons, so the 360 manual shown is what the pad
-     * does: Xbox icons, 360 layout (on any controller); auto, Xbox pads only. */
-    set_env("PAD_360_LAYOUT", g.s.layout >= 2 ? "auto" : g.s.layout == 1 ? "on" : "off");
+     * does: Xbox icons, 360 layout (on any controller); auto, Xbox pads only.
+     * Switch icons go with the PlayStation layout (ZL/ZR are L2/R2). */
+    set_env("PAD_360_LAYOUT", g.s.layout == 2 || g.s.layout == 3 ? "auto" : g.s.layout == 1 ? "on" : "off");
 }
 void set_env_default(const char* k, const char* v) { if (!getenv(k)) _putenv_s(k, v); }
 
@@ -3165,6 +3271,7 @@ void start_game()
     set_env("CV_SHARPNESS", std::to_string(s.sharpness));
     rsx_d3d12_set_sharpness(s.sharpness);
     set_icon_env();
+    set_rumble_env();
     std::string pl;
     for (int i = 0; i < NPATCHES; i++)
         if (s.patch[i]) pl += (pl.empty() ? "" : ",") + std::string(k_patches[i].id);
@@ -3224,6 +3331,7 @@ DWORD WINAPI launcher_thread(void*)
     cv_test_tools_enable(g.s.test_tools);
     cv_item_menu_enable(g.s.items_menu);   /* the saved choice, before any change */
     set_icon_env();   /* the button capture below reads the layout it implies */
+    set_rumble_env();
     g.banner = load_png("BANNER");
     g.castle=load_png("LAUNCHER_CASTLE");
     if(Bitmap* full=load_png("LAUNCHER_LOGO")){

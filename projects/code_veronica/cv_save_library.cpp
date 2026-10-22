@@ -254,10 +254,11 @@ int hint_kind(){
  if(mode&&std::strcmp(mode,"keyboard")==0)return PAD_INPUT_KEYBOARD;
  if(mode&&std::strcmp(mode,"xbox")==0)return PAD_KIND_XINPUT;
  if(mode&&std::strcmp(mode,"ps")==0)return PAD_KIND_DS4;
- return input_kind==PAD_KIND_XINPUT?PAD_KIND_XINPUT:(input_kind==PAD_KIND_DS4||input_kind==PAD_KIND_DUALSENSE)?PAD_KIND_DS4:PAD_INPUT_KEYBOARD;
+ if(mode&&std::strcmp(mode,"switch")==0)return PAD_KIND_SWITCH;
+ return input_kind==PAD_KIND_XINPUT||input_kind==PAD_KIND_SWITCH?input_kind:(input_kind==PAD_KIND_DS4||input_kind==PAD_KIND_DUALSENSE)?PAD_KIND_DS4:PAD_INPUT_KEYBOARD;
 }
 void note_input(int kind){
- if(kind!=PAD_KIND_XINPUT&&kind!=PAD_KIND_DS4&&kind!=PAD_KIND_DUALSENSE)kind=PAD_INPUT_KEYBOARD;
+ if(kind!=PAD_KIND_XINPUT&&kind!=PAD_KIND_DS4&&kind!=PAD_KIND_DUALSENSE&&kind!=PAD_KIND_SWITCH)kind=PAD_INPUT_KEYBOARD;
  if(input_kind!=kind){input_kind=kind;repaint();}
 }
 void menu_pad(PadPhys& p){
@@ -266,7 +267,14 @@ void menu_pad(PadPhys& p){
  if(p.ly<64)p.buttons|=1u<<PB_UP;else if(p.ly>192)p.buttons|=1u<<PB_DOWN;
  if(p.lx<64)p.buttons|=1u<<PB_LEFT;else if(p.lx>192)p.buttons|=1u<<PB_RIGHT;
 }
-std::wstring button_hint(const wchar_t* key,const wchar_t* ps,const wchar_t* xbox){const int kind=hint_kind();return kind==PAD_INPUT_KEYBOARD?key:kind==PAD_KIND_XINPUT?xbox:ps;}
+// Switch names by position, from the PlayStation ones: B bottom, A right, Y left, X top; ZL/ZR are L2/R2.
+std::wstring switch_hint(std::wstring t){
+ const wchar_t* from[]={L"L2",L"R2",L"L1",L"R1",L"✕",L"○",L"□",L"△"};
+ const wchar_t* to[]={L"ZL",L"ZR",L"L",L"R",L"B",L"A",L"Y",L"X"};
+ for(int i=0;i<8;i++)for(size_t at=0;(at=t.find(from[i],at))!=std::wstring::npos;at+=wcslen(to[i]))t.replace(at,wcslen(from[i]),to[i]);
+ return t;
+}
+std::wstring button_hint(const wchar_t* key,const wchar_t* ps,const wchar_t* xbox){const int kind=hint_kind();return kind==PAD_INPUT_KEYBOARD?key:kind==PAD_KIND_XINPUT?xbox:kind==PAD_KIND_SWITCH?switch_hint(ps):ps;}
 std::wstring action_name(){if(tab==0)return mt(cv_test_i18n::LOAD);return saving?tr(ui::NEW_SAVE):mt(cv_test_i18n::LOAD_SAVE);}
 void paint(HWND h){painted_hint_kind=hint_kind();PAINTSTRUCT ps;HDC dc0=BeginPaint(h,&ps),dc=CreateCompatibleDC(dc0);HBITMAP bmp=CreateCompatibleBitmap(dc0,W,H);auto old=SelectObject(dc,bmp);
  fill(dc,{0,0,W,H},RGB(17,17,19));fill(dc,{0,0,W,3},red);border(dc,{0,0,W,H},RGB(67,58,46));
