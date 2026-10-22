@@ -343,6 +343,31 @@ void ini_set(const wchar_t* sec, const wchar_t* key, const std::wstring& v)
     }
     WritePrivateProfileStringW(sec, key, v.c_str(), path.c_str());
 }
+// Editable beside all regional executables; defaults are seeded only once.
+const wchar_t* k_social_keys[]={L"github",L"youtube"};
+const wchar_t* k_social_defaults[]={
+    L"https://github.com/kastiellcontato-design/re-cvx-ps3recomp",
+    L"https://www.youtube.com/@kastieloficial"};
+void init_social_links()
+{
+    for(int i=0;i<2;i++){
+        wchar_t value[2048];
+        GetPrivateProfileStringW(L"social",k_social_keys[i],L"__missing__",value,2048,ini_path().c_str());
+        if(std::wstring(value)==L"__missing__")ini_set(L"social",k_social_keys[i],k_social_defaults[i]);
+    }
+}
+std::wstring social_url(int index)
+{
+    wchar_t value[2048];
+    GetPrivateProfileStringW(L"social",k_social_keys[index],k_social_defaults[index],value,2048,ini_path().c_str());
+    std::wstring url(value);
+    // Only web links go to the browser; never execute a path or another scheme.
+    if(url.empty()||url.find_first_of(L" \t\r\n\"")!=std::wstring::npos)return {};
+    if(_wcsnicmp(url.c_str(),L"https://",8)&&_wcsnicmp(url.c_str(),L"http://",7))return {};
+    const auto host=url.find(L"://")+3;
+    if(host>=url.size()||url[host]==L'/'||url[host]==L'?'||url[host]==L'#')return {};
+    return url;
+}
 std::wstring widen(const char* s) { return std::wstring(s, s + strlen(s)); }
 std::wstring env_w(const char* n) { const char* e = getenv(n); return e ? fs::path(e).wstring() : L""; }
 
@@ -711,6 +736,7 @@ struct UI {
     int result = 0;              /* 1 = play */
     Bitmap* banner = nullptr;
     Bitmap* brand_logo=nullptr;
+    std::wstring social_urls[2];
     Bitmap* castle=nullptr;Bitmap* cover[3]={},*cover_bg[3]={};std::wstring art_path[3];
     std::wstring pad_status;       /* connected model ("" = none) */
     int pad_count = 0;
@@ -748,6 +774,7 @@ enum {
     ID_SRT=2400, ID_SRT_PART=2410, ID_DD_SRT_ENEMIES=2420, ID_DD_SRT_CORNER, ID_DD_SRT_LANGUAGE, ID_SRT_SCALE, ID_SRT_OPACITY,
     ID_DD_OV_CORNER = 2450, ID_DD_OV_LAYOUT, ID_DD_SRT_INVPOS, ID_DD_SRT_WINDOW, ID_DD_SRT_BOSSBAR, ID_DD_OV_SIZE, ID_DD_OV_BG,
     ID_TEX_BROWSE = 2300, ID_TEX_OPEN, ID_TEX_REPLACE, ID_TEX_DUMP, ID_TEX_DUMP_BROWSE, ID_TEX_DUMP_OPEN, ID_TEX_ALL, ID_TEX_ALL_RUN,
+    ID_SOCIAL_GITHUB=2580, ID_SOCIAL_YOUTUBE,
     ID_PAGE_THUMB = 2600, ID_PAGE_TRACK,
 };
 
@@ -1079,9 +1106,67 @@ void brand(Graphics& gr,float x,float y,float width){
  FontFamily face(L"Impact");Font logo(&face,34,FontStyleRegular,UnitPixel);SolidBrush ink(C_TEXT);StringFormat sf;sf.SetFormatFlags(StringFormatFlagsNoWrap);GraphicsState saved=gr.Save();gr.TranslateTransform(x,y);gr.ScaleTransform(width/218.f,1.f);gr.DrawString(L"RESIDENT EVIL",-1,&logo,PointF(0,0),&sf,&ink);gr.Restore(saved);
  FontFamily serif(L"Georgia");Font hint_font(&serif,14,FontStyleBold,UnitPixel);text(gr,L"CODE: VERONICA X",x,y+44,hint_font,C_RED_HI,StringAlignmentNear,width,25);
 }
+// Flat vector glyphs: no button outline, tile, or enclosing decoration.
+void social_icon(Graphics& gr,int index,float x,float y,Color color)
+{
+    GraphicsState saved=gr.Save();gr.TranslateTransform(x,y);gr.ScaleTransform(28.f/24.f,28.f/24.f);
+    SolidBrush ink(color);
+    GraphicsPath shape;
+    if(index==1){
+        shape.AddArc(0.f,3.f,8.f,8.f,180.f,90.f);shape.AddArc(16.f,3.f,8.f,8.f,270.f,90.f);
+        shape.AddArc(16.f,13.f,8.f,8.f,0.f,90.f);shape.AddArc(0.f,13.f,8.f,8.f,90.f,90.f);shape.CloseFigure();
+        PointF play[]={{9.5f,7.5f},{16.5f,12.f},{9.5f,16.5f}};shape.AddPolygon(play,3);
+        gr.FillPath(&ink,&shape); // alternate fill leaves the play triangle transparent
+    }else{
+        // Primer Octicons mark-github-16, MIT; see launcher_art/github-octicons-LICENSE.txt.
+        gr.ScaleTransform(1.5f,1.5f);
+        shape.AddBezier(6.76600f,11.32800f,4.70300f,11.07800f,3.25000f,9.59400f,3.25000f,7.67200f);
+        shape.AddBezier(3.25000f,7.67200f,3.25000f,6.89100f,3.53100f,6.04700f,4.00000f,5.48400f);
+        shape.AddBezier(4.00000f,5.48400f,3.79700f,4.96900f,3.82800f,3.87500f,4.06300f,3.42200f);
+        shape.AddBezier(4.06300f,3.42200f,4.68800f,3.34400f,5.53100f,3.67200f,6.03100f,4.12500f);
+        shape.AddBezier(6.03100f,4.12500f,6.62500f,3.93800f,7.25000f,3.84400f,8.01600f,3.84400f);
+        shape.AddBezier(8.01600f,3.84400f,8.78100f,3.84400f,9.40600f,3.93800f,9.96900f,4.10900f);
+        shape.AddBezier(9.96900f,4.10900f,10.45300f,3.67200f,11.31300f,3.34400f,11.93800f,3.42200f);
+        shape.AddBezier(11.93800f,3.42200f,12.15600f,3.84400f,12.18800f,4.93700f,11.98400f,5.46900f);
+        shape.AddBezier(11.98400f,5.46900f,12.48400f,6.06200f,12.75000f,6.85900f,12.75000f,7.67200f);
+        shape.AddBezier(12.75000f,7.67200f,12.75000f,9.59400f,11.29700f,11.04700f,9.20300f,11.31200f);
+        shape.AddBezier(9.20300f,11.31200f,9.73400f,11.65600f,10.09300f,12.40600f,10.09300f,13.26600f);
+        shape.AddLine(10.09300f,13.26600f,10.09300f,14.89100f);
+        shape.AddBezier(10.09300f,14.89100f,10.09300f,15.35900f,10.48400f,15.62500f,10.95300f,15.43800f);
+        shape.AddBezier(10.95300f,15.43800f,13.78100f,14.35900f,16.00000f,11.53000f,16.00000f,8.03000f);
+        shape.AddBezier(16.00000f,8.03000f,16.00000f,3.61000f,12.40600f,0.00000f,7.98400f,0.00000f);
+        shape.AddBezier(7.98400f,0.00000f,3.56300f,0.00000f,0.00000f,3.61000f,0.00000f,8.03100f);
+        shape.AddBezier(0.00000f,8.03100f,0.00000f,11.36000f,2.10000f,14.32000f,5.17200f,15.45300f);
+        shape.AddBezier(5.17200f,15.45300f,5.59400f,15.60900f,6.00000f,15.32800f,6.00000f,14.90600f);
+        shape.AddLine(6.00000f,14.90600f,6.00000f,13.65600f);
+        shape.AddBezier(6.00000f,13.65600f,5.78100f,13.75000f,5.50000f,13.81200f,5.25000f,13.81200f);
+        shape.AddBezier(5.25000f,13.81200f,4.21900f,13.81200f,3.61000f,13.25000f,3.17200f,12.20300f);
+        shape.AddBezier(3.17200f,12.20300f,3.00000f,11.78100f,2.81200f,11.53100f,2.45300f,11.48400f);
+        shape.AddBezier(2.45300f,11.48400f,2.26600f,11.46900f,2.20300f,11.39100f,2.20300f,11.29700f);
+        shape.AddBezier(2.20300f,11.29700f,2.20300f,11.10900f,2.51600f,10.96900f,2.82800f,10.96900f);
+        shape.AddBezier(2.82800f,10.96900f,3.28100f,10.96900f,3.67200f,11.25000f,4.07800f,11.82900f);
+        shape.AddBezier(4.07800f,11.82900f,4.39100f,12.28100f,4.71800f,12.48400f,5.10900f,12.48400f);
+        shape.AddBezier(5.10900f,12.48400f,5.50000f,12.48400f,5.75000f,12.34400f,6.10900f,11.98400f);
+        shape.AddBezier(6.10900f,11.98400f,6.37500f,11.71900f,6.57900f,11.48400f,6.76600f,11.32800f);
+        shape.CloseFigure();gr.FillPath(&ink,&shape);
+    }
+    gr.Restore(saved);
+}
+void draw_social_links(Graphics& gr,const Font& font)
+{
+    Pen divider(C_FIELD_BD);gr.DrawLine(&divider,22.f,H-140.f,SIDE-22.f,H-140.f);
+    for(int i=0;i<2;i++){
+        const int id=ID_SOCIAL_GITHUB+i;const float x=22.f+i*60.f,y=H-118.f;
+        const bool available=!g.social_urls[i].empty();
+        social_icon(gr,i,x,y,available?C_TEXT:C_DIM);
+        if(available)hit(x-8,y-8,44,44,id);
+        if(g.hover==id)text(gr,i?L"YouTube":L"GitHub",126,y+2,font,C_TEXT,StringAlignmentNear,SIDE-134.f,24);
+    }
+}
 void draw_sidebar(Graphics& gr,const Font&,const Font&,const Font& nav,const Font& footer_font){
  SolidBrush side(C_SIDE);gr.FillRectangle(&side,0,0,SIDE,H);Pen line(C_FIELD_BD);gr.DrawLine(&line,float(SIDE-1),0.f,float(SIDE-1),float(H));brand(gr,20,22,SIDE-38.f);
  for(int slot=0;slot<P_COUNT;slot++){const int i=k_nav_order[slot];float y=128.f+slot*49;bool active=g.page==i,hot=g.hover==ID_NAV+i;if(active||hot){LinearGradientBrush b(PointF(0,y),PointF(float(SIDE),y),active?Color(255,68,20,28):C_HOVER,C_SIDE);gr.FillRectangle(&b,0.f,y,float(SIDE),45.f);}if(active){SolidBrush b(C_RED);gr.FillRectangle(&b,0.f,y,3.f,45.f);}nav_icon(gr,i,22,y+10,active?C_TEXT:C_DIM);text(gr,i==P_INICIO?lx(design::GRAPHICS):i==P_JOGO?lx(design::GAMES):i==P_SAVES?lx(design::SAVES):T(k_nav[i]),62,y,nav,active?C_TEXT:C_DIM,StringAlignmentNear,SIDE-72.f,45);hit(0,y,SIDE,45,ID_NAV+i);}
+ draw_social_links(gr,footer_font);
  text(gr,T(S_CREDIT_KASTIEL),22,H-62.f,footer_font,C_DIM,StringAlignmentNear,SIDE-38.f,22);text(gr,k_launcher_version,22,H-38.f,footer_font,C_DIM);
 }
 void draw_play(Graphics& gr,const Font& big,const Font& hint_font){
@@ -2424,6 +2509,11 @@ void finish_srt_drag() {
 
 void click(int id)
 {
+    if(id==ID_SOCIAL_GITHUB||id==ID_SOCIAL_YOUTUBE){
+        const auto url=social_url(id-ID_SOCIAL_GITHUB);
+        if(!url.empty())ShellExecuteW(g.hwnd,L"open",url.c_str(),nullptr,nullptr,SW_SHOWNORMAL);
+        return;
+    }
     if((id>=2700&&id<2703)&&!g.running){
         g_version_picked=true;
         g.s.region_selected=id-2700;g.s.game=g.s.region_game[id-2700];g.s.rap=g.s.region_rap[id-2700];changed();return;
@@ -3129,6 +3219,8 @@ DWORD WINAPI launcher_thread(void*)
     GdiplusStartupInput gsi; ULONG_PTR gtok;
     GdiplusStartup(&gtok, &gsi, NULL);
     g.s = load_settings();
+    init_social_links();
+    for(int i=0;i<2;i++)g.social_urls[i]=social_url(i);
     cv_test_tools_enable(g.s.test_tools);
     cv_item_menu_enable(g.s.items_menu);   /* the saved choice, before any change */
     set_icon_env();   /* the button capture below reads the layout it implies */

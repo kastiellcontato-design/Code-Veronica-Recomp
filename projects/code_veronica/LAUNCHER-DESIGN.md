@@ -50,3 +50,17 @@ A marca desenhada por fontes no topo esquerdo foi substituída pelo PNG aprovado
 Apenas o espaço transparente de exportação é recortado no bitmap de exibição, mantendo o PNG original intacto. A imagem é ajustada proporcionalmente em uma caixa de 96 px de altura no cabeçalho da sidebar e usa o cache de desenho já existente. A marca de texto antiga é fallback se o recurso não puder ser lido. Não muda títulos, imagens das capas, abas, configurações ou comportamento do jogo. Backups/diff/logs desta mudança: work/launcher-logo no workspace do Codex.
 
 Validação desta logo: compilação e instalação dos executáveis JP/US/EU, com os recursos atualizados. O lld-link travou na etapa de link; os mesmos objetos e argumentos do CMake foram finalizados com o LINK do MSVC instalado, sem alterar fontes do jogo. Inspeção visual do launcher JP confirmou transparência, proporção, cores e espaço acima da navegação. Nenhuma partida foi iniciada. Hash do PNG idêntico à arte aprovada; manifesto em work/launcher-logo/installed.json.
+
+## Redes sociais no rodapé — 22/10/2026
+
+Ícones vetoriais do GitHub e YouTube em marfim neutro, sem moldura ou fundo próprio, abaixo da navegação. As áreas de clique têm 44 × 44 px; o cursor e o nome da rede no hover indicam a ação. O clique abre o navegador padrão, sem iniciar o jogo.
+
+Os links são lidos de `cv_launcher.ini`, ao lado dos executáveis regionais. A seção é criada no primeiro uso, sem substituir valores existentes. É possível mudar os endereços sem recompilar; deixar um valor vazio desativa seu link. Somente endereços http/https são aceitos.
+
+```ini
+[social]
+github=https://github.com/kastiellcontato-design/re-cvx-ps3recomp
+youtube=https://www.youtube.com/@kastieloficial
+```
+
+Para distribuir outros links como padrão, alterar `k_social_defaults` em `launcher.cpp`; para a instalação atual, editar apenas a seção acima. Não houve mudança na lógica do jogo.
