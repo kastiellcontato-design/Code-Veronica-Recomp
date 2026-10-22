@@ -193,3 +193,54 @@ Próximos passos possíveis, nenhum implementado:
 3. Mudança grande: o jogo renderiza só a 30 e o quadro intermediário reaproveita o lote gravado, com
    as poses interpoladas. Isso cortaria quase metade do trabalho do jogo e da gravação, mas pode
    mudar efeitos que avançam por render. Precisa de validação visual cuidadosa.
+
+## Medição sem FG: cutscene 3D com tiros de metralhadora (21/10/2026, 23:39)
+
+Build v4 + correção do FG, FG desligado, 1080p, cópia de diagnóstico. Cena 0x80030000 (Claire atira
+na cutscene). O overlay chegou a 46 FPS. Janelas de 5 s; as que contêm um F12 (rsxcap trava ~0,5 s)
+foram descartadas ou marcadas.
+
+| por lote nativo (2 apresentações) | sala pesada (mesa) | cutscene com tiros |
+|---|---|---|
+| intervalo por apresentação | 16,7 ms | 17,4–17,9 ms (média de 5 s) |
+| lógica do jogo | 30 tiques/s | 28,2–28,4 tiques/s |
+| pose no produtor | 10,7–11,2 ms | 10,3 → **14,9–16,3 ms** |
+| — histórico/busca | 4,3–4,5 ms | 6,7–7,2 ms |
+| — costuras | 2,8 ms | 4,1–4,8 ms |
+| candidatos de busca | ~46 mil | ~85–97 mil |
+| GPU (listas) por apresentação | 6,3 ms | 8,2–9,7 ms |
+| thread de render (CPU) por apresentação | ~7,8 ms | 8,0–8,2 ms |
+| desenhos por quadro | ~10,5 mil | ~10,8–10,9 mil |
+
+A captura F12 da cutscene (`rsxcap/frame_90`) registra `seams=66068 seam_conflicts=2673`, contra 49
+costuras na sala pesada: os modelos de perto (rosto, mãos, arma) multiplicam o trabalho de costura.
+
+Leitura: a GPU (~58% do lote) e a thread de render (~50%) ainda têm folga. Quem cresce é a pose no
+produtor (+50%), que divide a thread com a gravação dos desenhos. O jogo cai abaixo de 30 tiques/s e o
+intervalo sobe. Candidato principal: pose mais barata ou dividida entre núcleos (o processo usa ~53% da
+CPU no overlay). A divisão por grupos de desenho manteria o mesmo resultado. Falta confirmar com o
+amostrador externo (tsamp) que o produtor fica saturado nessa cena, e não o `ppu:main` do jogo.
+
+## v5 — pose numa thread própria (`rsx_pose`)
+
+Na v4 o produtor terminava de gravar o lote, calculava a pose (11–17 ms) e só então começava o lote
+seguinte. Agora ele entrega o lote à thread `rsx_pose` e segue gravando. A thread de render espera a
+pose do lote, pelo número da tarefa (`RenderBatch.pose_seq`), antes de desenhá-lo. É a mesma função
+(`pose_interpolate_batch_for`), com as mesmas entradas, na mesma ordem e um lote por vez, então o
+resultado não muda. A leitura do relógio só se desloca alguns microssegundos. O lote mantém a lista de
+desenhos, a arena FP e o conjunto de upload até a entrega seguinte do produtor, que já espera a thread
+de render. `CV_POSE_THREAD=0` volta à v4. Marcadores: `[POSE-THREAD] v1 on` e, com `CV_POSE_PROFILE=1`,
+`[POSE-THREAD] ... render_wait_ms` (tempo que a thread de render esperou a pose).
+
+Mesma cutscene com tiros (cena 0x80030000), FG desligado, janela mais pesada (~97 mil candidatos):
+
+| | v4 | v5 |
+|---|---|---|
+| intervalo por apresentação | 17,4–17,9 ms | **16,67 ms** |
+| lógica do jogo | 28,2–28,4 tiques/s | **30,0 tiques/s** |
+| pose por lote | 14,9–16,3 ms | 16,9 ms (agora fora do produtor) |
+| thread de render esperando a pose | — | até 10,2 ms por lote |
+
+O teste do usuário na JP confirmou que a cutscene não ficou mais lenta. A medição da v4 foi feita na
+mesma noite, mas não na mesma execução. Build `build-release.cmd` com `CV_BUILD_JP=1` e
+`CV_BUILD_US=1`: EU, JP e US compilados.

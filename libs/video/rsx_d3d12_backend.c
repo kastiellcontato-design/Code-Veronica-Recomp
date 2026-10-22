@@ -1010,6 +1010,7 @@ typedef struct {
     int  present;
     u32 pose_stamp,pose_nv,pose_scene;
     int pose_done;   /* replay: the producer already interpolated this batch */
+    u64 pose_seq;    /* ...or the pose thread is: wait for this job (pose_thread_wait) */
     double profile_producer,profile_backpressure;
     double profile_producer_cpu; int profile_producer_valid;
 } RenderBatch;
@@ -12392,11 +12393,89 @@ static void render_replay_batch(u32 count, double first_present)
     if (cost > 0 && cost < 0.05) s_replay_cost = s_replay_cost * 0.8 + cost * 0.2;
 }
 
+/* Replay pose on its own thread (CV_POSE_THREAD=0: the producer computes it,
+ * as in v4). Same function, same inputs, same order, one batch at a time;
+ * the job starts at once, so its clock reading moves by microseconds: the
+ * result does not change. The producer no longer waits for it and goes straight on to
+ * record the next batch; the render thread waits for the batch's job before
+ * drawing it. The batch keeps its draw list, FP arena and upload set until the
+ * producer's next handover, which already waits for the render thread. */
+static SRWLOCK s_pt_lock = SRWLOCK_INIT;
+static CONDITION_VARIABLE s_pt_cv = CONDITION_VARIABLE_INIT;
+static RenderBatch s_pt_batch;
+static u64 s_pt_submitted, s_pt_done;
+static int pose_thread_on(void);
+static DWORD WINAPI pose_thread_main(LPVOID p)
+{
+    (void)p;
+    for (;;) {
+        AcquireSRWLockExclusive(&s_pt_lock);
+        while (s_pt_done == s_pt_submitted) SleepConditionVariableSRW(&s_pt_cv, &s_pt_lock, INFINITE, 0);
+        ReleaseSRWLockExclusive(&s_pt_lock);
+        pose_interpolate_batch_for(&s_pt_batch);
+        AcquireSRWLockExclusive(&s_pt_lock);
+        s_pt_done++;
+        WakeAllConditionVariable(&s_pt_cv);
+        ReleaseSRWLockExclusive(&s_pt_lock);
+    }
+    return 0;
+}
+static int pose_thread_on(void)
+{
+    static int on = -1;
+    if (on < 0) {
+        const char* e = getenv("CV_POSE_THREAD");
+        on = !(e && !strcmp(e, "0"));
+        if (on) {
+            HANDLE t = CreateThread(NULL, 4u << 20, pose_thread_main, NULL, 0, NULL);
+            if (!t) on = 0;
+            else {
+                ps3_host_thread_name(t, "rsx_pose");
+                const char* pe = getenv("RSX_RENDER_PRIO");   /* as rsx_render */
+                if (!pe || *pe != '0') SetThreadPriority(t, THREAD_PRIORITY_ABOVE_NORMAL);
+            }
+        }
+        fprintf(stderr, "[POSE-THREAD] v1 %s; replay pose computed beside the recording of the next batch%c",
+                on ? "on" : "off (CV_POSE_THREAD=0)", 10);
+    }
+    return on;
+}
+/* Producer: after the previous job, start this batch's pose. Returns its job. */
+static u64 pose_thread_submit(const RenderBatch* b)
+{
+    AcquireSRWLockExclusive(&s_pt_lock);
+    while (s_pt_done != s_pt_submitted) SleepConditionVariableSRW(&s_pt_cv, &s_pt_lock, INFINITE, 0);
+    s_pt_batch = *b;
+    const u64 seq = ++s_pt_submitted;
+    WakeAllConditionVariable(&s_pt_cv);
+    ReleaseSRWLockExclusive(&s_pt_lock);
+    return seq;
+}
+/* Render thread: wait until job seq has written its pose. */
+static void pose_thread_wait(u64 seq)
+{
+    static double waited, reported; static u32 jobs;
+    const double t0 = pose_time();
+    AcquireSRWLockExclusive(&s_pt_lock);
+    while (s_pt_done < seq) SleepConditionVariableSRW(&s_pt_cv, &s_pt_lock, INFINITE, 0);
+    ReleaseSRWLockExclusive(&s_pt_lock);
+    if (!s_pose_profile) return;
+    const double t1 = pose_time();
+    waited += t1 - t0; jobs++;
+    if (!reported) reported = t1;
+    if (t1 - reported >= 5) {
+        fprintf(stderr, "[POSE-THREAD] %u batches render_wait_ms=%.3f (render thread waiting for the pose)%c",
+                jobs, waited * 1000.0 / jobs, 10);
+        waited = 0; jobs = 0; reported = t1;
+    }
+}
+
 static DWORD WINAPI render_thread_main(LPVOID p)
 {
     (void)p;
     for (;;) {
         WaitForSingleObject(s_rt_work, INFINITE);
+        if (s_rb.pose_seq) pose_thread_wait(s_rb.pose_seq);
         const u32 count = s_rb.count;
         const int replay = s_rb.present && rsx_d3d12_pose_replay_enabled() && pose_overlap_on();
         ps3_tl_begin(4);
@@ -12452,6 +12531,7 @@ static void render_frame(void)
      * thread may still draw the previous batch twice. The pose reads and
      * writes only this batch's own upload set, which no GPU work uses yet. */
     int pose_done = 0;
+    u64 pose_seq = 0;
     u32 pose_scene = 0;
     if (s_rt_async && s_present_this_frame && s_pose_on && rsx_d3d12_pose_replay_enabled()) {
         vf_flush();
@@ -12465,7 +12545,8 @@ static void render_frame(void)
         next.pose_stamp = s_pose_stamp;
         next.pose_nv = s_d3d.vp_vb_offset / 256;
         next.pose_scene = pose_scene = (u32)InterlockedCompareExchange(&s_pose_scene, 0, 0);
-        pose_interpolate_batch_for(&next);
+        if (pose_thread_on()) pose_seq = pose_thread_submit(&next);
+        else pose_interpolate_batch_for(&next);
         pose_done = 1;
     }
     /* Previous batch done on the CPU. With pose overlap the GPU may still
@@ -12485,7 +12566,7 @@ static void render_frame(void)
     s_rb.present    = s_present_this_frame;
     s_rb.pose_stamp=s_pose_stamp;s_rb.pose_nv=s_d3d.vp_vb_offset/256;
     s_rb.pose_scene=pose_done?pose_scene:(u32)InterlockedCompareExchange(&s_pose_scene,0,0);
-    s_rb.pose_done=pose_done;
+    s_rb.pose_done=pose_done;s_rb.pose_seq=pose_seq;
     s_rb.profile_producer=profile&&profile_released?profile_ready-profile_released:0;
     s_rb.profile_backpressure=profile_wait;
     /* GetThreadTimes is cumulative for one host thread. Never subtract across
