@@ -69,8 +69,19 @@ struct Visual {
 };
 Visual visuals[appearance_count];
 unsigned desired=0,current=0;
-bool loading=false,failed=false;
+// chosen: the menu was used this session. Index 0 is then Claire's own body
+// for Chris, Steve and Wesker; untouched, every character keeps their own.
+bool loading=false,failed=false,active=false,chosen=false;
+// Playing character (CV_SRT_CHARACTER: Claire, Chris, Steve, Wesker) and the
+// catalog entry of that character's own body.
+unsigned character=0;
+constexpr unsigned kOwnAppearance[]={0,2,3,4};
 Visual& visual(){return visuals[desired];}
+// Claire keeps the original rule: entry0 is her original, entry1 her alternate.
+bool wanted(){return character==0?desired!=0:chosen&&desired!=kOwnAppearance[character];}
+// Another character's body: hide the player's own auxiliary trees and hair,
+// and use the selected body's motions. For Claire this is entries 2 and up.
+bool foreign(){return character==0?desired>=2:desired!=kOwnAppearance[character];}
 thread_local bool inside_frame=false;
 thread_local bool custom_path_scope=false;
 std::chrono::steady_clock::time_point requested_at;
@@ -278,22 +289,37 @@ bool prepare(const PlayerAsset* asset){
  }return false;
 }
 
-bool claire(uint32_t& sys,uint32_t& actor){
- if(!mapped(kSys,4)||!mapped(kPlayer,4))return false;
+bool player(uint32_t& sys,uint32_t& actor){
+ if(!mapped(kSys,4)||!mapped(kPlayer,4)||!mapped(CV_SRT_CHARACTER,1))return false;
  sys=vm_read32(kSys);actor=vm_read32(kPlayer);
  if(!mapped(sys,0x28a88)||!mapped(actor,0x380))return false;
- // This is cosmetic Claire only. Official costume flags also affect scripts;
+ // This is cosmetic only. Official costume flags also affect scripts;
  // they are never written, nor are character, animation, or inventory fields.
  // Pause blocks the room task in +0x68 without unloading the actor.
  // Validate the scheduled room task; frame() separately gates live gameplay.
+ // Each character's RDX marker, as the SRT and inventory check it.
+ constexpr uint32_t rdx[]={0x3D650,0x3C4FC,0x3A4D0,0x3E814};
+ const unsigned who=vm_read8(CV_SRT_CHARACTER);
  const uint32_t tasks=vm_read32(sys+0x64);
- return (tasks&0x80)&&int32_t(vm_read32(CV_SRT_HEALTH))>0&&
-        vm_read8(sys+0x94)==0&&vm_read32(sys+0x28a84)==0&&
-        vm_read32(CV_SRT_RDX)==0x3d650&&vm_read32(actor+0x90)>0&&
-        vm_read32(actor+0x90)<=16&&vm_read32(actor+0x15c)==22;
+ // sys+0x94 is CV_SRT_CHARACTER itself (state base = CV_SRT_CHARACTER-0x94).
+ if(!((tasks&0x80)&&who<4&&int32_t(vm_read32(CV_SRT_HEALTH))>0&&
+      vm_read32(CV_SRT_RDX)==rdx[who]))return false;
+ if(!(vm_read32(sys+0x28a84)==0&&vm_read32(actor+0x90)>0&&
+      vm_read32(actor+0x90)<=16&&vm_read32(actor+0x15c)==22)){
+  static uint64_t reported=~0ull;
+  const uint64_t key=uint64_t(who)<<56^uint64_t(vm_read32(sys+0x28a84))<<24^vm_read32(actor+0x90)<<8^vm_read32(actor+0x15c);
+  if(key!=reported){reported=key;
+   std::fprintf(stderr,"[appearance] player %u not ready: +28A84=%08X slots=%u joints=%u\n",who,vm_read32(sys+0x28a84),vm_read32(actor+0x90),vm_read32(actor+0x15c));}
+  return false;
+ }
+ if(who!=character){
+  std::fprintf(stderr,"[appearance] playing character %u actor=%08X slots=%u\n",who,actor,vm_read32(actor+0x90));
+  character=who;
+ }
+ return true;
 }
 void restore(){
- if(!current)return;
+ if(!active)return;
  for(const auto& node:hidden_nodes)if(mapped(node.address,4))vm_write32(node.address,node.flags);
  hidden_nodes.clear();
  for(const auto& polygon:hidden_polygons)if(mapped(polygon.address,4))vm_write32(polygon.address,polygon.flags);
@@ -317,7 +343,7 @@ void restore(){
   }
   vm_write32(a+0x98,original.skin);vm_write32(a+0xd8,original.object);vm_write32(a+0x118,original.textures);
  }
- current=0;
+ active=false;current=0;
 }
 // The auxiliary model pass tests entity+0x88 bit 0x20 before using +0x118.
 // Without this selector it treats material12 as a room-particle texture index,
@@ -327,10 +353,11 @@ void bind_glasses_bank(){
  vm_write32(glasses_entity+0x88,vm_read32(glasses_entity+0x88)|0x20u);
 }
 void install(ppu_context* ctx,uint32_t actor){
- if(current||!visual().ready)return;
+ if(active||!visual().ready)return;
  if(vm_read32(actor+0x90)<3||vm_read32(actor+0x174)!=0||vm_read32(actor+0x18c)!=0)return;
- if(desired>=2){
-  if(vm_read32(actor+0x90)<4)return;
+ if(foreign()){
+  // Claire's hair slots must be loaded before they can be hidden.
+  if(character==0&&vm_read32(actor+0x90)<4)return;
   for(unsigned i=4;i<vm_read32(actor+0x90);i++){
    const uint32_t slot=actor+0x158+i*24,count=vm_read32(slot+4),source=vm_read32(slot+12);
    if(count>64||(count&&!mapped(source,count*52)))return;
@@ -364,7 +391,7 @@ void install(ppu_context* ctx,uint32_t actor){
   vm_write32(actor+0x180+i*24,visual().variant_expressions[i]);
  }
  vm_write32(actor+0x98,visual().variant_skin);vm_write32(actor+0xd8,visual().variant[3]);vm_write32(actor+0x118,visual().variant[4]);
- if(desired>=2){
+ if(foreign()){
   // Auxiliary objects retain these source trees independently of the actor's
   // descriptors. Hide the actual geometry, without destroying skin/physics data.
   for(unsigned i=4;i<vm_read32(actor+0x90);i++){
@@ -396,8 +423,8 @@ void install(ppu_context* ctx,uint32_t actor){
    std::fprintf(stderr,"[appearance] independent head accessory entity=%08X parent=%08X joint=5 bank-selector=0x20\n",glasses_entity,actor);
   }else std::fprintf(stderr,"[appearance] no accessory entity slot available\n");
  }
- current=desired;message="Appearance applied";
- std::fprintf(stderr,"[appearance] visual body and both blink texture states applied actor=%08X; campaign identity retained; selected motion table active\n",actor);
+ current=desired;active=true;message="Appearance applied";
+ std::fprintf(stderr,"[appearance] visual body and both blink texture states applied actor=%08X character=%u choice=%u; campaign identity retained; selected motion table active\n",actor,character,desired);
 }
 void fail(const char* why){failed=true;loading=false;message=why;std::fprintf(stderr,"[appearance] %s\n",why);}
 bool allocate(Call& call){
@@ -540,32 +567,39 @@ bool realize(Call& call,uint32_t list){
  visual().ready=true;return true;
 }
 } // namespace
-unsigned applied(){return current;}
+unsigned applied(){return active?current:0;}
 bool busy(){return loading;}
 const char* status(){return message.c_str();}
 bool request(ppu_context* ctx,unsigned choice,const PlayerAsset* asset){
  std::fprintf(stderr,"[appearance] request choice=%u asset=%u loading=%u current=%u\n",choice,unsigned(asset!=nullptr),unsigned(loading),current);
  if(choice>=appearance_count||loading)return false;
  if(choice!=desired){restore();desired=choice;}
- if(!choice){failed=false;restore();message="Original appearance applied";return true;}
- if(!prepare(asset)){failed=true;message="Incompatible model; original appearance retained";return false;}
+ chosen=true;
+ uint32_t sys=0,actor=0;const bool present=player(sys,actor);
+ // Prepared even when it is the current player's own body: a later save with
+ // another character uses it in this same session.
+ const bool prepared=prepare(asset);
+ if(present?!wanted():!choice){
+  failed=!prepared;restore();message="Original appearance applied";return true;
+ }
+ if(!prepared){failed=true;message="Incompatible model; original appearance retained";return false;}
  failed=false;
- uint32_t sys=0,actor=0;
- if(!claire(sys,actor)){
-  message="Selected; applies when Claire enters gameplay";
-  std::fprintf(stderr,"[appearance] selection queued until Claire is loaded sys=%08X actor=%08X\n",sys,actor);
+ if(!present){
+  message="Selected; applies when gameplay starts";
+  std::fprintf(stderr,"[appearance] selection queued until a player is loaded sys=%08X actor=%08X\n",sys,actor);
   return true;
  }
  if(visual().ready){install(ctx,actor);return true;}
  message="Loading appearance...";frame(ctx,true);return !failed;
 }
 void frame(ppu_context* ctx,bool in_menu){
- if(!desired||failed||inside_frame)return;
+ if((!desired&&!chosen)||failed||inside_frame)return;
  struct Guard{Guard(){inside_frame=true;}~Guard(){inside_frame=false;}} guard;
  if(!in_menu&&!cv_items::read().playing)return;
  uint32_t sys=0,actor=0;
- if(!claire(sys,actor))return;
- if(current){if(actor!=original.actor||vm_read32(actor+0x164)!=visual().variant[3]){restore();original={};}else {
+ if(!player(sys,actor))return;
+ if(!wanted()){restore();return;}
+ if(active){if(actor!=original.actor||vm_read32(actor+0x164)!=visual().variant[3]){restore();original={};}else {
   // Rooms can clear/recycle the auxiliary object pool without replacing
   // the player's body. Reinstall only if our own attachment was lost.
   if(current==4&&(!mapped(glasses_entity,0x4e4)||!(vm_read32(glasses_entity)&1)||
@@ -581,7 +615,7 @@ void frame(ppu_context* ctx,bool in_menu){
     std::fprintf(stderr,"[appearance] restored head accessory after pool reset entity=%08X\n",glasses_entity);
    }
   }
-  if(desired>=2)hide_attached_claire_hair(actor);
+  if(foreign())hide_attached_claire_hair(actor);
   for(const auto& node:hidden_nodes)vm_write32(node.address,vm_read32(node.address)|8u);
   return;
  }}
@@ -642,7 +676,7 @@ void before_player_load(){restore();original={};}
 // Entity ID zero normally runs a timed particle state machine. Our accessory
 // uses that ID only for dispatch; submit its real ML_WORK to the model pass.
 bool update_glasses(uint32_t entity){
- if(!entity||entity!=glasses_entity||current!=4||desired!=4||
+ if(!entity||entity!=glasses_entity||!active||current!=4||desired!=4||
     vm_read32(entity+0x2d8)!=visual().glasses_work)return false;
  bind_glasses_bank();
  const uint32_t sys=vm_read32(kSys);

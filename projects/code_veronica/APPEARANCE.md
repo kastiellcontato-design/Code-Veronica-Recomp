@@ -215,3 +215,17 @@ A captura `rsxcap/frame_90` (Alexia primeira forma, isqueiro aceso, tela branca)
 A causa estava no runtime, em `equipment_hands()` (v17): para retirar a mão aberta, a função regravava o corpo inteiro como strips de um único triângulo. A Alexia primeira forma tem 1920 triângulos, o que dava 1744 strips × 6 faces ≈ 10.5 mil desenhos, e a luz pontual estourava. Os zumbis têm cerca de metade e ficavam abaixo do limite.
 
 Correção: os strips originais são mantidos e cortados só em volta dos triângulos da mão. Cada trecho começa no vértice original, e o sinal do strip compensa a paridade quando o trecho começa num vértice ímpar. Os chunks conservam opcode, flags e bits altos do cabeçalho, com tamanho múltiplo de 4. Validação em Python com a mesma lógica nos 28 modelos v18: triângulos e orientação idênticos aos originais sem os da mão, e menos strips que o original (Alexia primeira forma 376 → 327; zumbis ~240 → ~210). Os modelos e o gerador continuam na v18; só o runtime mudou. Aguarda o teste do usuário com isqueiro e tiro na Alexia primeira forma e nos zumbis. Sem commit.
+
+## 2026-10-22 — aparência também para Chris, Steve e Wesker
+
+Antes, `cv_appearance_runtime.cpp` só aplicava a troca quando o marcador RDX era o da Claire (0x3D650). Agora `player()` aceita os quatro personagens jogáveis pelo mesmo teste do SRT e do inventário (`CV_SRT_CHARACTER` + marcador RDX: 0x3D650, 0x3C4FC, 0x3A4D0, 0x3E814), nas três regiões.
+
+- Claire: regra antiga intacta. Entrada 0 é o original, entrada 1 o traje alternativo, e de 2 em diante oculta o cabelo dela e usa os movimentos do escolhido.
+- Chris, Steve e Wesker: a entrada que é o próprio corpo deles (CHRIS, STEVE, WESKER) devolve o original. Qualquer outra vira troca, ocultando as árvores auxiliares do jogador e usando os movimentos do escolhido quando o modelo os tem (Claire e Alexias mantêm os movimentos do personagem jogado).
+- Entrada 0 (CLAIRE - ORIGINAL) só vira corpo da Claire nos outros personagens depois que o menu foi usado na sessão. Sem tocar no menu, todo mundo continua com o próprio corpo.
+- A escolha é preparada mesmo quando é o corpo do personagem atual, para valer depois ao carregar um save de outro personagem.
+- Log: `[appearance] playing character N actor=… slots=…` ao trocar de personagem, e `character=N choice=M` na aplicação.
+
+O primeiro build ainda falhava com o Chris: o teste antigo exigia `sys+0x94==0`, que é o próprio `CV_SRT_CHARACTER` (Claire = 0). Esse teste foi retirado; se outra condição barrar um personagem, o log mostra `[appearance] player N not ready: ...`.
+
+Teste do usuário (JP): com o Chris, Alexia humana, as duas Claires, Steve e Wesker (com óculos) foram aplicados e ficaram corretos na tela. Steve como personagem jogável não foi testado em jogo. Sem commit.
