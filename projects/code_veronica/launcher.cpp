@@ -1011,6 +1011,22 @@ namespace design=cv_launcher_design;
 const wchar_t* lx(design::Id id){return design::texts[g_lang][id];}
 const wchar_t* region_name(int i){return T(i==2?S_REGION_JP:i==1?S_REGION_US:S_REGION_EU);}
 const int region_order[]={2,1,0};
+/* A small flag for a k_versions slot (0 Europe, 1 America, 2 Japan), drawn as vectors. */
+void flag(Graphics& gr,int region,float x,float y,float w,float h){
+ GraphicsState st=gr.Save();gr.SetSmoothingMode(SmoothingModeAntiAlias);
+ if(region==2){SolidBrush white(Color(255,245,245,245)),red(Color(255,188,0,45));gr.FillRectangle(&white,x,y,w,h);
+  const float d=h*0.6f;gr.FillEllipse(&red,x+(w-d)/2,y+(h-d)/2,d,d);}
+ else if(region==1){SolidBrush red(Color(255,178,34,52)),white(Color(255,245,245,245)),blue(Color(255,60,59,110));
+  const int stripes=7;const float sh=h/stripes;
+  for(int k=0;k<stripes;k++)gr.FillRectangle(k%2?&white:&red,x,y+k*sh,w,sh+0.3f);
+  const float cw=w*0.42f,ch=sh*4;gr.FillRectangle(&blue,x,y,cw,ch);
+  for(int r=0;r<3;r++)for(int c=0;c<3;c++)gr.FillEllipse(&white,x+cw*(0.2f+c*0.3f)-0.6f,y+ch*(0.2f+r*0.3f)-0.6f,1.2f,1.2f);}
+ else{SolidBrush blue(Color(255,0,51,153)),gold(Color(255,255,204,0));gr.FillRectangle(&blue,x,y,w,h);
+  const float cx=x+w/2,cy=y+h/2,r=h*0.33f;
+  for(int k=0;k<12;k++){const float a=k*0.5235988f;gr.FillEllipse(&gold,cx+r*cosf(a)-0.9f,cy+r*sinf(a)-0.9f,1.8f,1.8f);}}
+ Pen edge(Color(90,0,0,0),1.f);gr.DrawRectangle(&edge,x,y,w,h);
+ gr.Restore(st);
+}
 /* Bicubic scaling of the castle and the PIC1/ICON0 art is the slow part of a
  * repaint, and a scroll repaints every wheel tick: scale each image once per
  * box size and copy it 1:1 afterwards. */
@@ -1086,7 +1102,7 @@ void draw_inicio(Graphics& gr,const Font& head,const Font& body,const Font&,cons
  text(gr,lx(design::GRAPHICS),x,320,head,C_TEXT);
  const float gap=16,cw=(w-2*gap)/3,cy=362,ch=250;
  const wchar_t* titles[]={lx(design::DISPLAY),lx(design::QUALITY),lx(design::PERFORMANCE)};
- for(int i=0;i<3;i++){float xx=x+i*(cw+gap);SolidBrush b(Color(245,22,21,23));gr.FillRectangle(&b,xx,cy,cw,ch);Pen p(Color(255,96,78,54));gr.DrawRectangle(&p,xx,cy,cw,ch);nav_icon(gr,i==0?P_INICIO:i==1?P_ATALHOS:P_DESEMPENHO,xx+17,cy+18,Color(255,187,159,116));text(gr,titles[i],xx+55,cy+12,head,C_TEXT,StringAlignmentNear,cw-66,34);}
+ for(int i=0;i<3;i++){float xx=x+i*(cw+gap);SolidBrush b(Color(245,22,21,23));gr.FillRectangle(&b,xx,cy,cw,ch);Pen p(Color(255,96,78,54));gr.DrawRectangle(&p,xx,cy,cw,ch);text(gr,titles[i],xx+17,cy+12,head,C_TEXT,StringAlignmentNear,cw-34,34);}
  auto setting=[&](int card,int row,const wchar_t* name,const std::wstring& value,int id,bool enabled=true){float xx=x+card*(cw+gap)+16,yy=cy+60+row*61; text(gr,name,xx,yy,hint_font,C_DIM,StringAlignmentNear,cw-32,21);dropdown(gr,RectF(xx,yy+22,cw-32,29),value,id,body,enabled);};
  setting(0,0,T(S_DISPLAY_MODE),mode_name(g.s.mode),ID_DD_MODE);setting(0,1,T(S_RENDER_RES),res_name(g.s.res),ID_DD_RES);
  setting(1,0,T(S_AA),aa_name(g.s.aa),ID_DD_AA);setting(1,1,T(S_ANISO),aniso_name(g.s.aniso),g.running?-1:ID_DD_ANISO,!g.running);setting(1,2,T(S_SHARPNESS),sharp_name(g.s.sharpness/10),ID_DD_SHARP);
@@ -1212,6 +1228,11 @@ void draw_jogo(Graphics& gr, const Font& head, const Font& body, const Font& fsm
         /* name, code, state */
         const float tx=xx+14,tw=card_w-28;
         text(gr,region_name(i),tx,yy+166,head,C_TEXT,StringAlignmentNear,tw,26);
+        {   /* the region's flag beside its name */
+            RectF m;StringFormat sf(StringFormat::GenericTypographic());const std::wstring nm=region_name(i);
+            gr.MeasureString(nm.c_str(),-1,&head,PointF(0,0),&sf,&m);
+            flag(gr,i,tx+m.Width+12,yy+172,22,15);
+        }
         text(gr,k_versions[i].code,tx,yy+192,fsm,C_DIM,StringAlignmentNear,tw,18);
         bool valid=false;if(added)check_game(g.s.region_game[i],&valid);
         std::error_code ec;const bool rap_ok=i==2||(!g.s.region_rap[i].empty()&&fs::is_regular_file(g.s.region_rap[i],ec));
