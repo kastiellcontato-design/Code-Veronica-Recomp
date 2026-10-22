@@ -1065,6 +1065,7 @@ static u32 s_pose_shadow_draws;
 static int s_pose_profile,s_pose_search_profile;
 static int s_pose_written[3];   /* per upload set: holds interpolated positions/cameras */
 static int s_replay_pass;    /* render thread: drawing the current batch a second time */
+static int s_pose_conflict_follow;   /* CV_POSE_CONFLICT_FOLLOW, see pose_interpolate_batch_for */
 static double pose_time(void) {
     static LARGE_INTEGER frequency;LARGE_INTEGER now;
     if(!frequency.QuadPart)QueryPerformanceFrequency(&frequency);
@@ -1121,6 +1122,8 @@ static void pose_init_recording(void) {
      if(!s_pose_recipes)s_pose_gpu_blend=0;}
     {const char* disabled=getenv("CV_POSE_NOVERTEX_VALIDATION_CACHE");s_pose_history.vertex_validation_cache_disabled=disabled&&*disabled=='1';}
     {const char* cap=getenv("CV_POSE_CAP_PRECHECK");s_pose_history.cap_precheck_disabled=cap&&!strcmp(cap,"0");}
+    {const char* e=getenv("CV_POSE_CONFLICT_FOLLOW");s_pose_conflict_follow=!(e&&!strcmp(e,"0"));
+     fprintf(stderr,"[POSE-CONFLICT] v4 follow=%s; a conflicted draw half pulled by a seam moves whole\n",s_pose_conflict_follow?"on":"off (CV_POSE_CONFLICT_FOLLOW=0)");}
     {const char* off=getenv("CV_POSE_REPEAT_WORK");s_pose_history.repeat_work_disabled=off&&!strcmp(off,"0");}
     {const char* stream=getenv("CV_POSE_STREAM_VECTORS");s_pose_history.stream_vectors=!stream||strcmp(stream,"0");}
     fprintf(stderr,"[POSE-STREAM] v1 %s; exact position packing and stationary checks\n",s_pose_history.stream_vectors?"SSE2":"original");
@@ -1226,18 +1229,8 @@ static void pose_interpolate_batch_for(const RenderBatch* rb) {
         memset(s_pose_seen_vertices,0,MAX_VERTICES*sizeof(u32));memset(s_pose_seen_cameras,0,MAX_DRAWS*sizeof(u32));
         u8* vb=(u8*)s_d3d.vp_vb_mapped+(size_t)rb->parity*MAX_VERTICES*256;
         u8* cb=(u8*)s_d3d.vp_cb_mapped+(size_t)rb->parity*MAX_DRAWS*VP_CB_STRIDE;
-        /* A coherence conflict (-2) keeps its whole group at the current pose.
-         * As a plain current value its seam points were "no proposal", so an
-         * interpolated neighbour pulled only those points: torn triangles at
-         * Steve's mouth and hair (JP F9, 254 of 440 conflicted draws). Veto
-         * them instead; the weld spreads the veto over the connected surface.
-         * CV_POSE_CONFLICT_VETO=0 restores the old merge. */
-        static int conflict_veto=-1;
-        if(conflict_veto<0){const char* e=getenv("CV_POSE_CONFLICT_VETO");conflict_veto=!(e&&!strcmp(e,"0"));
-            fprintf(stderr,"[POSE-CONFLICT] v1 %s; conflicted coherence groups keep their whole surface current\n",conflict_veto?"on":"off");}
         for(u32 i=0;i<nd;i++) {const RsxPoseDraw* d=s_pose_draws+i;
             const int32_t source=s_pose_history.vertex_sources[i],camera_source=s_pose_history.camera_sources[i];
-            if(conflict_veto&&source==-2)for(u32 k=0;k<d->count;k++)s_pose_seen_vertices[d->first+k]=2;
             for(u32 k=0;k<d->count;k++) {
                 const u32 v=d->first+k;if(s_pose_seen_vertices[v]==2)continue;float xyz[3];
                 if(source>=0)rsx_pose_vertex(&s_pose_history,(u32)source,k,xyz);else memcpy(xyz,vertices[v].xyz,sizeof xyz);
@@ -1272,6 +1265,29 @@ static void pose_interpolate_batch_for(const RenderBatch* rb) {
             for(u32 v=0;v<rb->pose_nv;v++)s_pose_seen_vertices[v]=2;
             for(u32 c=0;c<MAX_DRAWS;c++)s_pose_seen_cameras[c]=2;
             apply=0;
+        }
+        /* A coherence conflict (-2) keeps the current pose, but the weld
+         * still moves its points shared with an interpolated neighbour. Half
+         * pulled, its triangles tore (Steve's mouth and hair, JP F9: 254 of
+         * 440 conflicted draws). Move its remaining points by the mean pull,
+         * so the draw follows the neighbour whole. Nothing else changes. */
+        if(apply&&s_pose_conflict_follow)for(u32 i=0;i<nd;i++) {
+            if(s_pose_history.vertex_sources[i]!=-2)continue;
+            const RsxPoseDraw* d=s_pose_draws+i;double pull[3]={0,0,0};u32 pulled=0,still=0;
+            for(u32 k=0;k<d->count;k++) {
+                const u32 v=d->first+k;if(s_pose_seen_vertices[v]!=1)continue;
+                const float* out=s_pose_out_vertices+(size_t)v*3;
+                if(!memcmp(vertices[v].xyz,out,3*sizeof(float))){still++;continue;}
+                for(int a=0;a<3;a++)pull[a]+=out[a]-vertices[v].xyz[a];pulled++;
+            }
+            if(!pulled||!still)continue;
+            for(u32 k=0;k<d->count;k++) {
+                const u32 v=d->first+k;if(s_pose_seen_vertices[v]!=1)continue;
+                float* out=s_pose_out_vertices+(size_t)v*3;
+                if(memcmp(vertices[v].xyz,out,3*sizeof(float)))continue;
+                for(int a=0;a<3;a++)out[a]=vertices[v].xyz[a]+(float)(pull[a]/pulled);
+                if(s_pose_gpu_blend)s_pose_recipes[v]=UINT64_MAX;
+            }
         }
         if(s_pose_profile)phases[5]=pose_phase_elapsed(&phase);
         for(u32 v=0;v<rb->pose_nv;v++) {
@@ -10487,6 +10503,29 @@ static void pose_restore_batch(void)
     for(u32 c=0;c<MAX_DRAWS;c++)if(seen_cameras[c]==1&&memcmp(cameras+(size_t)c*32,out_cameras+(size_t)c*32,32*sizeof(float)))
         memcpy(cb+(size_t)c*VP_CB_STRIDE,cameras+(size_t)c*32,32*sizeof(float));
 }
+/* CV_FRAME_PROFILE: present-to-present pacing. A 60 FPS average can hide an
+ * uneven cadence (e.g. 10/23 ms); report percentiles and the two replay legs. */
+static void present_pace_note(void)
+{
+    static double last, reported, legs[2]; static u32 n, leg_n[2], short_n, long_n;
+    static float ms[1024];
+    if (!frame_profile_on()) return;
+    const double now = pose_time();
+    if (last > 0) {
+        const double d = (now - last) * 1000.0;
+        if (n < 1024) ms[n++] = (float)d;
+        if (d < 12.0) short_n++; else if (d > 21.0) long_n++;
+        legs[s_replay_pass] += d; leg_n[s_replay_pass]++;   /* 1: first->replay, 0: replay->next */
+    }
+    last = now;
+    if (!reported) reported = now;
+    if (now - reported < 5 || n < 8) return;
+    for (u32 i = 1; i < n; i++) { float x = ms[i]; u32 j = i; while (j && ms[j-1] > x) { ms[j] = ms[j-1]; j--; } ms[j] = x; }
+    fprintf(stderr, "[PRESENT-PACE] %u intervals p50=%.2f p90=%.2f p99=%.2f max=%.2f under12=%u over21=%u first_to_replay=%.2f replay_to_next=%.2f%c",
+            n, ms[n/2], ms[n*9/10], ms[n*99/100], ms[n-1], short_n, long_n,
+            leg_n[1] ? legs[1] / leg_n[1] : 0, leg_n[0] ? legs[0] / leg_n[0] : 0, 10);
+    n = short_n = long_n = leg_n[0] = leg_n[1] = 0; legs[0] = legs[1] = 0; reported = now;
+}
 static int pose_overlap_on(void);
 int rsx_d3d12_pose_replay_enabled(void);
 static void render_frame_impl(void)
@@ -12210,7 +12249,7 @@ skip_dump_consider: ;
               : s_d3d.swap_chain->lpVtbl->Present(s_d3d.swap_chain, 0,
                                                  s_tearing ? DXGI_PRESENT_ALLOW_TEARING : 0);
           if (_ph == DXGI_ERROR_DEVICE_REMOVED || _ph == DXGI_ERROR_DEVICE_RESET) dred_report("Present");
-          perf_overlay_frame(); }   /* skipped for an offscreen-only batch */
+          perf_overlay_frame(); present_pace_note(); }   /* skipped for an offscreen-only batch */
 
     if (cv_diag) cv_present_ms = (perf_now() - cv_present_start) * 1000.0;
     frame_profile_mark(FP_PRESENT);

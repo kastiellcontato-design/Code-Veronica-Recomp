@@ -800,7 +800,23 @@ diferentes, e a coerência marca o grupo como conflito (`vertex_sources=-2`, pos
 interpolada puxava só os pontos de borda coincidentes. Na captura, 254 dos 440 desenhos em conflito
 tinham parte dos vértices interpolada e parte atual, o que rasga os triângulos.
 
-Correção (`pose_interpolate_batch_for`): os vértices de um desenho em conflito viram veto (estado 2),
-como a proteção de alias. As costuras espalham o veto pela superfície conectada antes de escrever, então
-a superfície fica inteira e coerente na pose atual naquele quadro. `CV_POSE_CONFLICT_VETO=0` volta ao
-comportamento anterior. Marcador: `[POSE-CONFLICT] v1 on`. Teste do usuário na JP: boca certa.
+Tentativas descartadas, todas com a boca certa:
+1. Veto dos vértices em conflito (commit 164bb16). As costuras espalham o veto, e o personagem quase
+   inteiro deixava de interpolar: de ~23–29 mil para 1,7–3 mil vértices interpolados por quadro. O
+   usuário sentiu o 60 FPS menos fluido.
+2. Escolher para o grupo o histórico que move menos. Os desacordos com as peças vizinhas aumentam, e
+   os vetos das costuras também: média de 18 mil vértices por janela, contra 3 mil antes. Também menos
+   fluido.
+3. Tirar a peça em conflito das costuras. Fica fluido, mas abre frestas no rosto, nas mãos e no braço.
+
+Correção final (`pose_interpolate_batch_for`, depois das costuras): as costuras, os vetos e o resto da
+interpolação ficam como antes. Só um desenho em conflito que saiu das costuras "meio puxado" (parte
+dos pontos interpolada, parte atual) move os pontos parados pelo deslocamento médio dos puxados, e
+acompanha a vizinha inteiro. Simulação na F9 do modo antigo (2 quadros, 250 desenhos meio puxados):
+esticamento máximo dos triângulos de 74x para 1,0x. `CV_POSE_CONFLICT_FOLLOW=0` volta ao comportamento
+anterior (atalho de comparação `executar-code-veronica-japones-antes-da-boca.cmd`). Marcador:
+`[POSE-CONFLICT] v4 follow=on`. Teste do usuário na JP: boca certa e fluidez igual à de antes.
+
+Medição de compasso: com `CV_FRAME_PROFILE=1`, `[PRESENT-PACE]` mostra os percentis do intervalo
+entre apresentações e as duas pernas do replay. Na cutscene de abertura, com e sem a thread de pose:
+mediana de 16,6 ms, p90 entre 18,2 e 19,4 ms e 0 a 13 quadros acima de 21 ms a cada 300.
