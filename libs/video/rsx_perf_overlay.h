@@ -3,10 +3,13 @@
  *
  * PERF_OVERLAY lists what it shows, in this order, joined by commas:
  * fps (with the frame time beside it), cpu (whole system), gpu (3D engine, whole system),
- * ram (this process's working set) and vram (this process's video memory).
+ * ram (this process's working set), vram (this process's video memory), spu
+ * (the busiest SPU thread, share of one core) and rsx (the renderer thread).
  * Unset or empty: no overlay. PERF_OVERLAY_CORNER (tl, tr, bl, br; tr by
  * default) places it, and PERF_OVERLAY_LAYOUT (row or column) puts the
- * numbers side by side or one under the other. Read again every refresh, so
+ * numbers side by side or one under the other. PERF_OVERLAY_SCALE sizes it
+ * (0.5 to 2) and PERF_OVERLAY_BG=0 drops the box, outlining the text instead.
+ * Read again every refresh, so
  * a launcher can change them while the game runs.
  */
 #pragma once

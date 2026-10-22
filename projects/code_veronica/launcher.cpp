@@ -218,6 +218,7 @@ struct Settings {
     bool overlay = false;  /* the performance overlay (rsx_perf_overlay.h) */
     int overlay_items = 3; /* bits of k_overlay_items: FPS and frame time */
     int overlay_corner = 1, overlay_layout = 0;   /* 0 tl, 1 tr, 2 bl, 3 br; 0 a row, 1 a column */
+    int overlay_size = 1, overlay_text_only = 0;  /* 0 small, 1 medium, 2 large; 1: no box behind the numbers */
     bool shader_opt[6] = { true, true, true, true, true, true };   /* k_shader_opts, Desempenho page */
     std::wstring tex_dir;              /* texture mods (Mods page); empty: "mods/textures" beside the exe */
     std::wstring tex_dump_dir;         /* where dumps go; empty: <tex_dir>\<version>\dump */
@@ -240,7 +241,8 @@ struct Settings {
  * PERF_OVERLAY's. The frame time now rides with FPS: "ms" keeps its bit so
  * saved settings still line up, but it has no box of its own. */
 const struct { const char* id; const wchar_t* name; } k_overlay_items[] = {
-    { "fps", L"FPS" }, { "ms", nullptr }, { "cpu", L"CPU" }, { "gpu", L"GPU" }, { "ram", L"RAM" }, { "vram", L"VRAM" } };
+    { "fps", L"FPS" }, { "ms", nullptr }, { "cpu", L"CPU" }, { "gpu", L"GPU" }, { "ram", L"RAM" }, { "vram", L"VRAM" },
+    { "spu", L"SPU" }, { "rsx", L"RSX" } };
 const int NOVERLAY = sizeof k_overlay_items / sizeof k_overlay_items[0];
 struct ResOpt { const wchar_t* name; const char* scale; };
 const ResOpt k_res[] = {
@@ -456,6 +458,8 @@ Settings load_settings()
     s.overlay_items = _wtoi(ini_get(L"overlay", L"itens", L"3").c_str()) & ((1 << NOVERLAY) - 1);
     s.overlay_corner = std::clamp(_wtoi(ini_get(L"overlay", L"posicao", L"1").c_str()), 0, 3);
     s.overlay_layout = std::clamp(_wtoi(ini_get(L"overlay", L"disposicao", L"0").c_str()), 0, 1);
+    s.overlay_size = std::clamp(_wtoi(ini_get(L"overlay", L"tamanho", L"1").c_str()), 0, 2);
+    s.overlay_text_only = std::clamp(_wtoi(ini_get(L"overlay", L"so_texto", L"0").c_str()), 0, 1);
     s.patch_dir = ini_get(L"pastas", L"patches", L"");
     {
         const std::wstring on = ini_get(L"patches", L"arquivos", L"");
@@ -527,6 +531,8 @@ void save_settings(const Settings& s)
     ini_set(L"overlay", L"itens", std::to_wstring(s.overlay_items));
     ini_set(L"overlay", L"posicao", std::to_wstring(s.overlay_corner));
     ini_set(L"overlay", L"disposicao", std::to_wstring(s.overlay_layout));
+    ini_set(L"overlay", L"tamanho", std::to_wstring(s.overlay_size));
+    ini_set(L"overlay", L"so_texto", std::to_wstring(s.overlay_text_only));
     for (int i = 0; i < NSHADER_OPTS; i++)
         ini_set(L"shaders", k_shader_opts[i].key, s.shader_opt[i] ? L"1" : L"0");
     ini_set(L"texturas", L"pasta", s.tex_dir);
@@ -739,7 +745,7 @@ enum {
     ID_LOG_VIEW = 2100, ID_LOG_COPY, ID_LOG_SAVE, ID_LOG_FOLDER,
     ID_SHADER_OPT = 2200,                                          /* + k_shader_opts index */
     ID_SRT=2400, ID_SRT_PART=2410, ID_DD_SRT_ENEMIES=2420, ID_DD_SRT_CORNER, ID_DD_SRT_LANGUAGE, ID_SRT_SCALE, ID_SRT_OPACITY,
-    ID_DD_OV_CORNER = 2450, ID_DD_OV_LAYOUT, ID_DD_SRT_INVPOS, ID_DD_SRT_WINDOW, ID_DD_SRT_BOSSBAR,
+    ID_DD_OV_CORNER = 2450, ID_DD_OV_LAYOUT, ID_DD_SRT_INVPOS, ID_DD_SRT_WINDOW, ID_DD_SRT_BOSSBAR, ID_DD_OV_SIZE, ID_DD_OV_BG,
     ID_TEX_BROWSE = 2300, ID_TEX_OPEN, ID_TEX_REPLACE, ID_TEX_DUMP, ID_TEX_DUMP_BROWSE, ID_TEX_DUMP_OPEN, ID_TEX_ALL, ID_TEX_ALL_RUN,
     ID_PAGE_THUMB = 2600, ID_PAGE_TRACK,
 };
@@ -1190,7 +1196,8 @@ void draw_jogo(Graphics& gr, const Font& head, const Font& body, const Font& fsm
     }
     for(int slot=0;slot<n;slot++){
         const int i=shown[slot];const float xx=x+slot*(card_w+gap);
-        const bool added=!g.s.region_game[i].empty(),active=added&&g.s.region_selected==i;
+        /* With several ready versions nothing looks chosen until a card is clicked. */
+        const bool added=!g.s.region_game[i].empty(),active=added&&g.s.region_selected==i&&(g_version_picked||ready_count()<=1);
         SolidBrush bg(Color(240,18,18,20));gr.FillRectangle(&bg,xx,yy,card_w,hh);
         if(!g.running)hit(xx,yy,card_w,hh,added?2700+i:2710);   /* inner buttons are added later and win */
         /* art */
@@ -1720,14 +1727,17 @@ void draw_avancado(Graphics& gr, const Font& head, const Font& body, const Font&
     y += 40;
     /* where it sits, and its numbers side by side or one under the other:
      * one row, each name followed by its list */
-    {
+    {   /* then its size, and the box behind it or the numbers alone */
         const float col = (w - 24) / 2;
         const int layouts[] = { S_OV_ROW, S_OV_COLUMN };
-        const std::wstring names[] = { T(S_OV_POSITION), T(S_OV_LAYOUT) };
-        const std::wstring values[] = { T(S_SRT_TL + g.s.overlay_corner), T(layouts[g.s.overlay_layout]) };
-        const int ids[] = { ID_DD_OV_CORNER, ID_DD_OV_LAYOUT };
-        for (int i = 0; i < 2; i++) {
-            const float cx0 = x + i * (col + 24);
+        const design::Id sizes[] = { design::OV_SMALL, design::OV_MEDIUM, design::OV_LARGE };
+        const std::wstring names[] = { T(S_OV_POSITION), T(S_OV_LAYOUT), lx(design::OV_SIZE), lx(design::OV_BG) };
+        const std::wstring values[] = { T(S_SRT_TL + g.s.overlay_corner), T(layouts[g.s.overlay_layout]),
+                                        lx(sizes[g.s.overlay_size]), lx(g.s.overlay_text_only ? design::OV_BG_TEXT : design::OV_BG_BOX) };
+        const int ids[] = { ID_DD_OV_CORNER, ID_DD_OV_LAYOUT, ID_DD_OV_SIZE, ID_DD_OV_BG };
+        for (int i = 0; i < 4; i++) {
+            if (i == 2) y += 44;
+            const float cx0 = x + (i % 2) * (col + 24);
             RectF m; gr.MeasureString(names[i].c_str(), -1, &body, PointF(0, 0), &sf, &m);
             const float lw = std::min(m.Width + 12, col * 0.55f);
             text(gr, names[i], cx0, y, body, C_TEXT, StringAlignmentNear, lw, 32);
@@ -2139,6 +2149,8 @@ void paint(HDC hdc)
         else if (g.open_dd == ID_DD_SRT_BOSSBAR) { items = { T(S_SRT_BOSS_PANEL), T(S_SRT_BOSS_TOP), T(S_SRT_BOSS_BOTTOM) }; sel = g.s.srt_boss_bar; }
         else if (g.open_dd == ID_DD_OV_CORNER) { for (int i = 0; i < 4; i++) items.push_back(T(S_SRT_TL + i)); sel = g.s.overlay_corner; }
         else if (g.open_dd == ID_DD_OV_LAYOUT) { items = { T(S_OV_ROW), T(S_OV_COLUMN) }; sel = g.s.overlay_layout; }
+        else if (g.open_dd == ID_DD_OV_SIZE) { items = { lx(design::OV_SMALL), lx(design::OV_MEDIUM), lx(design::OV_LARGE) }; sel = g.s.overlay_size; }
+        else if (g.open_dd == ID_DD_OV_BG) { items = { lx(design::OV_BG_BOX), lx(design::OV_BG_TEXT) }; sel = g.s.overlay_text_only; }
         else if (g.open_dd == ID_DD_SRT_LANGUAGE) {
             items={T(S_SRT_FOLLOW),k_lang_name[LANG_EN],k_lang_name[LANG_PT]};item_lang={g_lang,LANG_EN,LANG_PT};
             for(int lang=2;lang<LANG_COUNT;lang++) {items.push_back(k_lang_name[lang]);item_lang.push_back(lang);}
@@ -2430,6 +2442,8 @@ void click(int id)
             else if (g.open_dd == ID_DD_SRT_BOSSBAR) g.s.srt_boss_bar = i;
             else if (g.open_dd == ID_DD_OV_CORNER) { g.s.overlay_corner = i; set_overlay_env(); }
             else if (g.open_dd == ID_DD_OV_LAYOUT) { g.s.overlay_layout = i; set_overlay_env(); }
+            else if (g.open_dd == ID_DD_OV_SIZE) { g.s.overlay_size = i; set_overlay_env(); }
+            else if (g.open_dd == ID_DD_OV_BG) { g.s.overlay_text_only = i; set_overlay_env(); }
             else { set_lang_pick(i == 0 ? -1 : k_lang_order[i - 1]); set_note_text_env(); }
             set_srt_env();
             g.open_dd = -1; changed(); return;
@@ -2443,7 +2457,7 @@ void click(int id)
         if (g.page == P_MODS) g.tex_rep = -1;        /* count the textures again */
     }
     else if (id >= ID_PATCH && id < ID_PATCH + NPATCHES) { g.s.patch[id - ID_PATCH] ^= true; changed(); }
-    else if (id == ID_DD_MODE || id == ID_DD_RES || id == ID_DD_AA || id == ID_DD_FPS || id == ID_DD_POSE_DEVICE || id == ID_DD_FRAME_GEN || id == ID_DD_ANISO || id == ID_DD_SHARP || id == ID_DD_LANG || id==ID_DD_SRT_ENEMIES || id==ID_DD_SRT_CORNER || id==ID_DD_SRT_LANGUAGE || id == ID_DD_OV_CORNER || id == ID_DD_OV_LAYOUT || id == ID_DD_SRT_INVPOS || id == ID_DD_SRT_WINDOW || id == ID_DD_SRT_BOSSBAR) {
+    else if (id == ID_DD_MODE || id == ID_DD_RES || id == ID_DD_AA || id == ID_DD_FPS || id == ID_DD_POSE_DEVICE || id == ID_DD_FRAME_GEN || id == ID_DD_ANISO || id == ID_DD_SHARP || id == ID_DD_LANG || id==ID_DD_SRT_ENEMIES || id==ID_DD_SRT_CORNER || id==ID_DD_SRT_LANGUAGE || id == ID_DD_OV_CORNER || id == ID_DD_OV_LAYOUT || id == ID_DD_OV_SIZE || id == ID_DD_OV_BG || id == ID_DD_SRT_INVPOS || id == ID_DD_SRT_WINDOW || id == ID_DD_SRT_BOSSBAR) {
         g.open_dd = id; g.dd_scroll = 0;
         if (id == ID_DD_LANG && g_lang_pick >= 0)   /* open with the chosen language in view */
             for (int i = 0; i < LANG_COUNT; i++)
@@ -2886,6 +2900,9 @@ void set_overlay_env()
     const char* corners[] = { "tl", "tr", "bl", "br" };
     set_env("PERF_OVERLAY_CORNER", corners[g.s.overlay_corner]);
     set_env("PERF_OVERLAY_LAYOUT", g.s.overlay_layout ? "column" : "row");
+    const char* scales[] = { "0.75", "1", "1.35" };
+    set_env("PERF_OVERLAY_SCALE", scales[g.s.overlay_size]);
+    set_env("PERF_OVERLAY_BG", g.s.overlay_text_only ? "0" : "1");
 }
 
 /* PAD_BTNMAP / PAD_KEYMAP from the settings: read by the pad at start, and by
