@@ -99,7 +99,23 @@ struct Painter {
         f.SetTrimming(StringTrimmingEllipsisCharacter);
         INT flags=StringFormatFlagsLineLimit;if(!wrap)flags|=StringFormatFlagsNoWrap;if(rtl)flags|=StringFormatFlagsDirectionRightToLeft;
         f.SetFormatFlags(flags);
-        SolidBrush b(c);g.DrawString(s.c_str(),-1,&font,r,&f,&b);
+        SolidBrush b(c);
+        // The fonts draw the PlayStation square tiny: draw it as a box between the text around it.
+        if(const size_t sq=s.find(L'□');sq!=std::wstring::npos&&!rtl&&!wrap&&h==StringAlignmentNear) {
+            StringFormat tf(StringFormat::GenericTypographic());tf.SetFormatFlags(StringFormatFlagsNoWrap|StringFormatFlagsMeasureTrailingSpaces);
+            tf.SetLineAlignment(vert);
+            const float line=font.GetHeight(&g),side=line*0.55f;float cx=r.X;size_t from=0;
+            const float top=vert==StringAlignmentCenter?r.Y+(r.Height-line)/2:r.Y;
+            for(size_t at=sq;;at=s.find(L'□',from)) {
+                const std::wstring part=s.substr(from,at==std::wstring::npos?std::wstring::npos:at-from);
+                if(!part.empty()){RectF m;g.MeasureString(part.c_str(),-1,&font,PointF(0,0),&tf,&m);
+                    g.DrawString(part.c_str(),-1,&font,RectF(cx,r.Y,std::max(0.f,r.X+r.Width-cx),r.Height),&tf,&b);cx+=m.Width;}
+                if(at==std::wstring::npos)break;
+                Pen box(c,1.2f);g.DrawRectangle(&box,cx+2,top+(line-side)/2,side,side);cx+=side+4;from=at+1;
+            }
+            return;
+        }
+        g.DrawString(s.c_str(),-1,&font,r,&f,&b);
     }
     // An item's art, fitted inside `r` keeping its proportions; its name when
     // the art is missing (unidentified cells keep their name, as in the SRT).

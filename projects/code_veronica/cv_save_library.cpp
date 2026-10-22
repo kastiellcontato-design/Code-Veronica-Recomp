@@ -227,7 +227,21 @@ void accept(){if(confirming){bool yes=confirm_yes;confirming=false;if(yes)activa
 void back(){if(confirming){confirming=false;repaint();}else close_window();}
 void fill(HDC dc,RECT r,COLORREF c){HBRUSH b=CreateSolidBrush(c);FillRect(dc,&r,b);DeleteObject(b);}
 void border(HDC dc,RECT r,COLORREF c){HBRUSH b=CreateSolidBrush(c);FrameRect(dc,&r,b);DeleteObject(b);}
-void label(HDC dc,const std::wstring& s,RECT r,HFONT font,COLORREF color,UINT flags=DT_LEFT|DT_SINGLELINE|DT_END_ELLIPSIS){auto old=SelectObject(dc,font);SetTextColor(dc,color);SetBkMode(dc,TRANSPARENT);if(cv_srt_i18n::rtl_text(s))flags|=DT_RTLREADING|DT_RIGHT;DrawTextW(dc,s.c_str(),int(s.size()),&r,flags|DT_NOPREFIX);SelectObject(dc,old);}
+void label(HDC dc,const std::wstring& s,RECT r,HFONT font,COLORREF color,UINT flags=DT_LEFT|DT_SINGLELINE|DT_END_ELLIPSIS){auto old=SelectObject(dc,font);SetTextColor(dc,color);SetBkMode(dc,TRANSPARENT);if(cv_srt_i18n::rtl_text(s))flags|=DT_RTLREADING|DT_RIGHT;
+ // The fonts draw the PlayStation square tiny: leave its room blank in the text and draw a box there.
+ const size_t sq=s.find(L'□');
+ if(sq!=std::wstring::npos&&(flags&DT_SINGLELINE)&&!(flags&DT_RTLREADING)){
+  TEXTMETRICW tm{};GetTextMetricsW(dc,&tm);const int side=std::max(6,int(tm.tmAscent*0.62f));
+  std::wstring spaced=s;SIZE gap{};GetTextExtentPoint32W(dc,L" ",1,&gap);spaced[sq]=L' ';   // an em space holds the box's place
+  SIZE all{},before{};GetTextExtentPoint32W(dc,spaced.c_str(),int(spaced.size()),&all);GetTextExtentPoint32W(dc,spaced.c_str(),int(sq),&before);
+  DrawTextW(dc,spaced.c_str(),int(spaced.size()),&r,flags|DT_NOPREFIX);
+  const int x0=(flags&DT_CENTER)?r.left+(r.right-r.left-all.cx)/2:(flags&DT_RIGHT)?r.right-all.cx:r.left;
+  const int bx=x0+before.cx+(gap.cx-side)/2,by=(flags&DT_VCENTER)?(r.top+r.bottom-side)/2:r.top+(tm.tmHeight-side)/2;
+  HPEN pen=CreatePen(PS_SOLID,1,color);auto old_pen=SelectObject(dc,pen);auto old_brush=SelectObject(dc,GetStockObject(NULL_BRUSH));
+  Rectangle(dc,bx,by,bx+side,by+side);SelectObject(dc,old_brush);SelectObject(dc,old_pen);DeleteObject(pen);
+  SelectObject(dc,old);return;
+ }
+ DrawTextW(dc,s.c_str(),int(s.size()),&r,flags|DT_NOPREFIX);SelectObject(dc,old);}
 constexpr COLORREF ivory=RGB(234,223,203),dim=RGB(157,148,137),brass=RGB(193,161,104),red=RGB(146,32,40);
 const wchar_t* chars[]={L"Claire Redfield",L"Chris Redfield",L"Steve Burnside",L"Albert Wesker"};
 void picture(HDC dc,const Record* e,RECT box){fill(dc,box,RGB(13,14,15));bool shown=false;

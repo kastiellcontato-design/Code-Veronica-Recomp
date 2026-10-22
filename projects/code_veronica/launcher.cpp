@@ -139,15 +139,21 @@ int g_lang = LANG_PT;        /* the language shown */
 int g_lang_pick = -1;        /* the choice: -1 = Sistema (follow Windows), else a Lang */
 bool s_shortcut_xbox=false;
 const wchar_t* T(int id) {
+    /* Controller hints name both pads, whatever is connected:
+     * "R1+R2+L1+L2+□" becomes "PS: R1+R2+L1+L2+□ · Xbox: RB+RT+LB+LT+X". */
     const wchar_t* original=k_str[g_lang][id];
-    if(!s_shortcut_xbox||!wcsstr(original,L"R1+R2+L1+L2+"))return original;
+    if(!wcsstr(original,L"R1+R2+L1+L2+")&&!wcsstr(original,L"L1/R1")&&!wcsstr(original,L"/A")&&!wcsstr(original,L"/X"))return original;
     static std::wstring hints[LANG_COUNT][S_COUNT];
     auto& hint=hints[g_lang][id];
     if(hint.empty()) {
         hint=original;
-        const wchar_t* ps[]={L"R1+R2+L1+L2+L3",L"R1+R2+L1+L2+R3",L"R1+R2+L1+L2+△",L"R1+R2+L1+L2+○",L"R1+R2+L1+L2+✕",L"R1+R2+L1+L2+□"};
-        const wchar_t* xb[]={L"RB+RT+LB+LT+LS",L"RB+RT+LB+LT+RS",L"RB+RT+LB+LT+Y",L"RB+RT+LB+LT+B",L"RB+RT+LB+LT+A",L"RB+RT+LB+LT+X"};
-        for(int i=0;i<6;i++)for(size_t at=0;(at=hint.find(ps[i],at))!=std::wstring::npos;at+=wcslen(xb[i]))hint.replace(at,wcslen(ps[i]),xb[i]);
+        const wchar_t* ps[]={L"R1+R2+L1+L2+L3",L"R1+R2+L1+L2+R3",L"R1+R2+L1+L2+△",L"R1+R2+L1+L2+○",L"R1+R2+L1+L2+✕",L"R1+R2+L1+L2+□",L"L1/R1",L"✕/A",L"□/X"};
+        const wchar_t* xb[]={L"RB+RT+LB+LT+LS",L"RB+RT+LB+LT+RS",L"RB+RT+LB+LT+Y",L"RB+RT+LB+LT+B",L"RB+RT+LB+LT+A",L"RB+RT+LB+LT+X",L"LB/RB",L"A",L"X"};
+        const wchar_t* ps_name[]={nullptr,nullptr,nullptr,nullptr,nullptr,nullptr,nullptr,L"✕",L"□"};
+        for(int i=0;i<9;i++)for(size_t at=0;(at=hint.find(ps[i],at))!=std::wstring::npos;){
+            const std::wstring both=L"PS: "+std::wstring(ps_name[i]?ps_name[i]:ps[i])+L" · Xbox: "+xb[i];
+            hint.replace(at,wcslen(ps[i]),both);at+=both.size();
+        }
     }
     return hint.c_str();
 }
@@ -787,6 +793,27 @@ void text(Graphics& gr, const std::wstring& t, float x, float y, const Font& f, 
         else { StringFormat s2; gr.DrawString(rtl.c_str(), -1, &f, PointF(x, y), &s2, &b); }
         return;
     }
+    /* The fonts draw the PlayStation square (□) tiny: draw it as a box instead,
+     * between the text around it. Left-aligned lines only (all the hints). */
+    const size_t sq = t.find_first_of(L"□◻");
+    if (sq != std::wstring::npos && h == StringAlignmentNear && w > 0 && hh > 0) {
+        StringFormat tf(StringFormat::GenericTypographic()); tf.SetFormatFlags(StringFormatFlagsNoWrap | StringFormatFlagsMeasureTrailingSpaces);
+        tf.SetLineAlignment(StringAlignmentCenter);
+        const float side = f.GetHeight(&gr) * 0.55f; float cx = x + 2;
+        size_t from = 0;
+        for (size_t at = sq; ; at = t.find_first_of(L"□◻", from)) {
+            const std::wstring part = t.substr(from, at == std::wstring::npos ? std::wstring::npos : at - from);
+            if (!part.empty()) {
+                RectF m; gr.MeasureString(part.c_str(), -1, &f, PointF(0, 0), &tf, &m);
+                gr.DrawString(part.c_str(), -1, &f, RectF(cx, y, std::max(0.f, x + w - cx), hh), &tf, &b);
+                cx += m.Width;
+            }
+            if (at == std::wstring::npos) break;
+            Pen box(c, 1.3f); gr.DrawRectangle(&box, cx + 2, y + (hh - side) / 2, side, side);
+            cx += side + 4; from = at + 1;
+        }
+        return;
+    }
     StringFormat sf; sf.SetAlignment(h); sf.SetLineAlignment(StringAlignmentCenter);
     sf.SetTrimming(StringTrimmingEllipsisPath);
     sf.SetFormatFlags(StringFormatFlagsNoWrap);
@@ -1127,12 +1154,10 @@ bool region_ready(int i)
 int ready_count() { int n = 0; for (int i = 0; i < 3; i++) n += region_ready(i); return n; }
 bool g_version_picked = false;   /* a card was clicked this session (needed with 2+ ready versions) */
 
-/* The shortcut as the player will press it: the key, plus the connected controller's buttons. */
+/* A shortcut on all three: keyboard, PlayStation and Xbox controllers. */
 std::wstring shortcut_text(const wchar_t* key, const wchar_t* ps, const wchar_t* xbox)
 {
-    std::wstring s = key;
-    if (g.pad_status.empty()) return s;
-    return s + L"   ·   " + (g.pad_kind == PAD_KIND_XINPUT ? xbox : ps);
+    return std::wstring(T(S_SC_COL_KEY)) + L": " + key + L"   ·   PlayStation: " + ps + L"   ·   Xbox: " + xbox;
 }
 
 void draw_jogo(Graphics& gr, const Font& head, const Font& body, const Font& fsm)
@@ -1196,6 +1221,7 @@ void draw_jogo(Graphics& gr, const Font& head, const Font& body, const Font& fsm
                 text(gr,lx(design::RAP_NOT_NEEDED),tx+8,yy+320,fsm,C_DIM,StringAlignmentNear,tw-16,30);
             } else {
                 const RectF rf(tx,yy+320,tw-40,30);field(gr,rf,false,false);
+                if(!rap_ok&&g.play_msg==lx(design::RAP_REQUIRED)&&g.s.region_selected==i){Pen need(amber,2.f);gr.DrawRectangle(&need,rf);}   /* where to fix it */
                 const bool has=!g.s.region_rap[i].empty();
                 text(gr,has?fs::path(g.s.region_rap[i]).filename().wstring():std::wstring(lx(design::RAP_PICK)),tx+8,yy+320,fsm,has&&rap_ok?C_TEXT:C_DIM,StringAlignmentNear,rf.Width-16,30);
                 button(gr,RectF(tx+tw-34,yy+320,34,30),L"…",2720+i,body,false,!g.running);
@@ -1249,7 +1275,7 @@ void draw_saves(Graphics& gr, const Font& head, const Font& body, const Font& fs
     section(gr,lx(design::SHOT_TITLE),x,y,w,head);
     y+=44;
     text(gr,lx(design::SHOT_DESC),x,y,fsm,C_DIM,StringAlignmentNear,w,20);
-    text(gr,std::wstring(lx(design::SHORTCUT))+L"  "+shortcut_text(L"F10",L"R1+R2+L1+L2+R3",L"RB+RT+LB+LT+RS"),
+    text(gr,shortcut_text(L"F10",L"R1+R2+L1+L2+R3",L"RB+RT+LB+LT+RS"),
          x,y+24,body,C_TEXT,StringAlignmentNear,w,24);
     button(gr,RectF(x,y+60,330,32),T(S_SHOT_OPEN),ID_SHOT_OPEN,body);
 }
@@ -1733,7 +1759,7 @@ void draw_avancado(Graphics& gr, const Font& head, const Font& body, const Font&
     y += 46;
     button(gr,RectF(x,y,390,32),T(g.s.test_tools?S_TEST_ENABLED:S_TEST_ENABLE),ID_TEST_ENABLE,body);
     button(gr,RectF(x+404,y,260,32),T(S_TEST_OPEN),ID_TEST_OPEN,body,false,g.s.test_tools&&g.running);
-    text(gr,std::wstring(lx(design::SHORTCUT))+L"  "+shortcut_text(L"F7",L"R1+R2+L1+L2+○",L"RB+RT+LB+LT+B"),
+    text(gr,shortcut_text(L"F7",L"R1+R2+L1+L2+○",L"RB+RT+LB+LT+B"),
          x,y+40,fsm,C_DIM,StringAlignmentNear,w,20);
 }
 
@@ -1820,27 +1846,41 @@ void draw_inventario(Graphics& gr,const Font& head,const Font& body,const Font& 
     section(gr,T(S_ITEMS_TITLE),x,34,w,head);
     text(gr,T(S_ITEMS_INTRO),x,70,fsm,C_DIM,StringAlignmentNear,w,24);
     option_card(gr,x,104,w,84,g.s.items_menu,ID_ITEMS_ENABLE,T(S_ITEMS_ENABLE_T),T(S_ITEMS_ENABLE_D),body,fsm);
-    /* The shortcut, as a key cap, beside how to use the menu. */
-    const float y=214;
-    RectF card(x,y,w,198);GraphicsPath* cp=round_rect(card,6);
+    /* How to use it: one row per action, keyboard / PlayStation / Xbox side by side. */
+    const float y=210;
+    RectF card(x,y,w,236);GraphicsPath* cp=round_rect(card,6);
     SolidBrush cb(C_PANEL);gr.FillPath(&cb,cp);Pen cbd(C_FIELD_BD,1);gr.DrawPath(&cbd,cp);delete cp;
-    RectF cap(x+20,y+22,74,58);GraphicsPath* kp=round_rect(cap,8);
-    SolidBrush kb(g.s.items_menu?C_RED:Color(255,60,52,52));gr.FillPath(&kb,kp);
-    Pen kbd(Color(255,255,200,200),1.5f);if(g.s.items_menu)gr.DrawPath(&kbd,kp);delete kp;
-    FontFamily serif(family(true,g_lang));Font fKey(&serif,26,FontStyleBold,UnitPixel);
-    text(gr,L"F6",cap.X,cap.Y+10,fKey,C_TEXT,StringAlignmentCenter,cap.Width,38);
-    text(gr,T(S_ITEMS_HOW_T),x+118,y+16,head,C_RED_HI,StringAlignmentNear,w-140,26);
+    text(gr,T(S_ITEMS_HOW_T),x+20,y+12,head,C_RED_HI,StringAlignmentNear,w-40,26);
     {
-        const std::wstring t=g_lang==LANG_AR?L"\u202B"+std::wstring(T(S_ITEMS_HOW))+L"\u202C":T(S_ITEMS_HOW);
-        StringFormat sf;sf.SetAlignment(StringAlignmentNear);sf.SetLineAlignment(StringAlignmentNear);
-        SolidBrush tb(C_TEXT);gr.DrawString(t.c_str(),-1,&body,RectF(x+118,y+50,w-138,142),&sf,&tb);
+        const float ax=x+20,kx=x+300,px=x+470,xx=x+690,hy=y+46;
+        text(gr,T(S_SC_COL_ACTION),ax,hy,fsm,C_DIM,StringAlignmentNear,270,20);
+        text(gr,T(S_SC_COL_KEY),kx,hy,fsm,C_DIM,StringAlignmentNear,160,20);
+        text(gr,L"PlayStation",px,hy,fsm,C_DIM,StringAlignmentNear,210,20);
+        text(gr,L"Xbox",xx,hy,fsm,C_DIM,StringAlignmentNear,w-(xx-x)-20,20);
+        struct Row{const wchar_t* what;const wchar_t* key;const wchar_t* ps;const wchar_t* xb;};
+        const Row rows[]={
+            {lx(design::ITEM_OPEN),L"F6  /  Esc",L"R1+R2+L1+L2+\u25B3",L"RB+RT+LB+LT+Y"},
+            {lx(design::ITEM_CATEGORY),L"Q  /  E",L"L1  /  R1",L"LB  /  RB"},
+            {lx(design::ITEM_CHOOSE),L"\u2191 \u2193 \u2190 \u2192",lx(design::DPAD),lx(design::DPAD)},
+            {lx(design::ITEM_PUT),L"Enter",L"\u2715",L"A"},
+            {lx(design::ITEM_TAKE),L"R",L"\u25A1",L"X"},
+        };
+        SolidBrush line(Color(255,46,38,38));float ry=hy+26;
+        for(const Row& r:rows){
+            gr.FillRectangle(&line,x+20,ry-3,w-40,1.f);
+            text(gr,r.what,ax,ry,body,C_TEXT,StringAlignmentNear,270,30);
+            text(gr,r.key,kx,ry,body,C_TEXT,StringAlignmentNear,160,30);
+            text(gr,r.ps,px,ry,body,C_TEXT,StringAlignmentNear,210,30);
+            text(gr,r.xb,xx,ry,body,C_TEXT,StringAlignmentNear,w-(xx-x)-20,30);
+            ry+=30;
+        }
     }
-    /* The warnings, in the SRT's amber. */
-    RectF warn(x,y+216,w,84);GraphicsPath* wp=round_rect(warn,6);
+    /* The warning, short, in the SRT's amber. */
+    RectF warn(x,y+252,w,52);GraphicsPath* wp=round_rect(warn,6);
     SolidBrush wb(Color(255,38,30,22));gr.FillPath(&wb,wp);Pen wbd(Color(255,120,90,40),1);gr.DrawPath(&wbd,wp);delete wp;
     SolidBrush bar(Color(255,226,172,82));gr.FillRectangle(&bar,warn.X,warn.Y,3.f,warn.Height);
     {
-        const std::wstring t=g_lang==LANG_AR?L"\u202B"+std::wstring(T(S_ITEMS_WARN))+L"\u202C":T(S_ITEMS_WARN);
+        const std::wstring t=g_lang==LANG_AR?L"\u202B"+std::wstring(lx(design::ITEM_WARN))+L"\u202C":lx(design::ITEM_WARN);
         StringFormat sf;sf.SetAlignment(StringAlignmentNear);sf.SetLineAlignment(StringAlignmentCenter);
         SolidBrush tb(Color(255,226,190,130));gr.DrawString(t.c_str(),-1,&fsm,RectF(warn.X+18,warn.Y+6,warn.Width-32,warn.Height-12),&sf,&tb);
     }
@@ -1926,12 +1966,13 @@ void draw_atalhos(Graphics& gr, const Font& head, const Font& body, const Font& 
     section(gr, T(S_SC_TITLE), x, y, w, head);
     text(gr, T(S_SC_HINT), x, y + 32, fsm, C_DIM, StringAlignmentNear, w, 20);
     y += 74;
-    const float kx = x, px = x + 130, ax = x + 330, aw = w - 330;
-    text(gr, T(S_SC_COL_KEY), kx, y, fsm, C_DIM, StringAlignmentNear, 120, 20);
-    text(gr, T(S_SC_COL_PAD), px, y, fsm, C_DIM, StringAlignmentNear, 190, 20);
+    /* keyboard, PlayStation and Xbox side by side, whatever is connected */
+    const float kx = x, px = x + 110, xx = x + 280, ax = x + 450, aw = w - 450;
+    text(gr, T(S_SC_COL_KEY), kx, y, fsm, C_DIM, StringAlignmentNear, 100, 20);
+    text(gr, L"PlayStation", px, y, fsm, C_DIM, StringAlignmentNear, 160, 20);
+    text(gr, L"Xbox", xx, y, fsm, C_DIM, StringAlignmentNear, 160, 20);
     text(gr, T(S_SC_COL_ACTION), ax, y, fsm, C_DIM, StringAlignmentNear, aw, 20);
     y += 26;
-    const wchar_t* prefix = s_shortcut_xbox ? L"RB+RT+LB+LT+" : L"R1+R2+L1+L2+";
     wchar_t items[300], maps[300];
     swprintf(items, 300, T(S_SC_ITEMS), T(S_NAV_ITEMS));
     swprintf(maps, 300, T(S_SC_MAPS), T(S_NAV_ADVANCED));
@@ -1947,8 +1988,9 @@ void draw_atalhos(Graphics& gr, const Font& head, const Font& body, const Font& 
     SolidBrush line(Color(255, 46, 38, 38));
     for (const Row& r : rows) {
         gr.FillRectangle(&line, x, y - 4, w, 1.0f);
-        text(gr, r.key, kx, y, body, C_TEXT, StringAlignmentNear, 120, 40);
-        text(gr, std::wstring(prefix) + (s_shortcut_xbox ? r.xb : r.ps), px, y, body, C_TEXT, StringAlignmentNear, 190, 40);
+        text(gr, r.key, kx, y, body, C_TEXT, StringAlignmentNear, 100, 40);
+        text(gr, std::wstring(L"R1+R2+L1+L2+") + r.ps, px, y, body, C_TEXT, StringAlignmentNear, 160, 40);
+        text(gr, std::wstring(L"RB+RT+LB+LT+") + r.xb, xx, y, body, C_TEXT, StringAlignmentNear, 160, 40);
         text(gr, r.what, ax, y, fsm, C_TEXT, StringAlignmentNear, aw, 40);
         y += 48;
     }
@@ -2424,8 +2466,6 @@ void click(int id)
             // The player picks the license themselves; no searching for one.
             std::wstring license=region==2?std::wstring():g.s.region_rap[region];
             g.s.region_selected=region;g.s.region_game[region]=path;g.s.region_rap[region]=license;g.s.game=path;g.s.rap=license;g_version_picked=true;
-            // A version that needs a license and has none: ask for it now.
-            if(license.empty()&&region!=2){auto rap=pick(false,path,T(S_RAP_FILTER),L"*.rap");if(!rap.empty()){g.s.region_rap[region]=rap;g.s.rap=rap;}}
             changed();
         }
     }
@@ -2549,6 +2589,11 @@ void click(int id)
         if(ready==1&&!region_ready(g.s.region_selected))
             for(int i=0;i<3;i++)if(region_ready(i)){g.s.region_selected=i;g.s.game=g.s.region_game[i];g.s.rap=g.s.region_rap[i];break;}
         if(ready>1&&!g_version_picked){g.page=P_JOGO;g.play_msg=lx(design::PICK_VERSION);InvalidateRect(g.hwnd,NULL,FALSE);return;}
+        {   /* US/EU need the license the player chose, even if an old decrypted EBOOT is still there */
+            const int r=g.s.region_selected;std::error_code ec;
+            if(r!=2&&!g.s.region_game[r].empty()&&(g.s.region_rap[r].empty()||!fs::is_regular_file(g.s.region_rap[r],ec))){
+                g.page=P_JOGO;g.play_msg=lx(design::RAP_REQUIRED);InvalidateRect(g.hwnd,NULL,FALSE);return;}
+        }
         bool ok; check_game(g.s.game, &ok);
         if (!ok) { g.page = P_JOGO; g.play_msg = T(S_SET_FOLDER_FIRST); }
         else if (folder_code() != GAME_CODE) { save_settings(g.s); start_other_version(); }
