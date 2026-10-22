@@ -984,7 +984,18 @@ void draw_inicio(Graphics& gr, const Font& head, const Font& body, const Font& c
     gr.FillRectangle(&fadeL, cx, 0.0f, 120.0f, bh);
     { const GameVersion* v = version_of(folder_code());
       if (!v) v = &own_version();
-      text(gr, std::wstring(v->code) + L"  ·  " + v->name, cx + 32, bh - 46, code, C_RED_HI); }
+      text(gr, std::wstring(v->code) + L"  ·  " + v->name, cx + 32, bh - 110, code, C_RED_HI); }
+    {   /* game and .rap checks under the title, shadowed to read over the art */
+        bool o1, o2;
+        std::wstring m1 = check_game(g.s.game, &o1), m2 = check_rap(g.s.rap, &o2);
+        const std::wstring* ms[2] = { &m1, &m2 }; bool oks[2] = { o1, o2 };
+        for (int i = 0; i < 2; i++) {
+            const std::wstring line = (oks[i] ? L"✔  " : L"✖  ") + *ms[i];
+            const float ly = bh - 74 + i * 26.0f;
+            text(gr, line, cx + 33, ly + 1, body, Color(220, 0, 0, 0), StringAlignmentNear, cw - 64, 24);
+            text(gr, line, cx + 32, ly, body, oks[i] ? C_OK : C_RED_HI, StringAlignmentNear, cw - 64, 24);
+        }
+    }
 
     float x = cx + 32, y = bh + 14;
     section(gr, T(S_QUICK), x, y, cw - 64, head);
@@ -1012,13 +1023,6 @@ void draw_inicio(Graphics& gr, const Font& head, const Font& body, const Font& c
         y+=44;
     }
     y+=10;
-    bool o1, o2;
-    std::wstring m1 = check_game(g.s.game, &o1), m2 = check_rap(g.s.rap, &o2);
-    const std::wstring* ms[2] = { &m1, &m2 }; bool oks[2] = { o1, o2 };
-    for (int i = 0; i < 2; i++) {
-        text(gr, (oks[i] ? L"✔  " : L"✖  ") + *ms[i], x, y + i * 24.0f, body, oks[i] ? C_OK : C_RED_HI,
-             StringAlignmentNear, cw - 64, 22);
-    }
     /* Keep the supported releases visible independently of the selected game. */
     text(gr, T(S_SUPPORTED_VERSIONS), x, H - 162.0f, fsm, C_DIM,
          StringAlignmentNear, cw - 64, 20);
