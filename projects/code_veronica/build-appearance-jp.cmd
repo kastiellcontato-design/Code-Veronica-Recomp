@@ -12,5 +12,5 @@ set "APPEARANCE_BUILD_RESULT=%ERRORLEVEL%"
 rem Restore the normal build selection, without replacing the normal EXE.
 cmake -S . -B build-release-jp -DCV_APPEARANCE=OFF
 if not "%APPEARANCE_BUILD_RESULT%"=="0" exit /b %APPEARANCE_BUILD_RESULT%
-echo Pronto: build-release\bin\MyGameRecomp_JP_Characters.exe
+echo Pronto: build-release\bin\CodeVeronicaPort_JP_Characters.exe
 exit /b 0

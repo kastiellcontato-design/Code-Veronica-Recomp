@@ -12,12 +12,12 @@ def main():
                                 ('device','CON.exe',0),('alias','saves./oops.exe',0),
                                 ('ads','file.dll:stream',0),('link','escape',0o120777<<16)]:
             with zipfile.ZipFile(bad/f'{name}.zip','w') as z:
-                z.writestr('MyGameRecomp.exe',b'wrong exe')
+                z.writestr('CodeVeronicaPort.exe',b'wrong exe')
                 info=zipfile.ZipInfo(entry);info.create_system=3;info.external_attr=attr
                 z.writestr(info,b'../outside' if name=='link' else b'bad')
         (bad/'truncated.zip').write_bytes(b'PK\x03\x04broken')
         with zipfile.ZipFile(root/'CodeVeronica-PC-v9.9.zip','w',zipfile.ZIP_DEFLATED) as z:
-            z.writestr('MyGameRecomp.exe',b'HTTP fake updated executable')
+            z.writestr('CodeVeronicaPort.exe',b'HTTP fake updated executable')
             z.writestr('cv_launcher.ini',b'overwrite settings')
             z.writestr('gamedata/save.bin',b'overwrite save')
         package=(root/'CodeVeronica-PC-v9.9.zip').read_bytes()
@@ -39,15 +39,15 @@ def main():
         try:subprocess.run([str(args.test_exe.resolve())],env=env,check=True)
         finally:server.shutdown();server.server_close();worker.join()
         live=root/'running-port';live.mkdir()
-        current=live/'MyGameRecomp.exe';shutil.copy2(args.test_exe,current)
+        current=live/'CodeVeronicaPort.exe';shutil.copy2(args.test_exe,current)
         running_zip=root/'running-update.zip'
-        with zipfile.ZipFile(running_zip,'w',zipfile.ZIP_DEFLATED) as z:z.write(args.test_exe,'MyGameRecomp.exe')
+        with zipfile.ZipFile(running_zip,'w',zipfile.ZIP_DEFLATED) as z:z.write(args.test_exe,'CodeVeronicaPort.exe')
         subprocess.run([str(current),'--apply-running',str(running_zip)],check=True,timeout=45)
         marker=live/'new-started.txt'
         deadline=time.monotonic()+30
         while not marker.exists() and time.monotonic()<deadline:time.sleep(.1)
         assert marker.read_text()=='updated launcher started'
-        assert not (live/'MyGameRecomp.exe.cvupd-old').exists()
+        assert not (live/'CodeVeronicaPort.exe.cvupd-old').exists()
         assert not (live/'.cvupd-cleanup').exists()
         print('Running executable: replacement + restart + old file cleanup passed.')
         print('Local HTTP release: fetch + SHA-256 + install + settings/save preservation passed.')

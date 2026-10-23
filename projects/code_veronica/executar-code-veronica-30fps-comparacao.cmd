@@ -46,7 +46,7 @@ set "PERF="
 set "PS3_TIMELINE="
 set "CV_LIGHTER_PROBE="
 set "FP_ZERO_K="
-set "GAME_EXE=%~dp0build-release\bin\MyGameRecomp_JP.exe"
+set "GAME_EXE=%~dp0build-release\bin\CodeVeronicaPort_JP.exe"
 if not exist "%GAME_EXE%" (
  echo Executavel japones nao encontrado: %GAME_EXE%
  pause

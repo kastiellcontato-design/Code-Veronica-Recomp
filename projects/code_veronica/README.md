@@ -1,5 +1,9 @@
 # Resident Evil Code: Veronica X HD — PS3 static recompilation (hobby port)
 
+> The player-facing documentation (features, setup, credits, license) is the
+> [repository README](../../README.md) — also in [Português](../../README.pt-BR.md)
+> and [Español](../../README.es.md). This page keeps developer notes.
+
 A work-in-progress native Windows port of **Resident Evil Code: Veronica X HD**
 (PSN, `NPEB00553`), built with [ps3recomp](https://github.com/sp00nznet/ps3recomp).
 
@@ -61,7 +65,7 @@ Implementation/testing: [FPS60-EXPERIMENTAL.md](FPS60-EXPERIMENTAL.md),
 2. **Lift the game** (generates `src/recomp/` and the SPU sources) by following
    [docs/GETTING_STARTED.md](../../docs/GETTING_STARTED.md).
 3. **Build optimized**: run `build-release.cmd`.
-   The output is `build-release/bin/MyGameRecomp.exe` with the FFmpeg DLLs copied next to it.
+   The output is `build-release/bin/CodeVeronicaPort.exe` with the FFmpeg DLLs copied next to it.
 
    Use the Release build. With the Debug build the lifted game code runs
    unoptimized (~98% of frame time), and the movies stutter badly.
@@ -69,7 +73,7 @@ Implementation/testing: [FPS60-EXPERIMENTAL.md](FPS60-EXPERIMENTAL.md),
 ### Japanese version (NPJB00135, BIOHAZARD CODE: Veronica Kanzenban)
 
 The Japanese PSN release is supported too, as a second executable,
-`MyGameRecomp_JP.exe`, beside the European one. Its EBOOT has a free licence,
+`CodeVeronicaPort_JP.exe`, beside the European one. Its EBOOT has a free licence,
 so no `.rap` is needed.
 
 ```
@@ -122,14 +126,14 @@ Há gameplay testada na versão japonesa. O launcher normal oferece 30 FPS nativ
 regiões usam as mesmas melhorias; ainda há bugs gráficos e de iluminação.
 
 A versão japonesa da PSN (NPJB00135) também funciona, como um segundo
-executável (`MyGameRecomp_JP.exe`); veja a seção "Japanese version" acima.
+executável (`CodeVeronicaPort_JP.exe`); veja a seção "Japanese version" acima.
 Ela não precisa de arquivo .rap.
 
 
 ### US version and save folder
 
 The US PSN release **NPUB30467 01.00** has its own lift and executable,
-`MyGameRecomp_US.exe`, beside EU and JP. Select its game folder in the same
+`CodeVeronicaPort_US.exe`, beside EU and JP. Select its game folder in the same
 launcher. Set `CV_BUILD_US=1` and run `build-release.cmd` to build it;
 `CV_BUILD_JP=1` updates JP in the same invocation.
 

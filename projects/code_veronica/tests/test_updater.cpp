@@ -83,7 +83,7 @@ int main()
     assert(is_protected(L"CON.exe"));
     assert(is_protected(L"saves./evil.exe"));
     assert(is_protected(L"file.dll:stream"));
-    assert(!is_protected(L"MyGameRecomp.exe"));
+    assert(!is_protected(L"CodeVeronicaPort.exe"));
     assert(!is_protected(L"avcodec-61.dll"));
     assert(!is_protected(L"AMD-FSR-LICENSE.md"));
 
@@ -113,12 +113,12 @@ int main()
     std::error_code ec;
     fs::remove_all(base, ec);
     const fs::path port = base / L"port ção", pkg = base / L"pkg" / L"CodeVeronica-v9.9";
-    put(port / L"MyGameRecomp.exe", "old exe");
+    put(port / L"CodeVeronicaPort.exe", "old exe");
     put(port / L"avcodec-61.dll", "old dll");
     put(port / L"cv_launcher.ini", "settings");
     put(port / L"gamedata/dev_hdd0/save.bin", "my save");
     put(port / L"shader_cache/a.cso", "cache");
-    put(pkg / L"MyGameRecomp.exe", "new exe");
+    put(pkg / L"CodeVeronicaPort.exe", "new exe");
     put(pkg / L"avcodec-61.dll", "new dll");
     put(pkg / L"novo.dll", "added");
     put(pkg / L"cv_launcher.ini", "packaged settings");
@@ -146,18 +146,18 @@ int main()
     {const auto result=download(r, base/L"dl", &p, &zip);
      if(result!=OK)std::fprintf(stderr,"download error=%d done=%llu size=%llu\n",int(result),(unsigned long long)p.done.load(),(unsigned long long)r.asset_size);
      assert(result==OK);}
-    assert(install(zip, port, L"MyGameRecomp.exe") == OK);
-    assert(get(port / L"MyGameRecomp.exe") == "new exe");
+    assert(install(zip, port, L"CodeVeronicaPort.exe") == OK);
+    assert(get(port / L"CodeVeronicaPort.exe") == "new exe");
     assert(get(port / L"avcodec-61.dll") == "new dll");
     assert(get(port / L"novo.dll") == "added");
     assert(get(port / L"cv_launcher.ini") == "settings");
     assert(get(port / L"gamedata/dev_hdd0/save.bin") == "my save");
     assert(get(port / L"shader_cache/a.cso") == "cache");
-    assert(get(port / L"MyGameRecomp.exe.cvupd-old") == "old exe");
+    assert(get(port / L"CodeVeronicaPort.exe.cvupd-old") == "old exe");
 
     /* a locked file (as the running exe's DLLs would be, without delete
      * sharing) cannot be renamed: the install undoes itself */
-    put(pkg / L"MyGameRecomp.exe", "newer exe");
+    put(pkg / L"CodeVeronicaPort.exe", "newer exe");
     assert(run(L"\"" + std::wstring(sys) + L"\\tar.exe\" -a -c -f \"" + zip_src.wstring() + L"\" -C \"" +
                pkg.parent_path().wstring() + L"\" CodeVeronica-v9.9"));
     r.asset_size = fs::file_size(zip_src);
@@ -167,10 +167,10 @@ int main()
     {
         HANDLE lock = CreateFileW((port / L"novo.dll").c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr);
         assert(lock != INVALID_HANDLE_VALUE);
-        assert(install(zip, port, L"MyGameRecomp.exe") == ERR_WRITE);
+        assert(install(zip, port, L"CodeVeronicaPort.exe") == ERR_WRITE);
         CloseHandle(lock);
     }
-    assert(get(port / L"MyGameRecomp.exe") == "new exe");   /* rolled back */
+    assert(get(port / L"CodeVeronicaPort.exe") == "new exe");   /* rolled back */
     assert(get(port / L"avcodec-61.dll") == "new dll");
 
     const fs::path outside=base/L"outside.cvupd-old";
@@ -179,26 +179,26 @@ int main()
      const auto bytes=(port/L".."/L"outside.cvupd-old").u8string(); list.write(reinterpret_cast<const char*>(bytes.data()),bytes.size());list<<"\n";}
     SetEnvironmentVariableW(L"CV_UPDATE_DONE", std::to_wstring(GetCurrentProcessId() + 4000000).c_str());   /* no such process */
     cleanup(port);
-    assert(!fs::exists(port / L"MyGameRecomp.exe.cvupd-old"));
+    assert(!fs::exists(port / L"CodeVeronicaPort.exe.cvupd-old"));
     assert(!fs::exists(port / L".cvupd-cleanup"));
-    assert(fs::exists(port / L"MyGameRecomp.exe"));
+    assert(fs::exists(port / L"CodeVeronicaPort.exe"));
     assert(get(outside)=="leave me");
 
     wchar_t fixtures[2048];
     if(GetEnvironmentVariableW(L"CV_UPDATER_FIXTURES",fixtures,2048)){
         for(const auto& f:fs::directory_iterator(fixtures)){
-            const auto result=install(f.path(),port,L"MyGameRecomp.exe");
+            const auto result=install(f.path(),port,L"CodeVeronicaPort.exe");
             if(result!=ERR_BAD_PACKAGE)std::fprintf(stderr,"bad zip unexpectedly accepted, error=%d\n",int(result));
             assert(result==ERR_BAD_PACKAGE);
-            assert(get(port/L"MyGameRecomp.exe")=="new exe");
+            assert(get(port/L"CodeVeronicaPort.exe")=="new exe");
         }
     }
     wchar_t url[2048];
     if(GetEnvironmentVariableW(L"CV_UPDATE_URL",url,2048)){
         Release http;assert(fetch_latest(&http)==OK);assert(http.tag==L"v9.9");
         assert(download(http,base/L"http",&p,&zip)==OK);
-        assert(install(zip,port,L"MyGameRecomp.exe")==OK);
-        assert(get(port/L"MyGameRecomp.exe")=="HTTP fake updated executable");
+        assert(install(zip,port,L"CodeVeronicaPort.exe")==OK);
+        assert(get(port/L"CodeVeronicaPort.exe")=="HTTP fake updated executable");
         assert(get(port/L"cv_launcher.ini")=="settings");
         assert(get(port/L"gamedata/dev_hdd0/save.bin")=="my save");
         cleanup(port);
@@ -208,13 +208,13 @@ int main()
     {
         const fs::path link = base / L"atalho";
         assert(run(L"cmd /c mklink /J \"" + link.wstring() + L"\" \"" + port.wstring() + L"\""));
-        put(pkg / L"MyGameRecomp.exe", "through junction");
+        put(pkg / L"CodeVeronicaPort.exe", "through junction");
         assert(run(L"\"" + std::wstring(sys) + L"\\tar.exe\" -a -c -f \"" + zip_src.wstring() + L"\" -C \"" +
                    pkg.parent_path().wstring() + L"\" CodeVeronica-v9.9"));
         r.asset_size = fs::file_size(zip_src);
         assert(download(r, base / L"dl", &p, &zip) == OK);
-        assert(install(zip, link, L"MyGameRecomp.exe") == OK);
-        assert(get(port / L"MyGameRecomp.exe") == "through junction");
+        assert(install(zip, link, L"CodeVeronicaPort.exe") == OK);
+        assert(get(port / L"CodeVeronicaPort.exe") == "through junction");
         cleanup(link);
         assert(!fs::exists(port / L".cvupd-cleanup"));
         RemoveDirectoryW(link.c_str());   /* the junction only, before remove_all */

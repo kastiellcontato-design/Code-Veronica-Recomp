@@ -190,7 +190,7 @@ endif()
 
 # Which EBOOT RECOMP_DIR holds: EU (NPEB00553, the default) or JP
 # (NPJB00135). The port's own guest addresses follow it (cv_version.h); the
-# JP build is MyGameRecomp_JP.exe, beside the EU one (build-release-jp.cmd).
+# JP build is CodeVeronicaPort_JP.exe, beside the EU one (build-release-jp.cmd).
 set(CV_REGION "EU" CACHE STRING "Game version of the lift in RECOMP_DIR: EU, JP or US")
 set_property(CACHE CV_REGION PROPERTY STRINGS EU JP US)
 string(TOLOWER "${CV_REGION}" CV_REGION_LC)
@@ -336,14 +336,20 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
 # link language from the generated C would leave the C++ standard library out.
 set_target_properties(${PROJECT_NAME} PROPERTIES LINKER_LANGUAGE CXX)
 
+# The executable name. The CMake target keeps its old name (MyGameRecomp) so
+# existing build folders only relink; the launcher's k_versions, the
+# packaging script and the LiveSplit script use these file names.
+set(CV_EXE_NAME "CodeVeronicaPort")
+set_target_properties(${PROJECT_NAME} PROPERTIES OUTPUT_NAME "${CV_EXE_NAME}")
+
 # The Japanese build: its own guest addresses (cv_version.h) and its own name,
 # so both executables share one folder (DLLs, launcher settings, caches).
 if(CV_REGION_LC STREQUAL "jp")
     target_compile_definitions(${PROJECT_NAME} PRIVATE CV_REGION_JP=1)
-    set_target_properties(${PROJECT_NAME} PROPERTIES OUTPUT_NAME "${PROJECT_NAME}_JP")
+    set_target_properties(${PROJECT_NAME} PROPERTIES OUTPUT_NAME "${CV_EXE_NAME}_JP")
 elseif(CV_REGION_LC STREQUAL "us")
     target_compile_definitions(${PROJECT_NAME} PRIVATE CV_REGION_US=1)
-    set_target_properties(${PROJECT_NAME} PROPERTIES OUTPUT_NAME "${PROJECT_NAME}_US")
+    set_target_properties(${PROJECT_NAME} PROPERTIES OUTPUT_NAME "${CV_EXE_NAME}_US")
 elseif(NOT CV_REGION_LC STREQUAL "eu")
     message(FATAL_ERROR "CV_REGION must be EU, JP or US, not ${CV_REGION}")
 endif()
@@ -462,7 +468,7 @@ if(WIN32)
 endif()
 
 if(CV_APPEARANCE)
-    set_target_properties(${PROJECT_NAME} PROPERTIES OUTPUT_NAME "MyGameRecomp_${CV_REGION}_Characters")
+    set_target_properties(${PROJECT_NAME} PROPERTIES OUTPUT_NAME "${CV_EXE_NAME}_${CV_REGION}_Characters")
 endif()
 
 # Exercises real callback-driven reads/writes in isolated temporary folders.

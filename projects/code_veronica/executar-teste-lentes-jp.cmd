@@ -15,7 +15,7 @@ set "VP_NOFIXPROJ=1"
 set "GCM_PARK_GRACE_MS=5000"
 set "SHADER_COMPILER=dxc"
 set "VBLANK_HZ=60"
-set "APPEARANCE_EXE=%~dp0build-release\bin\MyGameRecomp_JP_Appearance_Lenses.exe"
+set "APPEARANCE_EXE=%~dp0build-release\bin\CodeVeronicaPort_JP_Appearance_Lenses.exe"
 if not exist "%APPEARANCE_EXE%" (
  echo Executavel de aparencia nao encontrado. Rode build-appearance-jp.cmd.
  pause

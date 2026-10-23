@@ -172,7 +172,7 @@ logs, arquivos do jogo, dumps, previews de manuais nem diretorios de build.
   ilustracao. Retirada e destaque por remapeamento testados offline; teste
   final dentro do jogo ainda depende dele.
 
-Antes de qualquer build ou execucao, verificar MyGameRecomp*.exe e nunca
+Antes de qualquer build ou execucao, verificar CodeVeronicaPort*.exe e nunca
 encerrar o jogo do usuario. Usar somente build-release.cmd, com CV_BUILD_JP=1
  e CV_BUILD_US=1. Para teste isolado definir tambem CV_HD_BUTTON_TESTS_ONLY=1;
 para build dos jogos remover essa variavel e CV_KEYCAP_PREVIEW_ONLY. Nenhuma

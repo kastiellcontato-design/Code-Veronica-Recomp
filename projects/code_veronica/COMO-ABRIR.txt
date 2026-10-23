@@ -2,8 +2,8 @@
 
 De dois cliques em "Abrir Code Veronica" (atalho) ou em
 "executar-code-veronica-otimizado.cmd". Os dois abrem a versao otimizada
-(build-release\bin\MyGameRecomp.exe) com a pasta do jogo ja configurada.
-Nao abra o MyGameRecomp.exe direto: sem o iniciador ele nao acha o jogo.
+(build-release\bin\CodeVeronicaPort.exe) com a pasta do jogo ja configurada.
+Nao abra o CodeVeronicaPort.exe direto: sem o iniciador ele nao acha o jogo.
 Feche a janela do jogo para encerrar. O terminal permanece aberto para mostrar erros.
 O log fica em run-log-release.txt, nesta pasta.
 

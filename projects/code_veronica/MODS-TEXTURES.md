@@ -73,7 +73,7 @@ contados como ignorados; dados invalidos sao contados como erros.
 
 ## Reproduzir os testes
 
-Fechar jogo e launcher, sempre verificar MyGameRecomp*.exe antes. Somente
+Fechar jogo e launcher, sempre verificar CodeVeronicaPort*.exe antes. Somente
 projects/code_veronica/build-release.cmd e autorizado para compilar/executar.
 Definir CV_BUILD_JP=1, CV_BUILD_US=1 e CV_TEXTURE_EXPORT_TESTS_ONLY=1. O teste
 sempre le um mapa EU real; para uma varredura extra, CV_TEXTURE_EXPORT_SOURCE

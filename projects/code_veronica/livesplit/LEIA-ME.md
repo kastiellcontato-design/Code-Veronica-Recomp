@@ -3,8 +3,8 @@
 `recvx-ps3recomp.asl` é o autosplitter de Code Veronica do Kapdap
 ([re-cvx-autosplitter](https://github.com/kapdap/re-cvx-autosplitter), licença
 MIT, veja `LICENSE-recvx.txt`) com suporte ao nosso port. Ele reconhece as
-três versões: `MyGameRecomp.exe` (EU, NPEB00553), `MyGameRecomp_JP.exe`
-(JP, NPJB00135) e `MyGameRecomp_US.exe` (US, NPUB30467). Também continua
+três versões: `CodeVeronicaPort.exe` (EU, NPEB00553), `CodeVeronicaPort_JP.exe`
+(JP, NPJB00135) e `CodeVeronicaPort_US.exe` (US, NPUB30467). Também continua
 funcionando no RPCS3, no PCSX2 e no Dolphin, como o original.
 
 Ele faz tudo o que o original faz:

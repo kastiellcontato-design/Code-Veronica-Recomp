@@ -47,7 +47,7 @@ Before deployment the three previous play executables were copied to
 `appearance-backups/pre-production-20261021/`. Historical investigations remain
 in the task workspace's `work/appearance/STATUS.md`.
 
-Deployment completed 2026-10-21: all three regional candidates compiled successfully and were installed as MyGameRecomp.exe / MyGameRecomp_JP.exe / MyGameRecomp_US.exe. SHA256 copies verified; backup and manifest retained. All build caches restored to CV_APPEARANCE=OFF, CV_CHARACTERS=ON. Gameplay glasses fix remains pending user visual confirmation.
+Deployment completed 2026-10-21: all three regional candidates compiled successfully and were installed as CodeVeronicaPort.exe / CodeVeronicaPort_JP.exe / CodeVeronicaPort_US.exe. SHA256 copies verified; backup and manifest retained. All build caches restored to CV_APPEARANCE=OFF, CV_CHARACTERS=ON. Gameplay glasses fix remains pending user visual confirmation.
 
 ## Atualização para Cláudio — personagens e integração regional (21/10/2026)
 
@@ -77,9 +77,9 @@ As três versões compilaram com sucesso e foram instaladas nos nomes normais em
 
 | Região | Executável |
 | --- | --- |
-| Japonesa | `MyGameRecomp_JP.exe` |
-| Americana | `MyGameRecomp_US.exe` |
-| Europeia | `MyGameRecomp.exe` |
+| Japonesa | `CodeVeronicaPort_JP.exe` |
+| Americana | `CodeVeronicaPort_US.exe` |
+| Europeia | `CodeVeronicaPort.exe` |
 
 O atalho normal é `projects/code_veronica/executar-code-veronica-jogar.cmd`. É necessário reabrir o jogo para carregar a nova versão. As cópias instaladas foram conferidas por SHA256. Backup dos três executáveis anteriores e manifesto: `projects/code_veronica/appearance-backups/pre-production-20261021/`.
 

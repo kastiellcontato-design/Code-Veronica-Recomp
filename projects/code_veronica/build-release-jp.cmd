@@ -1,6 +1,6 @@
 @echo off
 rem Optimized build of the Japanese version (NPJB00135) into
-rem build-release\bin\MyGameRecomp_JP.exe, beside the European one.
+rem build-release\bin\CodeVeronicaPort_JP.exe, beside the European one.
 rem Needs the JP lift in src\recomp_jp (see cv_version.h for how it is made);
 rem the European build is build-release.cmd.
 setlocal

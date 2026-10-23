@@ -11,7 +11,7 @@
  *  https://opensource.org/licenses/MIT.
  *
  *  ps3recomp port support: this copy also attaches to the PC port's
- *  executables (MyGameRecomp.exe, MyGameRecomp_JP.exe, MyGameRecomp_US.exe).
+ *  executables (CodeVeronicaPort.exe, CodeVeronicaPort_JP.exe, CodeVeronicaPort_US.exe).
  *  Each exports g_cv_livesplit: "PS3RECOMP-CVX", then where the PS3's memory
  *  starts in the process (offset 16) and the release code (offset 24). The
  *  game's variables sit at their PS3 addresses from there, as in RPCS3, so
@@ -19,9 +19,9 @@
  */
 
 state("rpcs3") {}
-state("MyGameRecomp") {}
-state("MyGameRecomp_JP") {}
-state("MyGameRecomp_US") {}
+state("CodeVeronicaPort") {}
+state("CodeVeronicaPort_JP") {}
+state("CodeVeronicaPort_US") {}
 state("pcsx2") {}
 state("pcsx2-qtx64") {}
 state("pcsx2-qt") {}
@@ -1061,9 +1061,9 @@ init
                 print("pcsx2-qtx64 productPointer: " + productPointer.ToString("X16"));
                 break;
 
-            case "mygamerecomp":
-            case "mygamerecomp_jp":
-            case "mygamerecomp_us":
+            case "codeveronicaport":
+            case "codeveronicaport_jp":
+            case "codeveronicaport_us":
                 // The PC port: its exported g_cv_livesplit, found by name in the
                 // executable's export table (no memory scan).
                 basePointer = IntPtr.Zero;
@@ -1180,9 +1180,9 @@ init
                 }
                 break;
             case "rpcs3":
-            case "mygamerecomp":
-            case "mygamerecomp_jp":
-            case "mygamerecomp_us":
+            case "codeveronicaport":
+            case "codeveronicaport_jp":
+            case "codeveronicaport_us":
                 return memory.ReadString(pointer, 9);
         }
 

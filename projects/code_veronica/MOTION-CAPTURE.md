@@ -27,7 +27,7 @@ alterados. Executáveis regionais serão reconstruídos dos mesmos fontes estáv
 
 As seções abaixo são HISTÓRICO de investigação: resultados pendentes ou caminhos
 experimentais nelas descritos não representam o estado atual entregue.
-Validação concluída: builds JP/US/EU com target MyGameRecomp bem-sucedidos,
+Validação concluída: builds JP/US/EU com target CodeVeronicaPort bem-sucedidos,
 executáveis principais atualizados nos caminhos habituais. Suíte CPU v25 passou
 10000 quadros; GPU compute passou512 quadros WARP+512 hardware bit a bit com CPU;
 consumer DXC e blend WARP32768 resultados passaram; schema F9 v1/v2 passou.
@@ -79,8 +79,8 @@ Exemplo frame000 novo F9:11062 slots de sombra alinhados,23 componentes;frame017
 10638 slots;frame032 parado zero mudanças. Mediana inicial do helper0,887ms
 no replay local (inclui scratch, não é ganho nem benchmark de FPS do jogo).
 
-Compilação JP/DXC concluída: MyGameRecomp_JP.exe atualizado20/10 às15:41:44,
-233746944bytes. Targets MyGameRecomp,code_veronica_shadow_sync_tests e
+Compilação JP/DXC concluída: CodeVeronicaPort_JP.exe atualizado20/10 às15:41:44,
+233746944bytes. Targets CodeVeronicaPort,code_veronica_shadow_sync_tests e
 code_veronica_pose_tests concluídos com sucesso. Novo teste de produção rodado
 novamente nas525 capturas:47 com mudanças somente de sombra,422932 slots
 somados; mediana do helper0,946ms nesta execução, sem medição de FPS no jogo.
@@ -609,7 +609,7 @@ válida a 60 e testa coerência entre passes com chaves de material distintas.
 Validação concluída: replay sequencial de 133 amostras em quatro sessões v2,
 sem triângulos de veto parcial nem arestas >2x no caminho novo; regressões
 CPU/10.000 frames, fetch e blend VF passaram; 512 frames WARP + 512 hardware
-compute iguais à CPU bit a bit. Build JP concluído (MyGameRecomp_JP.exe).
+compute iguais à CPU bit a bit. Build JP concluído (CodeVeronicaPort_JP.exe).
 Comparação sequencial é reconstruída com amostras F9, não medição de FPS
 nem reprodução de todos os frames reais entre elas. As imagens finais
 continuam sendo a validação necessária do usuário.

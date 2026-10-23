@@ -1,8 +1,8 @@
 # v48 — promoção para o launcher normal EU / US / JP
 
 Por solicitação do usuário em 20/10/2026, o estado v47/pose v21 e FSR v4 foi
-promovido aos três executáveis normais: MyGameRecomp.exe (EU), MyGameRecomp_US.exe,
-MyGameRecomp_JP.exe. Todos usam o mesmo código de renderização/launcher, DXC por
+promovido aos três executáveis normais: CodeVeronicaPort.exe (EU), CodeVeronicaPort_US.exe,
+CodeVeronicaPort_JP.exe. Todos usam o mesmo código de renderização/launcher, DXC por
 padrão, 30 FPS nativos como seleção inicial e FSR desligado inicialmente.
 As preferências já salvas pelo usuário são respeitadas. Não é necessário abrir
 os CMDs de diagnóstico para usar 60 FPS/FSR. executar-code-veronica-jogar.cmd
@@ -151,7 +151,7 @@ com retorno à CPU, preservando o modo nativo de 30 FPS.
 
 ## Uso e comparação
 
-Somente `MyGameRecomp_JP.exe` foi recompilado nesta rodada. EU/US mantêm
+Somente `CodeVeronicaPort_JP.exe` foi recompilado nesta rodada. EU/US mantêm
 os hashes da entrega v37. GPU é experimental e desativada por padrão.
 No launcher JP, selecionar 60 FPS revela Interpolação: CPU/GPU; mudar com
 jogo fechado e reiniciar. O caminho 30 FPS não inicializa nem despacha
@@ -361,7 +361,7 @@ caminhorelativodo shim;rebuildsemerror. Nenhum ensaiodeFPSreal ainda.
 # v37 — Recomp Settings e modo normal30/60,JP/EU/US
 
 Escopo autorizado mudou:usuario quer pacote atual e correcao tambemUS/EU.
-Compilar MyGameRecomp nas3arvores,sem alterarEBOOT/saves/configpessoal.
+Compilar CodeVeronicaPort nas3arvores,sem alterarEBOOT/saves/configpessoal.
 
 UI:submit/done flipcontadores nao coincidem com ritmo de atualizacaodomenu.
 Antes UIexigia flip exato e menu exigia delta1. Agora menu aceita gap1..4
@@ -479,7 +479,7 @@ CV_PRODUCER_PROFILE mantem contexto/intervalos anteriores. Semrecompilar.
 JP/DXC/CPU/1080p,mesmacamera45s,F12final. FPS nestaexecucao sofreinterferencia
 da suspensao/amostragem e nao e benchmark AB. Apenas localizar funcoes caras.
 
-Usar RIP/RVA bruto para simbolizar no PDB exato deMyGameRecomp_JP.exe;
+Usar RIP/RVA bruto para simbolizar no PDB exato deCodeVeronicaPort_JP.exe;
 percentuais deamostras incluem esperas e nao sao CPUms diretos. guest
 atribuido porstack scan pode conter retornos antigos; priorizarRVA bruto.
 RVA vem em buckets16bytes,entao linha exata pode oscilar na fronteira.
@@ -1328,7 +1328,7 @@ pendente e mudança de geração/VS. Teste sintético de 6.000 draws repetidos
 entre passes: history 10,35 -> 6,33 ms com seis grupos de câmera, checksum
 idêntico. Carga pequena mista pode pagar cerca de 0,03 ms de indexação extra.
 Esses números não comprovam ganho de FPS no jogo; falta a rodada do usuário.
-Compilar somente MyGameRecomp no build-release-jp; conferir hashes EU/US.
+Compilar somente CodeVeronicaPort no build-release-jp; conferir hashes EU/US.
 
 ## Perfil do quadro v12, somente JP — 19/10/2026
 
@@ -1358,7 +1358,7 @@ Por orientação do usuário, nesta fase compilar e atualizar SOMENTE a versão
 japonesa. EU/US ficam para depois da validação. Build desta rodada usa
 build-release-jp.cmd diretamente, sem passar pelo build-release.cmd que
 sempre constrói EU. SHA-256 dos executáveis EU e US foi registrado antes e
-conferido depois: ambos preservados. MyGameRecomp_JP.exe foi atualizado.
+conferido depois: ambos preservados. CodeVeronicaPort_JP.exe foi atualizado.
 
 A interpolação continua v11. Esta rodada acrescenta diagnóstico opt-in:
 CV_FRAME_PROFILE=1, somente quando CV_FPS_TEST_60=1 e

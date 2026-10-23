@@ -2,7 +2,7 @@
 from pathlib import Path
 import argparse,hashlib,json,re,zipfile
 
-FILES=("MyGameRecomp.exe","MyGameRecomp_US.exe","MyGameRecomp_JP.exe",
+FILES=("CodeVeronicaPort.exe","CodeVeronicaPort_US.exe","CodeVeronicaPort_JP.exe",
        "avcodec-61.dll","avutil-59.dll","swresample-5.dll","swscale-8.dll",
        "amd_fidelityfx_framegeneration_dx12.dll","dxcompiler.dll","dxil.dll",
        "AMD-FSR-LICENSE.md","SAVE-LIBRARY-NOTICES.txt")
@@ -37,6 +37,17 @@ def main():
     sources={n:args.bin_dir/n for n in FILES}
     octicons=root/'launcher_art/github-octicons-LICENSE.txt'
     if octicons.is_file():sources['github-octicons-LICENSE.txt']=octicons
+    if (root/'LEIA-ME.txt').is_file():sources['LEIA-ME.txt']=root/'LEIA-ME.txt'
+    if (root/'README.txt').is_file():sources['README.txt']=root/'README.txt'
+    # The port's own license and the third-party license texts the binaries need.
+    repo=root.parents[1]
+    notices={'LICENSE.txt':repo/'LICENSE','THIRD-PARTY-NOTICES.md':repo/'THIRD-PARTY-NOTICES.md',
+             'licenses/FFmpeg-COPYING.LGPLv2.1.txt':repo/'third_party/ffmpeg/COPYING.LGPLv2.1',
+             'licenses/FFmpeg-LICENSE.md':repo/'third_party/ffmpeg/LICENSE.md',
+             'licenses/at3_standalone-COPYING.LGPLv2.1.txt':repo/'third_party/at3_standalone/COPYING.LGPLv2.1',
+             'licenses/SMAA-LICENSE.txt':repo/'third_party/smaa/LICENSE.txt'}
+    for n,path in notices.items():
+        if path.is_file():sources[n]=path
     for n in sources:
         with sources[n].open('rb') as f:manifest['files'][n]=hashlib.file_digest(f,'sha256').hexdigest()
     try:

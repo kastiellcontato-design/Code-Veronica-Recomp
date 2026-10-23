@@ -105,11 +105,11 @@ const Color C_BG(255,16,16,18),C_SIDE(255,11,11,13),C_PANEL(255,24,23,25),
  * reads the same settings and starts at once. */
 struct GameVersion { const wchar_t* code; const char* elf_sha1; const wchar_t* exe; const wchar_t* name; };
 const GameVersion k_versions[] = {
-    { L"NPEB00553", "d0c9d3ab3a5ed12c80ab77fe73fa58d464083fa1", L"MyGameRecomp.exe",
+    { L"NPEB00553", "d0c9d3ab3a5ed12c80ab77fe73fa58d464083fa1", L"CodeVeronicaPort.exe",
       L"Resident Evil Code: Veronica X (PSN)" },
-    { L"NPUB30467", "93d060e5019d877df39cd091c28efff920b98e49", L"MyGameRecomp_US.exe",
+    { L"NPUB30467", "93d060e5019d877df39cd091c28efff920b98e49", L"CodeVeronicaPort_US.exe",
       L"Resident Evil Code: Veronica X (PSN US)" },
-    { L"NPJB00135", "ad17bbfadf23937480ba0330616262e595dfaa78", L"MyGameRecomp_JP.exe",
+    { L"NPJB00135", "ad17bbfadf23937480ba0330616262e595dfaa78", L"CodeVeronicaPort_JP.exe",
       L"BIOHAZARD CODE: Veronica Kanzenban (PSN)" },
 };
 const wchar_t* GAME_CODE = L"" CV_TITLE_ID;

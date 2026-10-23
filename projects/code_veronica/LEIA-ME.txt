@@ -1,0 +1,118 @@
+RESIDENT EVIL CODE: VERONICA X - PORT PARA PC (ps3recomp)
+
+Port não oficial da versão de PS3 para Windows, feito por recompilação
+estática. Feito por Kastiel.
+
+NENHUM ARQUIVO DO JOGO VEM NESTE PACOTE. Você precisa ter a sua própria cópia
+original da versão PSN de PS3. Resident Evil e Code: Veronica são marcas da
+Capcom. Este é um projeto de fã, sem ligação com a Capcom ou a Sony e sem
+autorização ou apoio delas.
+
+Versões compatíveis (só a versão 01.00 de cada uma):
+
+  NPEB00553  europeia     -> CodeVeronicaPort.exe     (precisa da licença .rap)
+  NPUB30467  americana    -> CodeVeronicaPort_US.exe  (precisa da licença .rap)
+  NPJB00135  japonesa     -> CodeVeronicaPort_JP.exe  (não precisa de .rap)
+
+Não precisa de firmware do PS3 nem do RPCS3 para jogar.
+
+
+1. ANTES DA PRIMEIRA VEZ
+
+- Windows 10 ou 11, 64 bits, com placa de vídeo compatível com DirectX 12.
+- Instale o Visual C++ Redistributable x64 (pasta "requisitos", arquivo
+  vc_redist.x64.exe, ou https://aka.ms/vs/17/release/vc_redist.x64.exe).
+  Se o Windows disser que já está instalado, pode fechar. Sem ele o exe
+  reclama de MSVCP140.dll ou VCRUNTIME140.dll.
+- Extraia o zip inteiro para uma pasta onde você tenha permissão de escrita
+  (por exemplo C:\Jogos\CodeVeronica). Não rode de dentro do zip, nem de
+  "Arquivos de Programas". Todos os arquivos precisam ficar juntos.
+
+
+2. PREPARANDO O JOGO (PASTA, NÃO .PKG)
+
+O port lê o jogo de uma PASTA. Um arquivo .pkg não abre direto: ele precisa
+ser instalado ou extraído antes, como nos ports de PS4 que usam pasta.
+
+a) Instale o seu .pkg no RPCS3 (File > Install Packages/Raps/Edats). A pasta
+   do jogo fica em RPCS3\dev_hdd0\game\NPEB00553 (ou NPUB30467 / NPJB00135).
+   Qualquer ferramenta que extraia o PKG para a mesma pasta também serve.
+   Depois disso o port não precisa mais do RPCS3.
+b) A pasta certa é a que tem o PARAM.SFO e o USRDIR\EBOOT.BIN.
+c) Europeia e americana: ache o arquivo .rap da conta que comprou o jogo. No
+   RPCS3 ele fica em dev_hdd0\home\00000001\exdata e tem o código do jogo no
+   nome. Se você colocar o .rap dentro da pasta do jogo, o launcher acha
+   sozinho. A japonesa não precisa de .rap.
+d) Não precisa descriptografar nada. Na primeira vez, o EBOOT.BIN é
+   descriptografado sozinho para a pasta eboot_cache (leva menos de um
+   segundo). Os seus arquivos originais não são alterados.
+
+
+3. COMO JOGAR
+
+1. Abra CodeVeronicaPort.exe (qualquer um dos três abre o mesmo launcher).
+2. Na página Jogos, adicione a pasta de cada versão que você tem e, na
+   europeia e na americana, o arquivo .rap, se ele não tiver sido achado.
+3. Escolha a versão, ajuste gráficos e controles e clique em Jogar.
+
+O launcher confere a versão; outra versão mostra um aviso. Nas primeiras
+partidas pode haver pequenos trancos enquanto os shaders são compilados. Eles
+ficam guardados em shader_cache e não se repetem.
+
+
+4. ATALHOS DURANTE O JOGO
+
+No controle, segure primeiro R1+R2+L1+L2 (Xbox: RB+RT+LB+LT; Switch:
+R+ZR+L+ZL) e depois aperte o último botão.
+
+  Insert / F5  (+L3)   menu de opções (tela, áudio, SRT, sair)
+  F6           (+△)    menu de itens (ativar em Cheats)
+  F7           (+○)    mapas, salvar e carregar (ativar em Avançado)
+  F8           (+✕)    mostra ou esconde o SRT
+  F9           (+□)    liga/desliga as texturas do mod
+  F10          (+R3)   screenshot, salva na pasta screenshots
+
+Controle Xbox, DualShock 4, DualSense e Switch funcionam, com vibração. Sem
+controle, o teclado usa: setas = direção, X = Cruz, Z = Círculo, A = Quadrado,
+S = Triângulo, I = Start, R = Select. Tudo pode ser trocado no launcher.
+
+
+5. MODS DE TEXTURA
+
+O port troca texturas por PNGs (de qualquer tamanho) e extrai as originais.
+1. Na página Mods, use "Extrair texturas de todos os mapas" (Iniciar extração)
+   ou "Extrair texturas das salas visitadas" (jogando). Os PNGs vão para
+   mods\texture-dumps\<versão>.
+2. Edite os PNGs mantendo o código de 16 caracteres do começo do nome e
+   coloque em mods\textures\NPEB00553 (ou NPUB30467 / NPJB00135).
+3. Ligue "Substituir texturas". F9 liga e desliga no jogo.
+Pacotes HD da versão de PS2 costumam funcionar, mas cada arquivo precisa ser
+renomeado com o código do PS3 da textura igual (veja nas texturas extraídas).
+
+
+6. ONDE FICAM AS COISAS (tudo dentro da pasta do port)
+
+- cv_launcher.ini ......... suas configurações
+- gamedata\dev_hdd0\ ...... saves (pode ser trocado em "pasta dos saves")
+- shader_cache\, eboot_cache\  caches; pode apagar se quiser, são refeitos
+- screenshots\ ............ capturas do F10
+- run-log.txt ............. registro da última partida, útil para relatar erro
+
+Para levar os saves para outra pasta do port, copie a pasta gamedata.
+
+
+7. SE DER PROBLEMA
+
+- "Falta MSVCP140.dll / VCRUNTIME140.dll": instale o vc_redist.x64.exe.
+- O antivírus pode desconfiar de um exe novo sem assinatura. Se ele apagar
+  algum arquivo, extraia o zip de novo e libere a pasta.
+- Mande o run-log.txt junto com a descrição do que aconteceu.
+
+
+Código, créditos e instruções completas:
+https://github.com/kastiellcontato-design/re-cvx-ps3recomp
+
+O port usa o ps3recomp (MIT) e foi desenvolvido com ajuda do Claude
+(Anthropic) e do Codex (OpenAI). Licença do port: LICENSE.txt. Licenças das
+bibliotecas usadas (FFmpeg, ATRAC3, AMD FSR, SMAA e outras): pasta licenses e
+THIRD-PARTY-NOTICES.md.
