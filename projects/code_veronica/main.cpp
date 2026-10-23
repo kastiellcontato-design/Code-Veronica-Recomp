@@ -32,6 +32,7 @@
  * table. It comes first: everything below is written against that struct. */
 #include "ppu_recomp.h"
 #include "cv_version.h"
+#include "cv_enhanced_settings.h"
 #include "cv_srt.h"
 
 /* The Win32 names -- Sleep, GetTickCount64, CreateThread, InterlockedIncrement,
@@ -519,6 +520,7 @@ int main(int argc, char** argv)
      * switches them. */
     ps3_patch_site(CV_DOOR_SKIP_SITE, 0x38600000, "cv_door_skip");
 
+    cv_enhanced_configure_env();
     /* The options window. CV_NO_LAUNCHER=1 skips it (tests, scripts). */
     if (!getenv("CV_NO_LAUNCHER")) {
         char chosen[1024] = {0};

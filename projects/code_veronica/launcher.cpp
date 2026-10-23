@@ -19,6 +19,8 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#include "cv_enhanced_settings.h"
+#include "cv_enhanced_i18n.h"
 #include <windowsx.h>
 #include <objidl.h>
 #include <gdiplus.h>
@@ -180,6 +182,7 @@ void set_lang_pick(int pick)
 {
     g_lang_pick = pick;
     g_lang = pick < 0 ? system_lang() : pick;
+    cv_enhanced_language_set(g_lang);
 }
 std::wstring Tf(int id, int n)                   /* a text with one %d */
 {
@@ -230,6 +233,8 @@ struct Settings {
     std::wstring tex_dump_dir;         /* where dumps go; empty: <tex_dir>\<version>\dump */
     bool tex_replace = false, tex_dump = false, tex_dump_all = false;
     bool test_tools=false; // optional experimental map window, off by default
+    int music_volume=100,sfx_volume=100;
+    bool battle_unlocked=false;
     bool focus_pause=true; // pause while the game window is out of focus (cv_focus_pause.cpp)
     bool items_menu=false; // F6 item menu in the game (cv_item_menu.cpp), off by default
     bool check_updates=true; // look for a newer GitHub release when the launcher opens (cv_updater.h)
@@ -474,6 +479,9 @@ Settings load_settings()
     s.srt_scale=std::clamp(_wtoi(ini_get(L"srt",L"tamanho",L"100").c_str()),50,200);
     s.test_tools=_wtoi(ini_get(L"testes",L"mapas",L"0").c_str())!=0;
     s.items_menu=_wtoi(ini_get(L"inventario",L"menu_itens",L"0").c_str())!=0;
+    s.music_volume=std::clamp(_wtoi(ini_get(L"audio",L"musica",L"100").c_str()),0,100);
+    s.sfx_volume=std::clamp(_wtoi(ini_get(L"audio",L"efeitos",L"100").c_str()),0,100);
+    s.battle_unlocked=_wtoi(ini_get(L"extras",L"battle_game",L"0").c_str())!=0;
     s.focus_pause=_wtoi(ini_get(L"jogo",L"pausar_sem_foco",L"1").c_str())!=0;
     s.check_updates=_wtoi(ini_get(L"launcher",L"procurar_atualizacoes",L"1").c_str())!=0;
     s.srt_opacity=std::clamp(_wtoi(ini_get(L"srt",L"opacidade",L"70").c_str()),0,100);
@@ -551,6 +559,9 @@ void save_settings(const Settings& s)
         ini_set(L"patches", widen(k_patches[i].id).c_str(), s.patch[i] ? L"1" : L"0");
     ini_set(L"testes",L"mapas",s.test_tools?L"1":L"0");
     ini_set(L"inventario",L"menu_itens",s.items_menu?L"1":L"0");
+    ini_set(L"audio",L"musica",std::to_wstring(s.music_volume));
+    ini_set(L"audio",L"efeitos",std::to_wstring(s.sfx_volume));
+    ini_set(L"extras",L"battle_game",s.battle_unlocked?L"1":L"0");
     ini_set(L"jogo",L"pausar_sem_foco",s.focus_pause?L"1":L"0");
     ini_set(L"launcher",L"procurar_atualizacoes",s.check_updates?L"1":L"0");
     ini_set(L"srt", L"mostrar",s.srt?L"1":L"0");
@@ -1518,6 +1529,9 @@ std::wstring shortcut_text(const wchar_t* key, const wchar_t* ps, const wchar_t*
            L"   ·   Switch: " + sw;
 }
 
+constexpr int ID_AUDIO_MUSIC=2780,ID_AUDIO_SFX=2781,ID_BATTLE=2782;
+RectF g_audio_slider[2];
+void srt_slider(Graphics&,int,RectF,int,int,int,const Font&,bool);
 void draw_jogo(Graphics& gr, const Font& head, const Font& body, const Font& fsm)
 {
     library_art();
@@ -1614,6 +1628,18 @@ void draw_jogo(Graphics& gr, const Font& head, const Font& body, const Font& fsm
     if(n)text(gr,L"ⓘ  "+std::wstring(lx(design::REMOVE_NOTE)),x,yy+hh+30,fsm,C_DIM,StringAlignmentNear,w,20);
     option_card(gr,x,yy+hh+60,w,84,g.s.focus_pause,ID_FOCUS_PAUSE,
                 T(S_FOCUS_PAUSE_T),T(S_FOCUS_PAUSE_D),body,fsm);
+    using namespace cv_enhanced_text;
+    const float ay=yy+hh+170,col=(w-28)/2;
+    text(gr,get(g_lang,Audio),x,ay,head,C_TEXT);
+    for(int i=0;i<2;i++){
+        const float xx=x+i*(col+28);
+        text(gr,get(g_lang,i?Effects:Music),xx,ay+42,body,C_TEXT);
+        srt_slider(gr,i?ID_AUDIO_SFX:ID_AUDIO_MUSIC,RectF(xx,ay+72,col,32),i?g.s.sfx_volume:g.s.music_volume,0,100,body,true);
+    }
+    g_page_end=std::max(g_page_end,ay+149);
+    text(gr,get(g_lang,MusicHelp),x,ay+119,fsm,C_DIM,StringAlignmentNear,w,30);
+
+
 }
 
 void draw_saves(Graphics& gr, const Font& head, const Font& body, const Font& fsm)
@@ -2207,6 +2233,7 @@ void option_card(Graphics& gr, float x, float y, float w, float h, bool on, int 
 std::wstring srt_enemy_value(int n) {return n==0?T(S_AA_OFF):n==99?T(S_SRT_ALL):std::to_wstring(n);}
 std::wstring srt_language_value() {return g.s.srt_language?k_lang_name[cv_srt_i18n::selection(g.s.srt_language,g_lang)]:T(S_SRT_FOLLOW);}
 RectF srt_slider_rect(int id) {
+    if(id==ID_AUDIO_MUSIC||id==ID_AUDIO_SFX)return g_audio_slider[id-ID_AUDIO_MUSIC];
     if(id==ID_RUMBLE)return RectF(SIDE+32.f+310,g_rumble_y,360,32);
     const float w=W-SIDE-64.f,col=(w-24)/2,right=SIDE+32.f+col+24;
     return RectF(right,id==ID_SRT_SCALE?434.f:519.f,col-72,32);
@@ -2223,6 +2250,21 @@ void srt_slider(Graphics& gr,int id,int value,int minimum,int maximum,const Font
     gr.FillEllipse(&fill,thumb-7,cy-7,14.f,14.f);gr.DrawEllipse(&border,thumb-7,cy-7,14.f,14.f);
     text(gr,std::to_wstring(value)+L"%",r.X+r.Width+8,r.Y,body,C_TEXT,StringAlignmentFar,64,32);
     hit(r.X,r.Y,r.Width,r.Height,id);
+}
+
+void srt_slider(Graphics& gr,int id,RectF r,int value,int minimum,int maximum,const Font& body,bool enabled) {
+    if(id==ID_AUDIO_MUSIC||id==ID_AUDIO_SFX){r.Width-=72;g_audio_slider[id-ID_AUDIO_MUSIC]=r;}
+    const float left=r.X+8,span=r.Width-16,cy=r.Y+16;
+    const float thumb=left+span*cv_launcher_controls::slider_fraction(value,minimum,maximum);
+    Pen track(C_FIELD_BD,5);track.SetStartCap(LineCapRound);track.SetEndCap(LineCapRound);
+    gr.DrawLine(&track,left,cy,left+span,cy);
+    Pen progress(enabled?C_RED:C_FIELD_BD,5);progress.SetStartCap(LineCapRound);progress.SetEndCap(LineCapRound);
+    if(thumb>left)gr.DrawLine(&progress,left,cy,thumb,cy);
+    if(enabled&&(g.srt_drag==id||g.hover==id)) {SolidBrush glow(Color(45,230,50,50));gr.FillEllipse(&glow,thumb-11,cy-11,22.f,22.f);}
+    SolidBrush fill(enabled?C_TEXT:C_DIM);Pen border(enabled?C_RED:C_FIELD_BD,2);
+    gr.FillEllipse(&fill,thumb-7,cy-7,14.f,14.f);gr.DrawEllipse(&border,thumb-7,cy-7,14.f,14.f);
+    text(gr,std::to_wstring(value)+L"%",r.X+r.Width+8,r.Y,body,enabled?C_TEXT:C_DIM,StringAlignmentFar,64,32);
+    if(enabled)hit(r.X,r.Y,r.Width,r.Height,id);
 }
 void draw_srt(Graphics& gr,const Font& head,const Font& body,const Font& fsm)
 {
@@ -2312,6 +2354,11 @@ void draw_inventario(Graphics& gr,const Font& head,const Font& body,const Font& 
                    T(k_patches[i].credit),false,body,fsm);
         cy+=66;
     }
+    cy+=16;
+    option_card(gr,x,cy,w,90,g.s.battle_unlocked,ID_BATTLE,
+                cv_enhanced_text::get(g_lang,cv_enhanced_text::Battle),
+                cv_enhanced_text::get(g_lang,cv_enhanced_text::BattleHelp),body,fsm);
+    cy+=106;
     g_page_end=std::max(g_page_end,cy);
 }
 
@@ -2719,6 +2766,7 @@ void apply_live(bool restore_menu = true)
     cv_test_tools_enable(g.s.test_tools);
     cv_item_menu_enable(g.s.items_menu);
     cv_cheats_set(g.s.patch[2],g.s.patch[3]);
+    cv_enhanced_set(8,g.s.music_volume);cv_enhanced_set(9,g.s.sfx_volume);cv_enhanced_set(10,g.s.battle_unlocked);
     cv_focus_pause_enable(g.s.focus_pause);
     cv_focus_pause_label(T(S_PAUSED));
     if (!g.running) return;
@@ -2815,11 +2863,12 @@ void changed() { save_settings(g.s); g.play_msg.clear(); apply_live(); Invalidat
 /* The SRT's size and opacity, and the vibration strength (Controles). */
 void update_srt_slider(int id,int x) {
     const RectF r=srt_slider_rect(id);
-    int& value=id==ID_RUMBLE?g.s.rumble:id==ID_SRT_SCALE?g.s.srt_scale:g.s.srt_opacity;
-    const int next=cv_launcher_controls::slider_value(float(x),r.X+8,r.Width-16,id==ID_SRT_SCALE?50:0,id==ID_SRT_OPACITY?100:200);
+    const bool audio=id==ID_AUDIO_MUSIC||id==ID_AUDIO_SFX;
+    int& value=id==ID_AUDIO_MUSIC?g.s.music_volume:id==ID_AUDIO_SFX?g.s.sfx_volume:id==ID_RUMBLE?g.s.rumble:id==ID_SRT_SCALE?g.s.srt_scale:g.s.srt_opacity;
+    const int next=cv_launcher_controls::slider_value(float(x),r.X+8,r.Width-16,id==ID_SRT_SCALE?50:0,(audio||id==ID_SRT_OPACITY)?100:200);
     if(next==value)return;
     value=next;g.srt_drag_dirty=true;
-    if(id==ID_RUMBLE)set_rumble_env();else set_srt_env();
+    if(audio)cv_enhanced_set(id==ID_AUDIO_MUSIC?8:9,value);else if(id==ID_RUMBLE)set_rumble_env();else set_srt_env();
     InvalidateRect(g.hwnd,NULL,FALSE);
 }
 void finish_srt_drag() {
@@ -2911,6 +2960,7 @@ void click(int id)
     else if (id == ID_CACHE_OPEN) { std::error_code ec; fs::create_directories(cache_dir(), ec); open_in_explorer(cache_dir().wstring()); }
     else if(id==ID_TEST_ENABLE){g.s.test_tools=!g.s.test_tools;cv_test_tools_enable(g.s.test_tools);changed();}
     else if(id==ID_TEST_OPEN&&g.running)cv_test_tools_show(g.hwnd,g.s.game,g_lang,PAD_INPUT_KEYBOARD);
+    else if(id==ID_BATTLE){g.s.battle_unlocked=!g.s.battle_unlocked;changed();}
     else if(id==ID_FOCUS_PAUSE){g.s.focus_pause=!g.s.focus_pause;changed();}
     else if(id==ID_UPD_TOGGLE){g.s.check_updates=!g.s.check_updates;changed();}
     else if(id==ID_UPD_CHECK&&!g.running)upd_check(true);
@@ -3093,6 +3143,9 @@ LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp)
         else if (wp == 5 && lp >= 0 && lp <= 200) g.s.saturation = int(lp);
         else if (wp == 6 && lp >= 0 && lp <= 100 && lp % 10 == 0) g.s.sharpness = int(lp);
         else if (wp == 7 && lp >= 0 && lp <= 4) g.s.aniso = int(lp);
+        else if(wp==8&&lp>=0&&lp<=100)g.s.music_volume=int(lp);
+        else if(wp==9&&lp>=0&&lp<=100)g.s.sfx_volume=int(lp);
+        else if(wp==10&&lp>=0&&lp<=1)g.s.battle_unlocked=lp!=0;
         else return 0;
         save_settings(g.s); KillTimer(h, 2); apply_live(false);
         InvalidateRect(h, NULL, FALSE); return 1;
@@ -3139,7 +3192,7 @@ LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp)
     case WM_SETCURSOR: if (LOWORD(lp) == HTCLIENT) return TRUE; break;
     case WM_LBUTTONDOWN: {
         const int id=hit_at(logical_x(GET_X_LPARAM(lp)),logical_y(GET_Y_LPARAM(lp)));
-        if(g.open_dd<0&&((g.page==P_SRT&&(id==ID_SRT_SCALE||id==ID_SRT_OPACITY))||(g.page==P_CONTROLES&&id==ID_RUMBLE))) {
+        if(g.open_dd<0&&((g.page==P_SRT&&(id==ID_SRT_SCALE||id==ID_SRT_OPACITY))||(g.page==P_CONTROLES&&id==ID_RUMBLE)||(g.page==P_JOGO&&(id==ID_AUDIO_MUSIC||id==ID_AUDIO_SFX)))) {
             g.srt_drag=id;g.srt_drag_dirty=false;SetCapture(h);
             update_srt_slider(id,logical_x(GET_X_LPARAM(lp)));InvalidateRect(h,NULL,FALSE);return 0;
         }
@@ -3579,6 +3632,7 @@ DWORD WINAPI launcher_thread(void*)
     GdiplusStartupInput gsi; ULONG_PTR gtok;
     GdiplusStartup(&gtok, &gsi, NULL);
     g.s = load_settings();
+    cv_enhanced_set(8,g.s.music_volume);cv_enhanced_set(9,g.s.sfx_volume);cv_enhanced_set(10,g.s.battle_unlocked);
     init_social_links();
     for(int i=0;i<2;i++)g.social_urls[i]=social_url(i);
     cv_test_tools_enable(g.s.test_tools);
@@ -3706,9 +3760,10 @@ extern "C" int cv_pc_settings_effects_read(void)
 }
 extern "C" void cv_pc_settings_change(int which,int value)
 {
-    static const int maximum[]={4,2,2,160,130,200,100,4};
-    if (which<0 || which>=8 || value<0 || value>maximum[which] || (which==6 && value%10!=0)) return;
+    static const int maximum[]={4,2,2,160,130,200,100,4,100,100,1};
+    if (which<0 || which>=11 || value<0 || value>maximum[which] || (which==6 && value%10!=0)) return;
     if (g.hwnd && IsWindow(g.hwnd)) { SendMessageW(g.hwnd,WM_PC_SETTINGS_CHANGE,WPARAM(which),LPARAM(value)); return; }
+    if(which>=8){cv_enhanced_set(which,value);ini_set(which==10?L"extras":L"audio",which==8?L"musica":which==9?L"efeitos":L"battle_game",std::to_wstring(value));return;}
     int packed=cv_pc_settings_read();
     if(which==0) {
         packed=(packed&~0x70)|(value<<4);

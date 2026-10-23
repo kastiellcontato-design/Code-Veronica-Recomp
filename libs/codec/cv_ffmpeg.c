@@ -1,5 +1,6 @@
 /* Shared-library API from FFmpeg 7.1. No guest addresses cross this interface. */
 #include "cv_ffmpeg.h"
+#include "audio_gain.h"
 #include <windows.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -236,8 +237,10 @@ int cv_audio_pcm(CvAudioDecoder* d,u32 bw,u8* dst,int consume)
  unsigned i=d->read%64;AVFrame* f=d->frames[i].frame;
  if(dst){
   unsigned word=bw&127;if(word!=2&&word!=3&&word!=4){ReleaseSRWLockExclusive(&d->lock);return -1;}
+  const int volume=ps3_audio_gain_percent(0);
   for(int sample=0;sample<f->nb_samples;sample++)for(int ch=0;ch<f->ch_layout.nb_channels;ch++){
    float v=((float*)f->extended_data[ch])[sample];if(v>0.99999988f)v=0.99999988f;if(v< -1.f)v=-1.f;
+   if(volume!=100)v=ps3_audio_gain_float(v,volume);
    u32 bits;if(bw==0x84)memcpy(&bits,&v,4);else if(word==2)bits=(u16)(s16)(v*32768.f);else bits=(u32)(s32)(v*2147483648.0);
    for(unsigned b=0;b<word;b++)*dst++=(u8)(bits>>(8*(word-1-b)));
   }

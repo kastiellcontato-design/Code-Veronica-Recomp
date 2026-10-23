@@ -12,7 +12,7 @@
  * data). A second argument writes the first pass as a 16-bit WAV to listen to.
  *
  * Build (from the repo root; no runtime lib needed):
- *   clang-cl /O2 -w /Iinclude libs/codec/tests/test_cellAtrac.c
+ *   clang-cl /O2 -w /Iinclude libs/codec/tests/test_cellAtrac.c libs/codec/audio_gain.c
  *            third_party/at3_standalone/*.cpp
  *   test_cellAtrac.exe track.at3 [out.wav]
  */

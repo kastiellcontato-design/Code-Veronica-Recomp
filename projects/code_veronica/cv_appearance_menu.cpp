@@ -7,6 +7,10 @@
  */
 #include "ppu_recomp.h"
 #include "cv_version.h"
+#include "cv_enhanced_settings.h"
+#include "cv_enhanced_i18n.h"
+#include "../../libs/input/pad_phys.h"
+#include "../../libs/input/pad_keyboard_filter.h"
 #include "cv_appearance_menu_preview.h"
 #include "cv_appearance_runtime.h"
 #include "../../libs/video/rsx_ui_batch.h"
@@ -36,6 +40,7 @@ extern "C" int cv_pc_settings_saturation_read(void);
 extern "C" int cv_pc_settings_effects_read(void);
 extern "C" void cv_pc_settings_change(int which, int value);
 extern "C" uint32_t cellGcm_flip_submit_count(void);
+extern "C" void* rsx_d3d12_window(void);
 
 namespace {
 constexpr uint32_t kCursor=CV_MENU_CURSOR, kInput=CV_MENU_INPUT, kRepeat=CV_MENU_REPEAT;
@@ -113,88 +118,94 @@ void reset_colors() {
     pc_adjust_direction=0;pc_adjust_started=0;
 }
 
-/* One cell between four texel centres, with its corners' coverage (top-left,
- * bottom-left, top-right, bottom-right from the low byte); a run of identical
- * uniform cells is one wide cell. */
-struct Cell { float x,y,w; uint32_t corners; };
-struct Glyph { int advance=0; std::vector<Cell> cells; };
-struct Font {
-    HDC dc=CreateCompatibleDC(nullptr);
-    HFONT font=CreateFontW(-27,0,0,0,FW_BOLD,FALSE,FALSE,FALSE,DEFAULT_CHARSET,
-                           OUT_DEFAULT_PRECIS,CLIP_DEFAULT_PRECIS,ANTIALIASED_QUALITY,DEFAULT_PITCH,L"Times New Roman");
-    HGDIOBJ old=nullptr;
-    // 27 units to the em: capitals as tall as the menu's own (EXIT, DEFAULT),
-    // measured on screen. The baseline sits 21 units below a row's y, which
-    // centres RECOMP SETTINGS between DEFAULT and EXIT.
-    const int ascent=21;
-    std::map<unsigned,Glyph> glyphs;
-    Font() { if(dc&&font) old=SelectObject(dc,font); }
-    ~Font() { if(dc&&old)SelectObject(dc,old); if(font)DeleteObject(font); if(dc)DeleteDC(dc); }
-    const Glyph& get(unsigned character) {
-        auto found=glyphs.find(character); if(found!=glyphs.end())return found->second;
-        Glyph glyph; glyph.advance=9;
-        if(dc&&font) {
-            MAT2 matrix{};
-            matrix.eM11.value=matrix.eM22.value=1;
-            GLYPHMETRICS metrics{};
-            DWORD size=GetGlyphOutlineW(dc,character,GGO_GRAY8_BITMAP,&metrics,0,nullptr,&matrix);
-            if(size!=GDI_ERROR) {
-                glyph.advance=metrics.gmCellIncX;
-                std::vector<unsigned char> bitmap(size);
-                if(size && GetGlyphOutlineW(dc,character,GGO_GRAY8_BITMAP,&metrics,size,bitmap.data(),&matrix)!=GDI_ERROR) {
-                    const int w=int(metrics.gmBlackBoxX),h=int(metrics.gmBlackBoxY),stride=(w+3)&~3;
-                    auto cov=[&](int x,int y)->uint32_t {
-                        if(x<0||y<0||x>=w||y>=h)return 0;
-                        return (bitmap[size_t(y)*stride+x]*255u+32u)/64u;
-                    };
-                    auto corners=[&](int x,int y) { return cov(x,y)|cov(x,y+1)<<8|cov(x+1,y)<<16|cov(x+1,y+1)<<24; };
-                    const float left=float(metrics.gmptGlyphOrigin.x),top=float(ascent-metrics.gmptGlyphOrigin.y);
-                    for(int y=-1;y<h;y++)
-                        for(int x=-1;x<w;) {
-                            const uint32_t c=corners(x,y);
-                            if(!c) { ++x; continue; }
-                            int end=x+1;
-                            if((c&255)*0x01010101u==c)
-                                while(end<w && corners(end,y)==c)++end;
-                            glyph.cells.push_back({left+x+.5f,top+y+.5f,float(end-x),c});
-                            x=end;
-                        }
-                }
-            }
-        }
-        return glyphs.emplace(character,std::move(glyph)).first->second;
-    }
-};
-struct TextBatch {
-    std::vector<rsx_ui_quad> quads;
-    void text(const std::string& text,float x,float y,uint32_t color,float scale=1.f,bool centered=false) {
-        static Font font;
-        std::vector<unsigned> letters;
-        const int length=MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,text.data(),int(text.size()),nullptr,0);
-        std::wstring wide(size_t(length>0?length:0),0);
-        if(length>0)MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,text.data(),int(text.size()),wide.data(),length);
-        for(wchar_t ch:wide)letters.push_back(unsigned(ch));
-        if(centered) { int width=0; for(unsigned ch:letters)width+=font.get(ch).advance; x-=width*scale*.5f; }
-        for(int pass=0;pass<2;pass++) {   // shadow, then face
-            float pen=x;
-            for(unsigned ch:letters) {
-                const auto& glyph=font.get(ch);
-                for(const auto& cell:glyph.cells)
-                    quads.push_back({pen+(cell.x+(pass?0:2))*scale,y+(cell.y+(pass?0:2))*scale,cell.w*scale,scale,
-                                     pass?color:(color&0xFF000000u),cell.corners});
-                pen+=glyph.advance*scale;
-            }
-        }
-    }
-    void submit(const ppu_context*) {
-        rsx_d3d12_set_ui_quads(quads.data(),uint32_t(quads.size()));
-    }
-};
+}
+#include "cv_menu_text.h"
+namespace {
+using TextBatch=cv_menu_text::TextBatch;
 uint32_t selected_color(bool selected) {
     if(!selected)return 0x7FAFAFAF;
     const uint32_t pulse=vm_read32(CV_MENU_PULSE)&255;
     return ((pulse?pulse:255)<<24)|0xFFFFFF;
 }
+
+int pc_tab=0;
+bool tab_q=false,tab_e=false;
+bool pc_keyboard_tabs=false;
+// Tabs follow the physical shoulder buttons, independent of guest remapping.
+std::array<uint32_t,PAD_PHYS_MAX> tab_pad{};
+uint32_t tab_buttons(unsigned port){
+ PadPhys pad{};
+ if(port>=PAD_PHYS_MAX||!pad_phys_poll(int(port),&pad))return 0;
+ // pad_phys_poll already applies the optional Xbox-360 gameplay layout,
+ // which swaps shoulders/triggers. Undo only that swap for fixed tab hints.
+ const bool swapped=pad_phys_360_layout(pad.kind)!=0;
+ const int left=swapped?PB_L2:PB_L1,right=swapped?PB_R2:PB_R1;
+ return (((pad.buttons>>left)&1u)<<PB_L1)|(((pad.buttons>>right)&1u)<<PB_R1);
+}
+std::string tr(cv_enhanced_text::Id id){return cv_enhanced_text::utf8(cv_enhanced_language(),id);}
+int menu_rows(){return pc_tab==0?kPcRowCount:pc_tab==1?4:2;}
+bool menu_back(){return pc_row==menu_rows()-1;}
+int tab_direction(uint32_t input,bool q,bool e){
+ int direction=(input&(1u<<PB_L1))?-1:(input&(1u<<PB_R1))?1:0;
+ if(q&&!tab_q){direction=-1;pc_keyboard_tabs=true;}else if(e&&!tab_e){direction=1;pc_keyboard_tabs=true;}else if(direction)pc_keyboard_tabs=false;
+ tab_q=q;tab_e=e;return direction;
+}
+int keyboard_tab(unsigned port,bool interactive){
+ uint32_t edge=0;
+ if(interactive&&port<PAD_PHYS_MAX){
+  const uint32_t buttons=tab_buttons(port);
+  edge=buttons&~tab_pad[port];tab_pad[port]=buttons;
+ }
+ bool active=interactive&&GetForegroundWindow()==static_cast<HWND>(rsx_d3d12_window());
+ return tab_direction(edge,active&&(GetAsyncKeyState('Q')&0x8000),active&&(GetAsyncKeyState('E')&0x8000));
+}
+int tab_hint_kind(){
+ const int last=pad_last_input();
+ if(pc_keyboard_tabs||last==PAD_INPUT_KEYBOARD)return PAD_INPUT_KEYBOARD;
+ const char* configured=std::getenv("CV_BUTTON_ICONS");
+ if(configured){
+  if(std::strcmp(configured,"keyboard")==0)return PAD_INPUT_KEYBOARD;
+  if(std::strcmp(configured,"ps")==0)return PAD_KIND_DS4;
+  if(std::strcmp(configured,"xbox")==0)return PAD_KIND_XINPUT;
+  if(std::strcmp(configured,"switch")==0)return PAD_KIND_SWITCH;
+ }
+ return last;
+}
+void draw_tabs(cv_menu_text::TextBatch& batch){
+ using namespace cv_enhanced_text;
+ batch.text("RECOMP SETTINGS",320,78,0xDFFFFFFF,1.08f,true);
+ const Id names[]={Graphics,Audio,Gameplay};
+ const int kind=tab_hint_kind();
+ const char* left=kind==PAD_KIND_XINPUT?"LB":kind==PAD_KIND_SWITCH?"L":kind==PAD_KIND_DS4||kind==PAD_KIND_DUALSENSE?"L1":"Q";
+ const char* right=kind==PAD_KIND_XINPUT?"RB":kind==PAD_KIND_SWITCH?"R":kind==PAD_KIND_DS4||kind==PAD_KIND_DUALSENSE?"R1":"E";
+ batch.text(left,34,114,0xFFDCCEB1,.48f);batch.text(right,578,114,0xFFDCCEB1,.48f);
+ for(int i=0;i<3;i++)batch.text(tr(names[i]),146.f+i*172,111,selected_color(pc_tab==i),.62f,true,155);
+}
+void draw_extra(cv_menu_text::TextBatch& batch){
+ using namespace cv_enhanced_text;
+ for(int row=0;row<menu_rows();row++){
+  float y=174.f+row*48;auto color=selected_color(pc_row==row);
+  Id id=pc_tab==1?(row==0?Music:row==1?Effects:row==2?Restore:Back):(row==0?Battle:Back);
+  batch.text(tr(id),32,y,color,.70f,false,365);
+  if(pc_tab==1&&row<2){
+   int v=cv_enhanced_get(8+row);batch.text("< "+std::to_string(v)+"% >",456,y,color,.7f,false,145);
+   batch.quads.push_back({40,y+31,520,3,0x6FAFAFAF,0xFFFFFFFF});
+   if(v)batch.quads.push_back({40,y+31,520.f*v/100,3,0xFFDCCEB1,0xFFFFFFFF});
+  }else if(pc_tab==2&&row==0)batch.text("< "+tr(cv_enhanced_get(10)?On:Off)+" >",444,y,color,.64f,false,162);
+ }
+ batch.text(tr(pc_tab==1?MusicHelp:BattleHelp),320,386,0xCFDCCEB1,.51f,true,570);
+ batch.text(tr(Adjust),320,417,0xBFCFCFCF,.5f,true);
+}
+bool extra_input(uint32_t input,uint32_t repeat){
+ if(pc_tab==0)return false;
+ if(repeat&kUp)pc_row=(pc_row+menu_rows()-1)%menu_rows();
+ else if(repeat&kDown)pc_row=(pc_row+1)%menu_rows();
+ else if(pc_tab==1&&pc_row<2&&((repeat&(kLeft|kRight))||(input&kConfirm))){int which=8+pc_row;cv_pc_settings_change(which,std::clamp(cv_enhanced_get(which)+((repeat&kLeft)?-5:5),0,100));}
+ else if(pc_tab==1&&pc_row==2&&(input&kConfirm)){cv_pc_settings_change(8,100);cv_pc_settings_change(9,100);}
+ else if(pc_tab==2&&pc_row==0&&((repeat&(kLeft|kRight))||(input&kConfirm)))cv_pc_settings_change(10,!cv_enhanced_get(10));
+ return true;
+}
+
 /* Our label is drawn after the game's whole frame, so nothing the game draws
  * can cover it; it takes on itself what the game's layers do to its rows. */
 /* screen and fade_bits: what this frame's rows are drawn with, which is what
@@ -219,19 +230,23 @@ void draw_entry(const ppu_context* caller,uint32_t screen,uint32_t fade_bits) {
 }
 void draw_settings(const ppu_context* caller) {
     static const char* resolution[]={"480P","720P (NATIVE)","1080P","1440P","4K"};
-    static const char* aa[]={"OFF","FXAA","SMAA"};
-    static const char* mode[]={"WINDOWED","BORDERLESS","FULLSCREEN"};
-    static const char* aniso[]={"OFF","2X","4X","8X","16X"};
+    const std::string off=tr(cv_enhanced_text::Off);
+    const char* aa[]={off.c_str(),"FXAA","SMAA"};
+    const std::string modes[]={tr(cv_enhanced_text::Window),tr(cv_enhanced_text::Borderless),tr(cv_enhanced_text::Fullscreen)};
+    const char* mode[]={modes[0].c_str(),modes[1].c_str(),modes[2].c_str()};
+    const char* aniso[]={off.c_str(),"2X","4X","8X","16X"};
     rsx_d3d12_set_ui_retained(1);
     TextBatch batch;
-    batch.text("RECOMP SETTINGS",320,102,0xDFFFFFFF,1.35f,true);
-    const char* labels[]={"RESOLUTION","ANTI-ALIASING","DISPLAY MODE","BRIGHTNESS","CONTRAST","SATURATION","SHARPNESS (FSR RCAS)","ANISOTROPIC FILTER","RESET COLORS","BACK"};
+    draw_tabs(batch);
+    if(pc_tab){draw_extra(batch);batch.submit(caller);auto work=call_context(caller);invoke(&work,CV_FN_MENU_FRAME);return;}
+    using namespace cv_enhanced_text;
+    const std::string labels[]={tr(Resolution),tr(AA),tr(Mode),tr(Brightness),tr(Contrast),tr(Saturation),tr(Sharpness),tr(Aniso),tr(Reset),tr(Back)};
     char brightness[24],contrast[24],saturation[24],sharpness[24];
     std::snprintf(brightness,sizeof brightness,"%+d%%",-80+values[3]);
     std::snprintf(contrast,sizeof contrast,"%d%%",50+values[4]);
     std::snprintf(saturation,sizeof saturation,"%d%%",values[5]);
     if(values[6])std::snprintf(sharpness,sizeof sharpness,"%d%%",values[6]);
-    else std::snprintf(sharpness,sizeof sharpness,"OFF");
+    else std::snprintf(sharpness,sizeof sharpness,"%s",off.c_str());
     const char* current[]={resolution[values[0]],aa[values[1]],mode[values[2]],brightness,contrast,saturation,sharpness,aniso[values[7]]};
     if(!appearance_assets_attempted) {
         appearance_assets_attempted=true;
@@ -245,19 +260,19 @@ void draw_settings(const ppu_context* caller) {
         }
     }
     cv_appearance::frame(const_cast<ppu_context*>(caller),true);
-    batch.text("APPEARANCE",32,137,selected_color(pc_row==0),.78f);
+    batch.text(tr(cv_enhanced_text::Appearance),32,137,selected_color(pc_row==0),.78f);
     batch.text(std::string("< ")+cv_appearance::catalog[appearance_choice].name+" >",32,157,selected_color(pc_row==0),.46f);
     for(int row=1;row<kPcRowCount;row++) {
         const int setting=row-1;const uint32_t color=selected_color(pc_row==row);
         const float y=187.f+setting*20.f;
-        batch.text(labels[setting],32,y,color,.57f);
+        batch.text(labels[setting],32,y,color,.57f,false,219);
         if(setting<kSettingCount)batch.text(std::string("< ")+current[setting]+" >",255,y,color,.55f);
     }
     appearance_preview.select(appearance_choice);
     appearance_preview.append(batch.quads,384,125,240,280);
-    batch.text(appearance_preview.error().empty()?"360° PREVIEW":"PREVIEW UNAVAILABLE",504,408,0xCFDCCEB1,.47f,true);
+    batch.text(appearance_preview.error().empty()?tr(cv_enhanced_text::Preview):tr(cv_enhanced_text::NoPreview),504,408,0xCFDCCEB1,.47f,true);
     batch.text(cv_appearance::status(),320,425,0xCFDCCEB1,.40f,true);
-    batch.text(pc_row==0?"LEFT / RIGHT: CHANGE APPEARANCE":"LEFT / RIGHT TO CHANGE",320,443,0xBFCFCFCF,.53f,true);
+    batch.text(tr(cv_enhanced_text::Adjust),320,443,0xBFCFCFCF,.53f,true);
     batch.submit(caller);
     auto work=call_context(caller);invoke(&work,CV_FN_MENU_FRAME);
 }
@@ -273,8 +288,9 @@ void consume(uint32_t input,uint32_t repeat) {vm_write32(input,0);vm_write32(rep
 }
 
 void CV_FN_MENU_RESET(ppu_context* ctx) {
+    pad_keyboard_reserve(0,0);
     rsx_d3d12_set_ui_retained(0);
-    pc_selected=pc_open=drawing_main=false; pc_row=0;
+    pc_selected=pc_open=drawing_main=false; pc_row=0;pc_tab=0;tab_q=tab_e=pc_keyboard_tabs=false;tab_pad.fill(0);
     rsx_d3d12_set_ui_quads(nullptr,0);
     CV_OG_MENU_RESET(ctx);
 }
@@ -283,7 +299,7 @@ void CV_FN_MENU_COLOR(ppu_context* ctx) {
     CV_OG_MENU_COLOR(ctx);
 }
 void CV_FN_MENU_INPUT(ppu_context* ctx) {
-    if(!enabled()) {rsx_d3d12_set_ui_retained(0);CV_OG_MENU_INPUT(ctx);return;}
+    if(!enabled()) {pad_keyboard_reserve(0,0);rsx_d3d12_set_ui_retained(0);CV_OG_MENU_INPUT(ctx);return;}
     const uint32_t port=uint32_t(ctx->gpr[3]);
     if(port>6) {CV_OG_MENU_INPUT(ctx);return;}
     const bool interactive=ctx->gpr[4]!=0 && vm_read32(kDialog)==0;
@@ -293,13 +309,17 @@ void CV_FN_MENU_INPUT(ppu_context* ctx) {
     uint32_t cursor=vm_read32(kCursor);
     if(pc_selected && cursor!=5)pc_selected=false;
     if(pc_open) {
-        if(!cv_appearance::busy() && (input&kCancel || ((input&kConfirm)&&pc_row==kBackRow))) {
+        const int tab_change=keyboard_tab(port,interactive);
+        if(!cv_appearance::busy() && (input&kCancel || ((input&kConfirm)&&menu_back()))) {
             rsx_d3d12_set_ui_retained(0);
             rsx_d3d12_set_ui_quads(nullptr,0);
+            pad_keyboard_reserve(0,0);
             pc_open=false;pc_selected=true;vm_write32(kCursor,5);sound(ctx,0);
             consume(input_address,repeat_address);ctx->gpr[4]=0;
         } else {
-            if(repeat&kUp) {pc_row=(pc_row+kPcRowCount-1)%kPcRowCount;pc_adjust_direction=0;sound(ctx,2);}
+            if(!cv_appearance::busy() && tab_change) {pc_tab=(pc_tab+tab_change+3)%3;pc_row=0;pc_adjust_direction=0;sound(ctx,2);}
+            else if(extra_input(input,repeat)) {}
+            else if(repeat&kUp) {pc_row=(pc_row+kPcRowCount-1)%kPcRowCount;pc_adjust_direction=0;sound(ctx,2);}
             else if(repeat&kDown) {pc_row=(pc_row+1)%kPcRowCount;pc_adjust_direction=0;sound(ctx,2);}
             else if(pc_row==kResetColorsRow && (input&kConfirm)) { reset_colors();sound(ctx,3); }
             else if(pc_row==0 && !cv_appearance::busy() && (repeat&(kLeft|kRight))) {
@@ -335,7 +355,10 @@ void CV_FN_MENU_INPUT(ppu_context* ctx) {
             vm_write32(kCursor,cursor);consume(input_address,repeat_address);sound(ctx,2);
         }
     } else if(interactive && pc_selected && (input&kConfirm) && !(input&kCancel)) {
-        pc_open=true;pc_selected=false;pc_row=0;pc_adjust_direction=0;read_settings();sound(ctx,3);
+        pc_open=true;pc_selected=false;pc_row=0;pc_tab=0;
+        pad_keyboard_reserve('Q','E');
+        tab_pad.fill(0);if(port<PAD_PHYS_MAX)tab_pad[port]=tab_buttons(port);
+        tab_q=(GetAsyncKeyState('Q')&0x8000)!=0;tab_e=(GetAsyncKeyState('E')&0x8000)!=0;pc_adjust_direction=0;read_settings();sound(ctx,3);
         consume(input_address,repeat_address);draw_settings(ctx);ctx->gpr[3]=0;return;
     }
     /* The rows lag the menu's state by a frame: keep it a frame, and when the

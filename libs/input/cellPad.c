@@ -20,6 +20,7 @@
 #include "../../runtime/ppu/ppu_memory.h"   /* GUEST_PTR, vm_write*: guest EA -> host */
 #include "pad_phys.h"
 #include "pad_map.h"
+#include "pad_keyboard_filter.h"
 
 /* ---------------------------------------------------------------------------
  * Backend selection
@@ -243,9 +244,10 @@ static void pad_poll_keyboard(void)
         return;
     }
     u16 btns = 0;
+    const unsigned reserved=pad_keyboard_reserved_keys();
     for (int a = 0; a < PA_COUNT; a++)
         for (int k = 0; k < PAD_KEY_SLOTS; k++)
-            if (s_map_key[a][k] > 0 && (GetAsyncKeyState(s_map_key[a][k]) & 0x8000)) btns |= k_action_bit[a];
+            if (s_map_key[a][k] > 0 && pad_keyboard_key_down(reserved,(unsigned)s_map_key[a][k],GetAsyncKeyState(s_map_key[a][k]) & 0x8000)) btns |= k_action_bit[a];
     if (!hs->connected) {   /* no controller: the keyboard is the whole pad */
         hs->buttons = 0;
         hs->analog_lx = hs->analog_ly = hs->analog_rx = hs->analog_ry = 128;

@@ -28,6 +28,7 @@
  */
 
 #include "cellAtrac.h"
+#include "audio_gain.h"
 #include "../../runtime/ppu/ppu_memory.h"
 #include "../../third_party/at3_standalone/at3_bridge.h"
 #include <stdio.h>
@@ -306,10 +307,12 @@ s32 cellAtracDecode(u32 pHandle, u32 pfOutAddr, u32 puiSamples, u32 puiFinishfla
     if (n > limit - s->pos) n = limit - s->pos;
     decode_frame(s, k);
     const u32 ch = s->t.channels;
+    const int volume=ps3_audio_gain_percent(0);
     for (s32 i = 0; i < n; i++)
         for (u32 c = 0; c < ch; c++) {
             u32 bits;
-            memcpy(&bits, &s->pcm[c][at + i], 4);
+            const float sample=ps3_audio_gain_float(s->pcm[c][at+i],volume);
+            memcpy(&bits,&sample,4);
             vm_write32(pfOutAddr + ((u32)i * ch + c) * 4, bits);
         }
     s->pos += n;

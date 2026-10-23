@@ -223,7 +223,7 @@ if(WIN32)
         add_custom_command(OUTPUT "${CV_MENU_PATCHED}"
             COMMAND "${Python3_EXECUTABLE}" "${CV_MENU_HOOK_SCRIPT}"
                     --input "${CV_MENU_UNIT}" --output "${CV_MENU_PATCHED}" --region "${CV_REGION_LC}"
-            DEPENDS "${CV_MENU_UNIT}" "${CV_MENU_HOOK_SCRIPT}" VERBATIM)
+            DEPENDS "${CV_MENU_UNIT}" "${CV_MENU_HOOK_SCRIPT}" "${PS3RECOMP_DIR}/tools/cv_native_menu_hooks.py" VERBATIM)
         list(REMOVE_ITEM RECOMP_SOURCES "${CV_MENU_UNIT}")
         list(APPEND RECOMP_SOURCES "${CV_MENU_PATCHED}")
     endforeach()
@@ -235,6 +235,7 @@ add_executable(${PROJECT_NAME}
     cv_srt.cpp
     cv_srt_data.cpp
     cv_cheats.cpp
+    cv_enhanced_settings.cpp
     cv_srt_icons.cpp
     cv_srt_i18n.cpp
     button_icons.cpp
@@ -490,11 +491,11 @@ if(WIN32)
 endif()
 
 if(WIN32)
-    add_executable(code_veronica_menu_tests EXCLUDE_FROM_ALL tests/test_pc_menu.cpp)
+    add_executable(code_veronica_menu_tests EXCLUDE_FROM_ALL tests/test_pc_menu.cpp ../../libs/input/pad_keyboard_filter.c)
     set_target_properties(code_veronica_menu_tests PROPERTIES OUTPUT_NAME "code_veronica_menu_tests_${CV_REGION_LC}")
     target_include_directories(code_veronica_menu_tests PRIVATE "${RECOMP_DIR}")
     target_compile_options(code_veronica_menu_tests PRIVATE /UNDEBUG)
-    target_link_libraries(code_veronica_menu_tests PRIVATE gdi32 user32)
+    target_link_libraries(code_veronica_menu_tests PRIVATE gdi32 user32 gdiplus)
     if(CV_REGION_LC STREQUAL "jp")
         target_compile_definitions(code_veronica_menu_tests PRIVATE CV_REGION_JP=1)
     elseif(CV_REGION_LC STREQUAL "us")
@@ -709,3 +710,21 @@ if(WIN32)
     target_compile_options(code_veronica_pose_compare_tests PRIVATE /UNDEBUG -O2 -ffp-contract=off)
 endif()
 
+
+if(WIN32)
+ add_executable(code_veronica_enhanced_tests EXCLUDE_FROM_ALL tests/test_enhanced_settings.cpp cv_enhanced_settings.cpp ../../libs/codec/audio_gain.c)
+ target_compile_options(code_veronica_enhanced_tests PRIVATE /UNDEBUG)
+ set_target_properties(code_veronica_enhanced_tests PROPERTIES OUTPUT_NAME "cv_enhanced_tests_${CV_REGION_LC}")
+ if(CV_REGION_LC STREQUAL "jp")
+  target_compile_definitions(code_veronica_enhanced_tests PRIVATE CV_REGION_JP=1)
+ elseif(CV_REGION_LC STREQUAL "us")
+  target_compile_definitions(code_veronica_enhanced_tests PRIVATE CV_REGION_US=1)
+ endif()
+endif()
+
+if(WIN32)
+ add_executable(code_veronica_audio_gain_tests EXCLUDE_FROM_ALL tests/test_enhanced_audio.c ../../libs/codec/audio_gain.c)
+ target_include_directories(code_veronica_audio_gain_tests PRIVATE "${PS3RECOMP_DIR}/include" "${PS3RECOMP_DIR}/third_party/ffmpeg/include")
+ target_compile_options(code_veronica_audio_gain_tests PRIVATE /UNDEBUG)
+ set_target_properties(code_veronica_audio_gain_tests PROPERTIES OUTPUT_NAME "cv_audio_gain_tests_${CV_REGION_LC}")
+endif()

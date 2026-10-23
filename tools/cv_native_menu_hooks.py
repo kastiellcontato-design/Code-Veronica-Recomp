@@ -15,7 +15,27 @@ HOOKS_BY_REGION = {
 }
 HOOKS = HOOKS_BY_REGION["eu"]
 
-def main():
+
+def battle_reads(source,region):
+    title,script={"eu":(0x2D3A4,0x12A900),"jp":(0x2CF14,0x12A498),"us":(0x2CF34,0x12A500)}[region]
+    functions=list(re.finditer(r"^void (?:func_|cv_original_)([0-9A-F]+)\(ppu_context\* ctx\) \{",source,re.M))
+    changed=0
+    for i,m in reversed(list(enumerate(functions))):
+        address=int(m[1],16)
+        if not (title<=address<title+20 or address==script):continue
+        end=functions[i+1].start() if i+1<len(functions) else len(source);body=source[m.start():end]
+        if title<=address<title+20:
+            old="ctx->gpr[5] = vm_read32(ctx->gpr[5] + 0x4);"
+            if body.count(old)!=2:raise SystemExit(f"Battle title read sites changed in {region}: {address:08X}")
+            body=body.replace(old,"ctx->gpr[5] = cv_battle_read32(ctx->gpr[5] + 0x4,0x1u);");changed+=2
+        elif address==script:
+            old="ctx->gpr[3] = vm_read32((ctx->gpr[3] + ctx->gpr[6]));"
+            if body.count(old)!=1:raise SystemExit(f"Battle character read site changed in {region}")
+            body=body.replace(old,"ctx->gpr[3] = cv_battle_read32((ctx->gpr[3] + ctx->gpr[6]),0x7Cu);");changed+=1
+        source=source[:m.start()]+body+source[end:]
+    return source,changed
+
+def main(finalize=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--discover", type=Path)
     parser.add_argument("--input", type=Path)
@@ -26,8 +46,11 @@ def main():
     HOOKS = HOOKS_BY_REGION[args.region]
     if args.discover:
         owners = {}
+        battle_count=0
         for path in sorted(args.discover.glob("ppu_recomp_*.cpp")):
             text = path.read_text(encoding="utf-8", errors="surrogateescape")
+            _,verified=battle_reads(text,args.region)
+            battle_count+=verified
             for address in HOOKS:
                 definition = f"void func_{address}(ppu_context* ctx) {{"
                 count = text.count(definition)
@@ -37,6 +60,7 @@ def main():
                     owners[address] = path.resolve().as_posix()
         if len(owners) != len(HOOKS):
             raise SystemExit(f"Native-menu hooks missing from lift: {set(HOOKS)-owners.keys()}")
+        if battle_count!=5:raise SystemExit(f"Expected five verified Battle read sites in {args.region}; found {battle_count}")
         print(";".join(path.resolve().as_posix() for path in sorted(args.discover.glob("ppu_recomp_*.cpp"))))
         return
     if not args.input or not args.output:
@@ -52,10 +76,13 @@ def main():
         if address == HOOKS[8]:  # frame pacing, on the PPU thread in every FPS mode
             replacement += "\n    cv_cheats_frame();"
         source = source.replace(original, replacement)
+    source,battle_count=battle_reads(source,args.region)
     first = re.search(r"^void (?:func_|cv_original_)[0-9A-F]+\(ppu_context\* ctx\) \{", source, re.M)
     if not first:
         raise SystemExit("No guest function found for cheat store wrappers")
     source = source[:first.start()] + '#include "cv_cheats_lift.h"\n' + source[first.start():]
+    if battle_count:source=source.replace('#include "cv_cheats_lift.h"','#include "cv_cheats_lift.h"\n#include "cv_unlock_lift.h"')
+    if finalize:source=finalize(source,args.region)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     if not args.output.exists() or args.output.read_text(encoding="utf-8", errors="surrogateescape") != source:
         args.output.write_text(source, encoding="utf-8", errors="surrogateescape", newline="\n")

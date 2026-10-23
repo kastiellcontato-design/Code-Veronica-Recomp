@@ -36,6 +36,7 @@
  * sign flipped the two agree to within float rounding (a few LSB).
  */
 #include "ms_atrac3.h"
+#include "audio_gain.h"
 #include "../../third_party/at3_standalone/at3_bridge.h"
 #include <stdio.h>
 #include <string.h>
@@ -155,6 +156,7 @@ uint32_t ms_atrac3_decode(uint8_t* ls, const uint32_t r[8])
                 fmt, channels, n, p);
     }
 
+    const int effects_volume=ps3_audio_gain_percent(1);
     lock();
     for (int c = 0; c < (channels > 0 ? channels : 1) && c < 2; c++) {
         uint8_t* o = ls + ((out + (uint32_t)c * 0x1000) & mask);
@@ -182,6 +184,9 @@ uint32_t ms_atrac3_decode(uint8_t* ls, const uint32_t r[8])
             wr16(o + 2 * (n + i), x);
             a = b; b = x;
         }
+        // Scale only the delivered window, after extrapolation. Decoder state
+        // and lookahead stay unscaled, so gain never compounds or resets audio.
+        ps3_audio_gain_s16be(o,(unsigned)n+4,effects_volume);
         if (s && advance) {
             if (!s->n_ahead) {                      /* never reached in practice */
                 const uint8_t* in = ls + ((work + (uint32_t)(c * frame)) & mask);

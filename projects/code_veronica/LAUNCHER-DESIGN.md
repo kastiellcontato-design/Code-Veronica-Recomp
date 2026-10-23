@@ -64,3 +64,21 @@ youtube=https://www.youtube.com/@kastieloficial
 ```
 
 Para distribuir outros links como padrão, alterar `k_social_defaults` em `launcher.cpp`; para a instalação atual, editar apenas a seção acima. Não houve mudança na lógica do jogo.
+
+### RECOMP SETTINGS: áudio e Battle Game (23/10/2026)
+
+- Abas Gráficos, Áudio e Jogabilidade no menu OPTION → RECOMP SETTINGS. A aba Gráficos preserva a aparência/preview e todos os controles existentes.
+- Q/E no teclado, L1/R1 no PlayStation, LB/RB no Xbox e L/R no Switch mudam as abas. Direcional ajusta os volumes em passos de 5%; o teclado Q/E só é consultado enquanto este menu está aberto e a janela do jogo tem foco.
+- Música e vozes inclui áudio dos vídeos, como na referência Enhanced. Efeitos sonoros têm um volume separado. Ambos começam em 100%, vão até 0% e têm restauração dos volumes. As três entregas de PCM (cellAdec/FFmpeg, cellAtrac e MultiStream ATRAC3) aplicam ganho sem modificar estado ou caches dos decodificadores. 100% conserva as amostras originais.
+- Battle Game começa desligado. A opção libera o modo e seus cinco personagens por filtros em cinco leituras verificadas por região (duas entradas sobrepostas da tela de título e a checagem de personagens). Não escreve flags em SYS_WORK, no save nem em EBOOT. Ao desligar, valem os desbloqueios reais da partida; conquistas obtidas normalmente durante o jogo continuam sendo do jogo.
+- No launcher, Jogos mostra os dois volumes e Cheats mostra a opção Battle Game. Armazenamento em cv_launcher.ini: [audio] musica=100, efeitos=100; [extras] battle_game=0. As mudanças do menu do jogo e do launcher usam a mesma ponte de configuração. Os textos acompanham os 13 idiomas do launcher; fontes do sistema e rasterização da linha completa permitem ideogramas e árabe.
+- CV_NO_LAUNCHER: scripts podem definir CV_MUSIC_VOLUME, CV_SFX_VOLUME e CV_BATTLE_UNLOCKED. Padrões: 100/100/0.
+- Testes: code_veronica_menu_tests (normal e interp), code_veronica_enhanced_tests e code_veronica_audio_gain_tests. Este último executa os três caminhos reais de entrega com saída determinística, sem assets ou dispositivo de áudio, verificando silêncio, metade do volume, restauração e buffers sem ganho acumulado. Os testes não substituem uma audição no jogo com os controles físicos.
+
+Não foram alterados os caminhos de saves/shaders, o motor de 60 FPS, a interpolação, o FSR ou os arquivos instalados do jogo para este recurso.
+
+- Exclusividade de Q/E no RECOMP SETTINGS: o menu reserva essas duas teclas no estágio de teclado → pad, antes da mistura com o controle físico. Enquanto a tela estiver aberta elas só mudam a aba, mesmo quando o usuário as mapeou para voltar/confirmar ou outras ações. Fechar, resetar ou desabilitar o menu libera a reserva; os outros atalhos e os botões físicos não são filtrados.
+
+- Abas no controle: a leitura usa as bordas dos botões físicos L1/R1 (LB/RB, L/R), pelo mesmo leitor físico já usado no menu de itens. Não usa máscaras do estado interno de menu do jogo. Compensa a troca L1/L2 e R1/R2 que o leitor físico aplica no layout Xbox 360 (auto/ligado), para as dicas fixas das abas continuarem correspondendo aos ombros físicos. L2/R2 não mudam a aba; segurar o botão não repete, e abrir o menu com um ombro já pressionado aguarda soltar. A leitura adicional só acontece com o RECOMP SETTINGS aberto. Q/E e o mapeamento da partida permanecem como estavam.
+
+- As dicas das abas respeitam o tipo de ícones escolhido em Controles (PlayStation/Xbox/Switch/teclado); em automático seguem o dispositivo usado. Ao trocar abas com Q/E, aparecem as dicas do teclado.
