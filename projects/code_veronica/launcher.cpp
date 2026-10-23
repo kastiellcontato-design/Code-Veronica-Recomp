@@ -49,6 +49,10 @@
 #include "cv_texture_export.h"
 #include "cv_texture_paths.h"
 #include "../../libs/video/rsx_texture_pack.h"
+#include "cv_updater.h"
+#include "launcher_update_i18n.h"
+#include <thread>
+#include <memory>
 
 /* button_icons.cpp: the keycaps' short labels and font, shared with the game. */
 std::wstring cv_key_cap_label(int vk);
@@ -228,6 +232,7 @@ struct Settings {
     bool test_tools=false; // optional experimental map window, off by default
     bool focus_pause=true; // pause while the game window is out of focus (cv_focus_pause.cpp)
     bool items_menu=false; // F6 item menu in the game (cv_item_menu.cpp), off by default
+    bool check_updates=true; // look for a newer GitHub release when the launcher opens (cv_updater.h)
     bool srt=false;
     bool srt_parts[5]={true,true,true,true,false}; // name, health, time, stats, inventory
     bool srt_border=true;
@@ -470,6 +475,7 @@ Settings load_settings()
     s.test_tools=_wtoi(ini_get(L"testes",L"mapas",L"0").c_str())!=0;
     s.items_menu=_wtoi(ini_get(L"inventario",L"menu_itens",L"0").c_str())!=0;
     s.focus_pause=_wtoi(ini_get(L"jogo",L"pausar_sem_foco",L"1").c_str())!=0;
+    s.check_updates=_wtoi(ini_get(L"launcher",L"procurar_atualizacoes",L"1").c_str())!=0;
     s.srt_opacity=std::clamp(_wtoi(ini_get(L"srt",L"opacidade",L"70").c_str()),0,100);
     s.srt_inventory_below=std::clamp(_wtoi(ini_get(L"srt",L"inventario_embaixo",L"0").c_str()),0,1);
     s.srt_window=std::clamp(_wtoi(ini_get(L"srt",L"janela",L"0").c_str()),0,1);
@@ -546,6 +552,7 @@ void save_settings(const Settings& s)
     ini_set(L"testes",L"mapas",s.test_tools?L"1":L"0");
     ini_set(L"inventario",L"menu_itens",s.items_menu?L"1":L"0");
     ini_set(L"jogo",L"pausar_sem_foco",s.focus_pause?L"1":L"0");
+    ini_set(L"launcher",L"procurar_atualizacoes",s.check_updates?L"1":L"0");
     ini_set(L"srt", L"mostrar",s.srt?L"1":L"0");
     { const wchar_t* keys[]={L"nome",L"vida",L"tempo",L"contadores",L"inventario"};
       for(int i=0;i<5;i++)ini_set(L"srt",keys[i],s.srt_parts[i]?L"1":L"0"); }
@@ -781,6 +788,7 @@ enum {
     ID_DD_OV_CORNER = 2450, ID_DD_OV_LAYOUT, ID_DD_SRT_INVPOS, ID_DD_SRT_WINDOW, ID_DD_SRT_BOSSBAR, ID_DD_OV_SIZE, ID_DD_OV_BG,
     ID_TEX_BROWSE = 2300, ID_TEX_OPEN, ID_TEX_REPLACE, ID_TEX_DUMP, ID_TEX_DUMP_BROWSE, ID_TEX_DUMP_OPEN, ID_TEX_ALL, ID_TEX_ALL_RUN,
     ID_SOCIAL_GITHUB=2580, ID_SOCIAL_YOUTUBE,
+    ID_UPD_TOGGLE=2590, ID_UPD_CHECK, ID_UPD_INSTALL, ID_UPD_LATER, ID_UPD_CANCEL, ID_UPD_CLOSE,
     ID_PAGE_THUMB = 2600, ID_PAGE_TRACK,
 };
 
@@ -1065,6 +1073,213 @@ void section(Graphics& gr, const std::wstring& t, float x, float y, float w, con
 
 /* Release shown under the sidebar, beside the credit. Bump it per release. */
 const wchar_t* const k_launcher_version = L"v1.0";
+
+/* ---------------------------------------------------------------- updates
+ * cv_updater.h does the network and file work on threads of its own, which
+ * post WM_UPDATE back here; the window shows the offer, the download and
+ * the result as a dialog over the launcher. k_launcher_version is the
+ * version compared with the release's tag. */
+namespace upd_text = cv_update_text;
+const wchar_t* ux(upd_text::Id id) { return upd_text::texts[g_lang][id]; }
+const UINT WM_UPDATE = WM_APP + 30;
+enum { UPD_MSG_CHECKED = 1, UPD_MSG_PROGRESS, UPD_MSG_INSTALLING, UPD_MSG_FINISHED };   /* WM_UPDATE's wp */
+enum UpdStep { UPD_NONE, UPD_CHECKING, UPD_OFFER, UPD_DOWNLOADING, UPD_INSTALLING, UPD_FAILED };
+struct UpdState {
+    UpdStep step = UPD_NONE;
+    bool manual = false;            /* "Procurar agora": also report "up to date" and errors */
+    cv_update::Release rel;
+    std::wstring notes;             /* rel.notes made readable */
+    cv_update::Progress prog;
+    cv_update::Error err = cv_update::OK;
+    std::wstring status;            /* the line beside "Procurar agora" */
+};
+UpdState g_upd;
+struct UpdCheck { cv_update::Error err; cv_update::Release rel; };
+
+std::wstring upd_fill(std::wstring t, const std::wstring& a, const std::wstring& b = L"")
+{
+    if (size_t at = t.find(L"%1"); at != std::wstring::npos) t.replace(at, 2, a);
+    if (size_t at = t.find(L"%2"); at != std::wstring::npos) t.replace(at, 2, b);
+    return t;
+}
+const wchar_t* upd_error_text(cv_update::Error e)
+{
+    switch (e) {
+    case cv_update::ERR_NO_RELEASE:  return ux(upd_text::ERR_NO_RELEASE);
+    case cv_update::ERR_NO_PACKAGE:  return ux(upd_text::ERR_NO_PACKAGE);
+    case cv_update::ERR_DOWNLOAD: case cv_update::ERR_CANCELED: return ux(upd_text::ERR_DOWNLOAD);
+    case cv_update::ERR_CHECKSUM:    return ux(upd_text::ERR_CHECKSUM);
+    case cv_update::ERR_EXTRACT:     return ux(upd_text::ERR_EXTRACT);
+    case cv_update::ERR_BAD_PACKAGE: return ux(upd_text::ERR_BAD_PACKAGE);
+    case cv_update::ERR_WRITE:       return ux(upd_text::ERR_WRITE);
+    default:                         return ux(upd_text::ERR_NETWORK);
+    }
+}
+/* Release notes are Markdown: drop the heading marks and bold, show bullets. */
+std::wstring upd_plain_notes(const std::wstring& md)
+{
+    std::wstring out, line;
+    auto flush = [&] {
+        size_t i = line.find_first_not_of(L" \t");
+        std::wstring l = i == std::wstring::npos ? L"" : line.substr(i);
+        while (!l.empty() && l[0] == L'#') l.erase(0, 1);
+        if (l.size() > 1 && (l[0] == L'-' || l[0] == L'*') && l[1] == L' ') l = L"•" + l.substr(1);
+        for (size_t at; (at = l.find(L"**")) != std::wstring::npos; ) l.erase(at, 2);
+        i = l.find_first_not_of(L" \t");
+        out += (i == std::wstring::npos ? L"" : l.substr(i)) + L"\n";
+        line.clear();
+    };
+    for (wchar_t c : md) { if (c == L'\r') continue; if (c == L'\n') flush(); else line += c; }
+    if (!line.empty()) flush();
+    while (!out.empty() && (out.back() == L'\n' || out.back() == L' ')) out.pop_back();
+    return out;
+}
+
+void upd_check(bool manual)
+{
+    if (g_upd.step != UPD_NONE) return;
+    g_upd.step = UPD_CHECKING; g_upd.manual = manual; g_upd.status.clear();
+    const HWND hwnd = g.hwnd;
+    std::thread([hwnd] {
+        auto* r = new UpdCheck{};
+        try{r->err = cv_update::fetch_latest(&r->rel);}catch(...){r->err=cv_update::ERR_NETWORK;}
+        if (!PostMessageW(hwnd, WM_UPDATE, UPD_MSG_CHECKED, LPARAM(r))) delete r;
+    }).detach();
+}
+void upd_start_install()
+{
+    wchar_t self[MAX_PATH]; GetModuleFileNameW(NULL, self, MAX_PATH);
+    const fs::path exe(self);
+    g_upd.step = UPD_DOWNLOADING; g_upd.prog.done = 0; g_upd.prog.total = g_upd.rel.asset_size; g_upd.prog.cancel = false;
+    const HWND hwnd = g.hwnd;
+    const cv_update::Release rel = g_upd.rel;
+    std::thread([hwnd, rel, exe] {
+        std::atomic<bool> busy{true};
+        std::thread tick([&] {   /* the bar moves ten times a second */
+            while (busy) { PostMessageW(hwnd, WM_UPDATE, UPD_MSG_PROGRESS, 0); Sleep(100); }
+        });
+        fs::path zip;
+        cv_update::Error e=cv_update::ERR_DOWNLOAD;
+        try{e = cv_update::download(rel, cv_update::work_dir(), &g_upd.prog, &zip);}catch(...){e=cv_update::ERR_DOWNLOAD;}
+        busy = false; tick.join();
+        if(e==cv_update::OK&&g_upd.prog.cancel)e=cv_update::ERR_CANCELED;
+        if (e == cv_update::OK) {
+            PostMessageW(hwnd, WM_UPDATE, UPD_MSG_INSTALLING, 0);
+            try{e = cv_update::install(zip, exe.parent_path(), exe.filename().wstring());}catch(...){e=cv_update::ERR_WRITE;}
+        }
+        PostMessageW(hwnd, WM_UPDATE, UPD_MSG_FINISHED, LPARAM(e));
+    }).detach();
+}
+/* The new files are in place: start the new executable, which deletes the
+ * old copies once this process has gone (cv_update::cleanup), and leave. */
+void upd_relaunch()
+{
+    wchar_t self[MAX_PATH]; GetModuleFileNameW(NULL, self, MAX_PATH);
+    wchar_t cwd[MAX_PATH]; GetCurrentDirectoryW(MAX_PATH, cwd);
+    SetEnvironmentVariableW(L"CV_UPDATE_DONE", std::to_wstring(GetCurrentProcessId()).c_str());
+    std::wstring cmd = L"\"" + std::wstring(self) + L"\"";
+    STARTUPINFOW si = { sizeof si }; PROCESS_INFORMATION pi = {};
+    if (CreateProcessW(self, &cmd[0], NULL, NULL, FALSE, 0, NULL, cwd, &si, &pi)) {
+        CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
+        ExitProcess(0);
+    }
+    SetEnvironmentVariableW(L"CV_UPDATE_DONE",nullptr);
+    g_upd.step=UPD_FAILED;g_upd.err=cv_update::ERR_WRITE;
+    InvalidateRect(g.hwnd,nullptr,FALSE);
+}
+
+/* The dialog, over everything; while it is up only its buttons answer. */
+void draw_update_dialog(Graphics& gr, const Font& title, const Font& body, const Font& fsm)
+{
+    if (g_upd.step < UPD_OFFER) return;
+    g.hits.clear();
+    SolidBrush dim(Color(210, 8, 8, 10)); gr.FillRectangle(&dim, 0, 0, W, H);
+    const float bw = 620, bh = 440, x = (W - bw) / 2, y = (H - bh) / 2, px = x + 30, pw = bw - 60;
+    GraphicsPath* p = round_rect(RectF(x, y, bw, bh), 8);
+    SolidBrush bg(C_PANEL); gr.FillPath(&bg, p);
+    Pen bd(C_RED, 1.5f); gr.DrawPath(&bd, p); delete p;
+    const bool failed = g_upd.step == UPD_FAILED;
+    float cy = y + 26;
+    text(gr, ux(failed ? upd_text::FAILED : upd_text::TITLE), px, cy, title, failed ? C_RED_HI : C_TEXT, StringAlignmentNear, pw, 32);
+    cy += 40;
+    text(gr, upd_fill(ux(upd_text::VERSIONS), k_launcher_version, g_upd.rel.tag), px, cy, body, C_DIM, StringAlignmentNear, pw, 22);
+    cy += 34;
+    Pen line(C_LINE, 1); gr.DrawLine(&line, px, cy, px + pw, cy);
+    cy += 14;
+    StringFormat wrap; wrap.SetTrimming(StringTrimmingEllipsisWord);
+    if (g_lang == LANG_AR) wrap.SetFormatFlags(StringFormatFlagsDirectionRightToLeft);
+    if (failed) {
+        SolidBrush ink(C_TEXT);
+        gr.DrawString(upd_error_text(g_upd.err), -1, &body, RectF(px, cy, pw, 120), &wrap, &ink);
+    } else {
+        text(gr, ux(upd_text::NOTES), px, cy, body, C_RED_HI, StringAlignmentNear, pw, 22);
+        cy += 28;
+        RectF notes(px, cy, pw, 178);
+        SolidBrush nb(C_FIELD); gr.FillRectangle(&nb, notes);
+        Pen nbd(C_FIELD_BD, 1); gr.DrawRectangle(&nbd, notes);
+        SolidBrush ink(g_upd.notes.empty() ? C_DIM : C_TEXT);
+        gr.DrawString(g_upd.notes.empty() ? ux(upd_text::NO_NOTES) : g_upd.notes.c_str(), -1, &fsm,
+                      RectF(px + 12, cy + 10, pw - 24, 178 - 20), &wrap, &ink);
+        cy += 190;
+        text(gr, ux(upd_text::KEEP_NOTE), px, cy, fsm, C_DIM, StringAlignmentNear, pw, 20);
+    }
+    const float by = y + bh - 66;
+    if (g_upd.step == UPD_OFFER) {
+        button(gr, RectF(x + bw - 30 - 180, by, 180, 40), ux(upd_text::INSTALL), ID_UPD_INSTALL, body, true);
+        button(gr, RectF(x + bw - 30 - 180 - 14 - 150, by, 150, 40), ux(upd_text::LATER), ID_UPD_LATER, body);
+    } else if (failed) {
+        button(gr, RectF(x + bw - 30 - 150, by, 150, 40), ux(upd_text::CLOSE), ID_UPD_CLOSE, body);
+    } else {
+        /* the bar: filled by the bytes received, full while installing */
+        const bool installing = g_upd.step == UPD_INSTALLING;
+        const uint64_t done = g_upd.prog.done, total = g_upd.prog.total;
+        const float frac = installing ? 1.0f : total ? std::min(1.0f, float(double(done) / double(total))) : 0.0f;
+        const float barw = installing ? pw : pw - 150 - 16;
+        RectF bar(px, by + 26, barw, 12);
+        GraphicsPath* tp = round_rect(bar, 6); SolidBrush track(C_FIELD); gr.FillPath(&track, tp);
+        Pen tb(C_FIELD_BD, 1); gr.DrawPath(&tb, tp); delete tp;
+        if (frac > 0.01f) {
+            GraphicsPath* fp = round_rect(RectF(bar.X, bar.Y, std::max(12.0f, bar.Width * frac), bar.Height), 6);
+            SolidBrush fill(installing ? C_RED : C_RED_HI); gr.FillPath(&fill, fp); delete fp;
+        }
+        std::wstring label = ux(installing ? upd_text::INSTALLING : upd_text::DOWNLOADING);
+        if (!installing) {
+            wchar_t b[96];
+            if (total) swprintf(b, 96, L"   %d%%   %.1f / %.1f MB", int(frac * 100), done / 1048576.0, total / 1048576.0);
+            else swprintf(b, 96, L"   %.1f MB", done / 1048576.0);
+            label += b;
+            button(gr, RectF(x + bw - 30 - 150, by, 150, 40), ux(upd_text::CANCEL), ID_UPD_CANCEL, body);
+        }
+        text(gr, label, px, by - 2, fsm, C_TEXT, StringAlignmentNear, barw, 22);
+    }
+}
+
+/* WM_UPDATE: a step of the check or the install has finished. */
+void upd_message(WPARAM wp, LPARAM lp)
+{
+    if (wp == UPD_MSG_CHECKED) {
+        std::unique_ptr<UpdCheck> r(reinterpret_cast<UpdCheck*>(lp));
+        const bool manual = g_upd.manual;
+        g_upd.step = UPD_NONE;
+        if (r->err != cv_update::OK) {
+            /* the check at start stays quiet when offline or nothing is published */
+            g_upd.status = manual ? upd_error_text(r->err) : L"";
+        } else if (cv_update::compare_versions(r->rel.tag, k_launcher_version) <= 0) {
+            g_upd.status = manual ? upd_fill(ux(upd_text::LATEST), k_launcher_version) : L"";
+        } else if (!g.running) {   /* never over the running game's menu */
+            g_upd.rel = r->rel; g_upd.notes = upd_plain_notes(r->rel.notes);
+            g_upd.step = UPD_OFFER; g.open_dd = -1; g.hover = -1;
+        }
+    } else if (wp == UPD_MSG_INSTALLING) {
+        g_upd.step = UPD_INSTALLING;
+    } else if (wp == UPD_MSG_FINISHED) {
+        const auto e = cv_update::Error(lp);
+        if (e == cv_update::OK) upd_relaunch();   /* returns only if the new executable did not start */
+        else if (e == cv_update::ERR_CANCELED) { g_upd.step = UPD_NONE; g_upd.status.clear(); }
+        else { g_upd.step = UPD_FAILED; g_upd.err = e; }
+    }
+    InvalidateRect(g.hwnd, NULL, FALSE);
+}
 
 /* ---------------------------------------------------------------- pages */
 namespace design=cv_launcher_design;
@@ -1847,7 +2062,17 @@ void draw_avancado(Graphics& gr, const Font& head, const Font& body, const Font&
     text(gr, T(S_LANG), x, y, body, C_TEXT, StringAlignmentNear, 240, 30);
     dropdown(gr, RectF(x + 250, y, 260, 30), lang_choice_name(), ID_DD_LANG, body);
     text(gr, T(S_LANG_HINT), x, y + 28, fsm, C_DIM, StringAlignmentNear, 240, 20);
-    y += 76;
+    y += 62;
+    /* Updates from the GitHub releases (cv_updater.h) */
+    option_card(gr, x, y, w, 84, g.s.check_updates, ID_UPD_TOGGLE, ux(upd_text::OPTION), ux(upd_text::OPTION_DESC), body, fsm);
+    y += 98;
+    {
+        const bool busy = g_upd.step != UPD_NONE;
+        button(gr, RectF(x, y, 220, 34), ux(upd_text::CHECK_NOW), ID_UPD_CHECK, body, false, !g.running && !busy);
+        const std::wstring st = g_upd.step == UPD_CHECKING && g_upd.manual ? ux(upd_text::CHECKING) : g_upd.status;
+        text(gr, st, x + 236, y, body, C_DIM, StringAlignmentNear, w - 236, 34);
+    }
+    y += 60;
     section(gr, T(S_ADV_FILES), x, y, w, head);
     y += 46;
     button(gr, RectF(x, y, 280, 34), T(S_CLEAR_CACHE), ID_CACHE_CLEAR, body, false, !g.running);
@@ -2319,6 +2544,7 @@ void paint(HDC hdc)
     draw_page_scroll(gr, pi);
     draw_sidebar(gr, fTitle, fTitle2, fNav, fSmall);
     draw_play(gr, fBig, fSmall);
+    if (g_upd.step >= UPD_OFFER) { g.open_dd = -1; draw_update_dialog(gr, fTitle, fBody, fSmall); }
 
     /* open dropdown list on top */
     if (g.open_dd >= 0) {
@@ -2606,6 +2832,13 @@ void finish_srt_drag() {
 
 void click(int id)
 {
+    if (g_upd.step >= UPD_OFFER) {   /* the update dialog is modal */
+        if (id == ID_UPD_INSTALL && g_upd.step == UPD_OFFER) upd_start_install();
+        else if (id == ID_UPD_LATER && g_upd.step == UPD_OFFER) g_upd.step = UPD_NONE;
+        else if (id == ID_UPD_CANCEL && g_upd.step == UPD_DOWNLOADING) g_upd.prog.cancel = true;
+        else if (id == ID_UPD_CLOSE && g_upd.step == UPD_FAILED) g_upd.step = UPD_NONE;
+        InvalidateRect(g.hwnd, NULL, FALSE); return;
+    }
     if(id==ID_SOCIAL_GITHUB||id==ID_SOCIAL_YOUTUBE){
         const auto url=social_url(id-ID_SOCIAL_GITHUB);
         if(!url.empty())ShellExecuteW(g.hwnd,L"open",url.c_str(),nullptr,nullptr,SW_SHOWNORMAL);
@@ -2679,6 +2912,8 @@ void click(int id)
     else if(id==ID_TEST_ENABLE){g.s.test_tools=!g.s.test_tools;cv_test_tools_enable(g.s.test_tools);changed();}
     else if(id==ID_TEST_OPEN&&g.running)cv_test_tools_show(g.hwnd,g.s.game,g_lang,PAD_INPUT_KEYBOARD);
     else if(id==ID_FOCUS_PAUSE){g.s.focus_pause=!g.s.focus_pause;changed();}
+    else if(id==ID_UPD_TOGGLE){g.s.check_updates=!g.s.check_updates;changed();}
+    else if(id==ID_UPD_CHECK&&!g.running)upd_check(true);
     else if(id==ID_ITEMS_ENABLE){g.s.items_menu=!g.s.items_menu;cv_item_menu_enable(g.s.items_menu);changed();}
     else if(id==ID_SHOT_OPEN){const fs::path d=fs::path(ini_path()).parent_path()/L"screenshots";std::error_code ec;fs::create_directories(d,ec);open_in_explorer(d.wstring());}
     else if (id == ID_GAME_BROWSE||id==2710) {
@@ -2872,6 +3107,7 @@ LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp)
         TRACKMOUSEEVENT t = { sizeof t, TME_LEAVE, h, 0 }; TrackMouseEvent(&t);
         return 0; }
     case WM_MOUSEWHEEL:
+        if (g_upd.step >= UPD_OFFER) return 0;
         if(g.page==P_CONTROLES && g.open_dd<0) {
             POINT p={GET_X_LPARAM(lp),GET_Y_LPARAM(lp)};ScreenToClient(h,&p);
             if(hit_at(logical_x(p.x),logical_y(p.y))==ID_RUMBLE) {
@@ -2923,6 +3159,11 @@ LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp)
         if(g.srt_drag>=0) {update_srt_slider(g.srt_drag,logical_x(GET_X_LPARAM(lp)));finish_srt_drag();return 0;}break;
     case WM_CAPTURECHANGED: case WM_CANCELMODE: g.page_drag = false; finish_srt_drag();return 0;
     case WM_KEYDOWN: case WM_SYSKEYDOWN:
+        if (g_upd.step >= UPD_OFFER && m == WM_KEYDOWN) {   /* Esc: Agora nao / Fechar / Cancelar; Enter: Instalar */
+            if (wp == VK_ESCAPE) click(g_upd.step == UPD_OFFER ? ID_UPD_LATER : g_upd.step == UPD_FAILED ? ID_UPD_CLOSE : ID_UPD_CANCEL);
+            else if (wp == VK_RETURN && g_upd.step == UPD_OFFER) click(ID_UPD_INSTALL);
+            return 0;
+        }
         if (g.cap == CAP_KEY) {
             if (wp == VK_ESCAPE) { g.cap = CAP_NONE; InvalidateRect(h, NULL, FALSE); return 0; }
             int vk = vk_from_msg(wp, lp);
@@ -2948,6 +3189,8 @@ LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp)
         break;
     case WM_CLOSE:
         finish_srt_drag();
+        if(g_upd.step==UPD_DOWNLOADING){g_upd.prog.cancel=true;return 0;}
+        if (g_upd.step == UPD_INSTALLING) return 0;   /* half-copied files would be left behind */
         if (g.running) { ShowWindow(h, SW_HIDE); quit_game(); return 0; }
         break;
     case WM_TIMER: {
@@ -3042,6 +3285,7 @@ LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp)
     if (m == WM_TOGGLE_MENU) { toggle_menu(); return 0; }
     if (m == WM_TOGGLE_TEXTURES) { toggle_textures("F9"); return 0; }
     if(m==WM_TOGGLE_SRT) {toggle_srt();return 0;}
+    if(m==WM_UPDATE) {upd_message(wp,lp);return 0;}
     if(m==WM_TEST_MAPS) {if(g.running)cv_test_tools_show(g.hwnd,g.s.game,g_lang,int(wp));return 0;}
     if(m==WM_ITEM_MENU) {if(g.running&&g.s.items_menu)cv_item_menu_toggle(g.s.game,g_lang);return 0;}   /* off: F6 does nothing */
     return DefWindowProcW(h, m, wp, lp);
@@ -3364,6 +3608,16 @@ DWORD WINAPI launcher_thread(void*)
     ShowWindow(g.hwnd, SW_SHOW);
     SetForegroundWindow(g.hwnd);
     SetTimer(g.hwnd, 1, 30, NULL);
+    {   /* Updates: delete what an install replaced, say it happened, look for a newer release. */
+        wchar_t self[MAX_PATH]; GetModuleFileNameW(NULL, self, MAX_PATH);
+        const fs::path dir = fs::path(self).parent_path();
+        if (const char* d = getenv("CV_UPDATE_DONE"); d && *d)
+            g.play_msg = g_upd.status = upd_fill(ux(upd_text::UPDATED), k_launcher_version);
+        std::thread([dir] { cv_update::cleanup(dir); }).detach();
+        const char* autoplay = getenv("CV_LAUNCHER_AUTOPLAY");
+        const char* off = getenv("CV_UPDATE_DISABLE");
+        if (g.s.check_updates && !(autoplay && *autoplay) && !(off && *off == '1')) upd_check(false);
+    }
     /* Started by the other version's launcher for this version's folder:
      * play at once with the settings it saved. Once only. */
     if (const char* a = getenv("CV_LAUNCHER_AUTOPLAY"); a && *a) {

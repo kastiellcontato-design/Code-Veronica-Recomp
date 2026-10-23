@@ -240,6 +240,7 @@ add_executable(${PROJECT_NAME}
     button_icons.cpp
     patch_files.cpp
     log_viewer.cpp
+    cv_updater.cpp
     stubs.cpp
     ${PS3RECOMP_SCAFFOLD}
     ${HLE_NID_TABLE}
@@ -473,6 +474,13 @@ if(MSVC)
     target_link_options(code_veronica_save_tests PRIVATE /OPT:REF)
 else()
     target_compile_options(code_veronica_save_tests PRIVATE -UNDEBUG)
+endif()
+
+# Launcher updater: version order, protected paths, releases JSON, and a
+# local download -> install -> cleanup in %TEMP%; no network.
+if(WIN32)
+    add_executable(code_veronica_updater_tests EXCLUDE_FROM_ALL tests/test_updater.cpp cv_updater.cpp)
+    target_compile_options(code_veronica_updater_tests PRIVATE /UNDEBUG)
 endif()
 
 if(WIN32)

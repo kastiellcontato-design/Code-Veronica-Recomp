@@ -185,6 +185,12 @@ if "%CV_CHEAT_TESTS%"=="1" (
  build-release\bin\cv_cheats_tests_us.exe || exit /b 1
 )
 
+rem Launcher updater: no network, a throwaway folder in %%TEMP%%.
+if "%CV_UPDATER_TESTS%"=="1" (
+ cmake --build build-release --target code_veronica_updater_tests -j 6 || exit /b 1
+ build-release\bin\code_veronica_updater_tests.exe || exit /b 1
+)
+
 rem Pause on focus loss: the decision logic, no game or window needed.
 if "%CV_FOCUS_PAUSE_TESTS%"=="1" (
  cmake --build build-release --target code_veronica_focus_pause_tests -j 6 || exit /b 1
