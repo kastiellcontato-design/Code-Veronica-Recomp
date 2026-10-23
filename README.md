@@ -70,6 +70,18 @@ Game updates, disc releases and other versions are not supported. The launcher c
 
 **No PS3 firmware and no RPCS3 are needed to play.**
 
+### Test PC
+
+The port was developed and tested on this PC, where the game was **completed from start to finish**:
+
+| Part | Model |
+|---|---|
+| CPU | AMD Ryzen 5 5600X |
+| GPU | AMD Radeon RX 6700 XT 12 GB |
+| RAM | 32 GB DDR4 |
+
+Other PCs should work, but this is the configuration that was actually tested.
+
 ## Preparing your game
 
 The port reads the game from a **folder**, not from a `.pkg` file. It works like the PS4 ports that use shadPS4-style game folders: the PKG must be **installed or extracted first**. A `.pkg` file cannot be opened directly.

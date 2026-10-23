@@ -70,6 +70,18 @@ Atualizações do jogo, versões em disco e outras versões não funcionam. O la
 
 **Não precisa de firmware do PS3 nem do RPCS3 para jogar.**
 
+### PC de teste
+
+O port foi desenvolvido e testado neste PC, onde o jogo foi **zerado do início ao fim**:
+
+| Peça | Modelo |
+|---|---|
+| Processador | AMD Ryzen 5 5600X |
+| Placa de vídeo | AMD Radeon RX 6700 XT 12 GB |
+| Memória | 32 GB DDR4 |
+
+Outros PCs devem funcionar, mas esta é a configuração que foi realmente testada.
+
 ## Preparando o jogo
 
 O port lê o jogo de uma **pasta**, não de um arquivo `.pkg`. Funciona como os ports de PS4 que usam pastas de jogo no estilo do shadPS4: o PKG precisa ser **instalado ou extraído antes**. Não dá para abrir um `.pkg` direto.
