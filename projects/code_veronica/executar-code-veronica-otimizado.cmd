@@ -10,6 +10,9 @@ rem Limite de tarefas pesadas de SPU rodando ao mesmo tempo.
 set "SPU_MAX_RUNNING=10"
 rem Threads de som do jogo com prioridade maior (evita audio picotando).
 set "PPU_BOOST_NAMES=snddrv"
+rem Reaproveita as threads das tarefas de SPU (uma thread nova por tarefa
+rem custava ~3 FPS na sala pesada). Para comparar sem: SPU_TASK_POOL=0.
+if not defined SPU_TASK_POOL set "SPU_TASK_POOL=1"
 rem Resolucao: 1.5 = 1080p (1920x1080). Para voltar ao 720p, deixe o rem na frente.
 rem set "RES_SCALE=1.5"
 rem Diagnosticos de audio (desligados).
@@ -70,6 +73,7 @@ if "%CV_FPS_TEST_60%"=="1" (
  echo Para voltar aos 30 FPS, feche e use o atalho normal.
 )
 if "%CV_FPS_TEST_60%"=="1" if "%CV_FPS_BENCHMARK_RAW%"=="1" set "GAME_LOG=%~dp0run-log-benchmark60-acelerado.txt"
+if "%CV_FPS_UNLOCKED%"=="1" set "GAME_LOG=%~dp0run-log-fps-livre.txt"
 if not "%CV_FPS_TEST_60%"=="1" set "CV_RENDER_INTERPOLATION="
 if "%CV_FPS_TEST_60%"=="1" if "%CV_RENDER_INTERPOLATION%"=="1" set "GAME_LOG=%~dp0run-log-fps60-interpolado.txt"
 if "%CV_POSE_COMPUTE_TEST%"=="1" if "%CV_POSE_COMPUTE%"=="1" set "GAME_LOG=%~dp0run-log-fps60-gpu-compute.txt"

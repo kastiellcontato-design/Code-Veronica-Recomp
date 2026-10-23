@@ -1021,6 +1021,9 @@ static int s_pose_on;
 static int opt30_mode(void) {
     static int mode=-2;
     if(mode==-2)mode=rsx_opt30_mode(getenv("CV30_OPTIMIZATIONS"),getenv("CV_FPS_TEST_60"));
+    /* Uncapped benchmark: one present per guest frame, as native 30, so it
+     * keeps that optimization package instead of measuring without it. */
+    if(mode<0){const char* u=getenv("CV_FPS_UNLOCKED");if(u&&u[0]=='1'&&!u[1])mode=1;}
     return mode;
 }
 static int precomputed_tex_edges_on(void) {return opt30_mode()!=0;}

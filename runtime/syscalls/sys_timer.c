@@ -175,6 +175,28 @@ static void usleep_account(unsigned long long us)
     }
     if (s_ust_slot >= 0) { s_ust[s_ust_slot].us += us; s_ust[s_ust_slot].calls++; }
 }
+/* Shortest usleep that sleeps on a high-resolution timer instead of spinning
+ * (SYS_USLEEP_HR_MIN_US, default 200; 1000 or more turns it off). */
+static unsigned long long usleep_hr_min_us(void)
+{
+    static long long v = -1;
+    if (v < 0) { const char* e = getenv("SYS_USLEEP_HR_MIN_US");
+                 v = (e && *e) ? strtoll(e, NULL, 10) : 200; if (v < 101) v = 101; }
+    return (unsigned long long)v;
+}
+/* One timer per thread, made on first use (NULL where the OS lacks
+ * CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, Windows 10 1803+: then spin only). */
+static HANDLE usleep_hr_timer(void)
+{
+    static __declspec(thread) HANDLE s_timer;
+    static __declspec(thread) int s_tried;
+    if (!s_tried) {
+        s_tried = 1;
+        s_timer = CreateWaitableTimerExW(NULL, NULL, 0x00000002 /* CREATE_WAITABLE_TIMER_HIGH_RESOLUTION */,
+                                         TIMER_ALL_ACCESS);
+    }
+    return s_timer;
+}
 #endif
 
 
@@ -303,6 +325,28 @@ int64_t sys_timer_usleep(ppu_context* ctx)
         } else {
             Sleep((DWORD)(usec / 1000));
         }
+    } else if (usec >= usleep_hr_min_us()) {
+        /* 200-999 us (SYS_USLEEP_HR_MIN_US): sleep on this thread's
+         * high-resolution waitable timer up to ~100 us before the deadline,
+         * then spin the tail to the same QPC deadline as below. A thread that
+         * polls with these sleeps (Code Veronica's snddrv_ms_update_thread)
+         * held ~40% of a core spinning; the wake time is unchanged. Idea from
+         * gow-ascension-pc's usleep-hr-timer patch (MIT). */
+        ensure_qpc_init();
+        LARGE_INTEGER qpc_start, qpc_now;
+        QueryPerformanceCounter(&qpc_start);
+        const int64_t qpc_deadline = qpc_start.QuadPart +
+            (int64_t)((usec * (uint64_t)s_qpc_freq.QuadPart) / 1000000ULL);
+        HANDLE timer = usleep_hr_timer();
+        if (timer) {
+            LARGE_INTEGER due;
+            due.QuadPart = -((LONGLONG)(usec - 100) * 10);
+            if (SetWaitableTimer(timer, &due, 0, NULL, NULL, FALSE))
+                WaitForSingleObject(timer, INFINITE);
+        }
+        for (QueryPerformanceCounter(&qpc_now); qpc_now.QuadPart < qpc_deadline;
+             QueryPerformanceCounter(&qpc_now))
+            SwitchToThread();
     } else if (usec > 0) {
         /* Sub-millisecond sleep. Sleep()/waitable timers round up to the
          * ~0.5-1 ms scheduler quantum, far too coarse for a guest that relies

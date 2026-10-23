@@ -40,6 +40,12 @@ bool enabled() {
     static const bool on=[] {const char* e=std::getenv("CV_FPS_TEST_60");return e&&std::strcmp(e,"1")==0;}();
     return on;
 }
+// CV_FPS_UNLOCKED=1 (benchmark shortcut only): the engine cap goes to 1000
+// instead of 60, so the frame rate shows how far the machine can go.
+float frame_cap() {
+    static const float cap=[] {const char* e=std::getenv("CV_FPS_UNLOCKED");return e&&std::strcmp(e,"1")==0?1000.0f:60.0f;}();
+    return cap;
+}
 // The renderer presents every native 30 Hz frame twice (interpolated, then
 // recorded): the guest keeps its own pacing, one update and one draw a tick.
 bool replay() {
@@ -58,7 +64,7 @@ void CV_FN_FRAME_PACE(ppu_context* ctx) {
     // with a 60 FPS cap: target delta is 30/60 = 0.5 logical ticks.
     // Keep the base at 30 so elapsed game time is not doubled.
     const bool change=base==30.0f && cap>=30.0f && cap<=3000.0f && mode<=1 && !replay();
-    if(change) {write_float(object+0x64,60.0f);vm_write8(object+0x68,0);}
+    if(change) {write_float(object+0x64,frame_cap());vm_write8(object+0x68,0);}
     static bool announced=false;
     if(!announced) {
         std::fprintf(stderr,"[FPS60 %s] engine object=%08X base=%g cap=%g mode=%u override=%u\n",CV_TITLE_ID,object,base,cap,unsigned(mode),unsigned(change));
@@ -68,7 +74,7 @@ void CV_FN_FRAME_PACE(ppu_context* ctx) {
     timing.store(change?(0x100000000ull|vm_read32(object+0x90)):0,std::memory_order_release);
     // No lasting guest setting. Leave a change made by the original routine alone.
     if(change) {
-        if(read_float(object+0x64)==60.0f)vm_write32(object+0x64,previous);
+        if(read_float(object+0x64)==frame_cap())vm_write32(object+0x64,previous);
         if(vm_read8(object+0x68)==0)vm_write8(object+0x68,mode);
     }
     if(!profile_enabled())return;

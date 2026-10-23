@@ -3476,6 +3476,11 @@ void start_game()
      * An explicit compiler override remains available to diagnostic launchers. */
     const char* compiler_env=std::getenv("SHADER_COMPILER");
     if(!compiler_env||!*compiler_env)set_env("SHADER_COMPILER","dxc");
+    /* SPU task threads are reused instead of one CreateThread per task
+     * (~2000 tasks/s in the heavy JP room): ~50 -> ~53 real FPS uncapped.
+     * An explicit SPU_TASK_POOL=0 still selects the old detached threads. */
+    const char* pool_env=std::getenv("SPU_TASK_POOL");
+    if(!pool_env||!*pool_env)set_env("SPU_TASK_POOL","1");
     set_env("PS3_VFS_ROOT", narrow(s.game));
     set_env("PS3_SAVE_ROOT", s.saves.empty() ? "" : save_utf8(save_folder()));
     const auto rap = rap_for_game(s, GAME_CODE);
@@ -3489,6 +3494,10 @@ void start_game()
      * The accelerated RAW benchmark remains a separate diagnostic shortcut. */
     const char* diagnostic_env=std::getenv("CV_FPS_DIAGNOSTIC");
     const bool fps_diagnostic=diagnostic_env&&std::strcmp(diagnostic_env,"1")==0;
+    /* Uncapped benchmark (its own shortcut only): vblank at 1000 Hz and no
+     * frame generation, so the counter shows the real ceiling. */
+    const char* unlocked_env=std::getenv("CV_FPS_UNLOCKED");
+    const bool fps_unlocked=fps_diagnostic&&unlocked_env&&std::strcmp(unlocked_env,"1")==0;
     if(opt30_comparison() || (!fps_diagnostic && s.fps==0)) {
         set_env("CV_FPS_TEST_60", "");set_env("CV_FPS_BENCHMARK_RAW", "");
         set_env("CV_RENDER_INTERPOLATION", "");set_env("VBLANK_HZ", "60");set_env("CV_POSE_COMPUTE","");set_env("CV_FSR_FRAME_GENERATION","");
@@ -3496,12 +3505,12 @@ void start_game()
         set_env("CV_FPS_TEST_60", "1");
         if(!fps_diagnostic)set_env("CV_FPS_BENCHMARK_RAW", "");
         if(!fps_diagnostic)set_env("CV_RENDER_INTERPOLATION", "1");
-        set_env("VBLANK_HZ", "60");
+        set_env("VBLANK_HZ", fps_unlocked?"1000":"60");
         if(!fps_diagnostic){set_env("CV_POSE_CPU_BLEND","1");set_env("CV_POSE_CPU","");set_env("CV_POSE_COMPUTE",s.pose_device?"1":"");}
     }
     if(!opt30_comparison()&&(s.fps==1||fps_diagnostic)){
         /* Existing CPU/GPU benchmarks remain comparable after saving FSR on. */
-        set_env("CV_FSR_FRAME_GENERATION",s.frame_generation&&frame_generation_allowed()?"1":"");
+        set_env("CV_FSR_FRAME_GENERATION",!fps_unlocked&&s.frame_generation&&frame_generation_allowed()?"1":"");
     }
     if(!fps_diagnostic) {
         for(const char* name:{"CV_POSE_PROFILE","CV_POSE_SEARCH_PROFILE","CV_FRAME_PROFILE",
