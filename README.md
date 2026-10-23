@@ -166,9 +166,13 @@ A native **SRT** (speedrun tool) overlay drawn by the game itself, toggled with 
 - **Patches**: skip door animations, skip the opening logos and intro, plus your own patches in RPCS3's `patch.yml` format.
 - Choose where saves are stored.
 
-### In-game RECOMP SETTINGS
+### In-game RECOMP SETTINGS and character swap
 
-In the game's own **OPTION** menu, a **RECOMP SETTINGS** page changes anti-aliasing, sharpening, anisotropic filtering, brightness, contrast and saturation without opening the launcher. Its **APPEARANCE** page swaps the character model: Claire (original and alternate outfit), Chris, Steve, Wesker, 26 zombie variants and two forms of Alexia, with a rotating preview. It is only visual; the story and the save are unchanged.
+![RECOMP SETTINGS with the appearance selector](docs/images/recomp-settings-appearance.jpg)
+
+In the game's own **OPTION** menu, the **RECOMP SETTINGS** page changes resolution, anti-aliasing, display mode, brightness, contrast, saturation, sharpening (FSR RCAS) and anisotropic filtering without opening the launcher, with **Reset colors** to go back to the defaults.
+
+At the top of the same page, **APPEARANCE** lets you **play as another character model**: press left/right to choose and see it in a rotating **360° preview**. There are 33 options: Claire (original and alternate outfit), Chris, Steve, Wesker, 26 zombie variants and two forms of Alexia (first form and human). The chosen look is also applied when you play as Chris, Steve or Wesker. It only changes how the character looks; the story, the controls and your save stay the same.
 
 ### Controls
 

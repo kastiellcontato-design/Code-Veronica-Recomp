@@ -166,9 +166,13 @@ Un **SRT** (speedrun tool) nativo, dibujado por el propio juego, que se activa y
 - **Parches**: saltar la animación de las puertas, saltar los logos y la introducción, y tus propios parches en el formato `patch.yml` de RPCS3.
 - Elección de la carpeta de las partidas guardadas.
 
-### RECOMP SETTINGS dentro del juego
+### RECOMP SETTINGS y cambio de personaje dentro del juego
 
-En el propio menú **OPTION** del juego, la página **RECOMP SETTINGS** cambia el antialiasing, la nitidez, el filtrado anisotrópico, el brillo, el contraste y la saturación sin abrir el launcher. Su página **APPEARANCE** cambia el modelo del personaje: Claire (traje original y alternativo), Chris, Steve, Wesker, 26 variantes de zombi y dos formas de Alexia, con una vista previa giratoria. Es solo visual; la historia y la partida no cambian.
+![RECOMP SETTINGS con el selector de apariencia](docs/images/recomp-settings-appearance.jpg)
+
+En el propio menú **OPTION** del juego, la página **RECOMP SETTINGS** cambia la resolución, el antialiasing, el modo de pantalla, el brillo, el contraste, la saturación, la nitidez (FSR RCAS) y el filtrado anisotrópico sin abrir el launcher, con **Reset colors** para volver a los valores por defecto.
+
+Arriba de la misma página, **APPEARANCE** te permite **jugar con el modelo de otro personaje**: pulsa izquierda/derecha para elegir y míralo en una **vista previa giratoria de 360°**. Hay 33 opciones: Claire (traje original y alternativo), Chris, Steve, Wesker, 26 variantes de zombi y dos formas de Alexia (primera forma y humana). La apariencia elegida también se aplica cuando juegas con Chris, Steve o Wesker. Solo cambia el aspecto del personaje; la historia, los controles y tu partida siguen igual.
 
 ### Controles
 
