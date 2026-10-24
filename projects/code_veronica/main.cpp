@@ -577,7 +577,9 @@ int main(int argc, char** argv)
     if(!SetProcessInformation(GetCurrentProcess(),ProcessPowerThrottling,&power,sizeof(power)))
         fprintf(stderr,"[boot] precise background timers unavailable: %lu\n",GetLastError());
     timeBeginPeriod(1);
+#ifndef CV_DISTRIBUTION
     setvbuf(stdout, NULL, _IONBF, 0);   /* unbuffered: do not lose prints on a kill */
+#endif
 #endif
 
     if (cellSaveData_set_root(getenv("PS3_SAVE_ROOT")) != 0) {

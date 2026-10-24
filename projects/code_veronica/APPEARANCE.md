@@ -229,3 +229,26 @@ Antes, `cv_appearance_runtime.cpp` só aplicava a troca quando o marcador RDX er
 O primeiro build ainda falhava com o Chris: o teste antigo exigia `sys+0x94==0`, que é o próprio `CV_SRT_CHARACTER` (Claire = 0). Esse teste foi retirado; se outra condição barrar um personagem, o log mostra `[appearance] player N not ready: ...`.
 
 Teste do usuário (JP): com o Chris, Alexia humana, as duas Claires, Steve e Wesker (com óculos) foram aplicados e ficaram corretos na tela. Steve como personagem jogável não foi testado em jogo. Sem commit.
+
+## Pacote de lançamento: por que a troca de aparência não funcionava (23/10/2026)
+
+**Sintoma:** no ZIP de lançamento, o menu `OPTION → RECOMP SETTINGS → APPEARANCE` não mostra a prévia, e a troca não acontece ("original appearance retained").
+
+**Causa:** os modelos não estão dentro do exe. Os executáveis de desenvolvimento leem arquivos **derivados do jogo**, gerados localmente pelos scripts Python desta pasta e guardados ao lado do projeto:
+
+- `appearance-assets/humanoids/<idioma>/` — os 28 modelos (zumbis, Alexia etc.) por idioma (jpn, eng, fra, ger, ita, spa), feitos por `prepare_humanoids.py`;
+- `appearance-assets/pl03-<idioma>.arc` — os óculos do Wesker, feitos por `prepare_lens_archive.py` (antes ligados por `CV_WESKER_LENS_ARC` nos atalhos `.cmd`).
+
+`tools/empacotar_release.py` não leva esses arquivos, **e não deve levar**: são dados do jogo convertidos (ficam no `.gitignore`), e o pacote não pode conter nada do jogo. Por isso, no PC de quem baixa a release, os modelos não existem.
+
+**Solução certa (sem mandar arquivos do jogo):** o exe precisa gerar esses arquivos sozinho, a partir da cópia do jogo do próprio jogador, na primeira vez em que a aparência é escolhida. É o que `cv_appearance_prepare.cpp` começou a fazer (sem commit em 23/10): ele lê os arquivos originais da pasta `system` do jogo (só leitura), converte em C++ (sem Python), e guarda o resultado em `appearance_cache/v1/` ao lado do exe.
+
+**Antes de publicar uma release com a troca de aparência, conferir:**
+
+1. Toda conversão que hoje é feita por `prepare_humanoids.py` e `prepare_lens_archive.py` foi portada para o exe (os 33 itens do catálogo, os óculos do Wesker e os 6 idiomas do jogo).
+2. Nenhum caminho do runtime depende de `appearance-assets/` nem de variáveis de ambiente dos `.cmd` (`CV_WESKER_LENS_ARC` etc.).
+3. Teste numa pasta limpa: extrair o ZIP recém-gerado em outra pasta (sem `appearance-assets/`, sem `appearance_cache/`), abrir o jogo nas três regiões, escolher várias aparências (um zumbi, a Alexia humana, o Wesker com óculos) e conferir que a prévia aparece e a troca vale no jogo.
+4. `appearance_cache/` fica fora do ZIP e fora do Git; o atualizador não deve apagá-la.
+5. Se faltar algo, a mensagem do menu precisa dizer o motivo (por exemplo, "arquivo do jogo não encontrado") em vez de só "original appearance retained".
+
+Enquanto isso não estiver pronto, a release funciona normalmente, mas a troca de aparência só funciona na máquina de desenvolvimento.

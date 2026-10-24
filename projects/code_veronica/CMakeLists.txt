@@ -279,9 +279,29 @@ if(WIN32)
     set(CV_MENU_SOURCE native_pc_menu.cpp)
     if(CV_APPEARANCE OR CV_CHARACTERS)
         set(CV_MENU_SOURCE cv_appearance_menu.cpp)
+        # Only the encoder is used; decoding remains in the bounded ARC reader.
+        add_library(cv_appearance_zlib STATIC
+            "${PS3RECOMP_DIR}/third_party/zlib/adler32.c"
+            "${PS3RECOMP_DIR}/third_party/zlib/compress.c"
+            "${PS3RECOMP_DIR}/third_party/zlib/crc32.c"
+            "${PS3RECOMP_DIR}/third_party/zlib/deflate.c"
+            "${PS3RECOMP_DIR}/third_party/zlib/trees.c"
+            "${PS3RECOMP_DIR}/third_party/zlib/zutil.c")
+        target_include_directories(cv_appearance_zlib PUBLIC "${PS3RECOMP_DIR}/third_party/zlib")
+        target_compile_definitions(cv_appearance_zlib PRIVATE _CRT_SECURE_NO_WARNINGS)
+        target_link_libraries(${PROJECT_NAME} PRIVATE cv_appearance_zlib)
+        add_executable(code_veronica_appearance_prepare_tests EXCLUDE_FROM_ALL
+            tests/test_appearance_prepare.cpp cv_appearance_prepare.cpp
+            cv_appearance_assets.cpp cv_appearance_mesh.cpp
+            cv_appearance_preview.cpp cv_appearance_menu_preview.cpp)
+        target_include_directories(code_veronica_appearance_prepare_tests PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}" "${PS3RECOMP_DIR}/include"
+            "${PS3RECOMP_DIR}/libs/codec" "${PS3RECOMP_DIR}/libs/video")
+        target_link_libraries(code_veronica_appearance_prepare_tests PRIVATE cv_appearance_zlib)
+
         target_sources(${PROJECT_NAME} PRIVATE cv_appearance_assets.cpp cv_appearance_mesh.cpp
-            cv_appearance_preview.cpp cv_appearance_menu_preview.cpp cv_appearance_runtime.cpp)
-        set_source_files_properties(cv_appearance_assets.cpp PROPERTIES INCLUDE_DIRECTORIES "${PS3RECOMP_DIR}/libs/codec")
+            cv_appearance_preview.cpp cv_appearance_menu_preview.cpp cv_appearance_runtime.cpp cv_appearance_prepare.cpp)
+        set_source_files_properties(cv_appearance_assets.cpp cv_appearance_prepare.cpp PROPERTIES INCLUDE_DIRECTORIES "${PS3RECOMP_DIR}/libs/codec")
     endif()
     target_sources(${PROJECT_NAME} PRIVATE ${CV_MENU_SOURCE} boot_skip.cpp cv_test_tools.cpp cv_save_library.cpp cv_fps_experimental.cpp cv_native_libc.cpp cv_focus_pause.cpp cv_items.cpp cv_item_menu.cpp)
     add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
@@ -299,6 +319,7 @@ if(WIN32)
 ")
     endforeach()
     if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/launcher_art/icon.ico")
+        list(APPEND LAUNCHER_ART "${CMAKE_CURRENT_SOURCE_DIR}/launcher_art/icon.ico")
         string(APPEND _launcher_rc "1 ICON \"${CMAKE_CURRENT_SOURCE_DIR}/launcher_art/icon.ico\"
 ")
     endif()

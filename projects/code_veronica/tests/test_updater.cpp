@@ -73,6 +73,7 @@ int main()
     assert(is_protected(L"cv_launcher.ini"));
     assert(is_protected(L"gamedata/dev_hdd0/home/00000001/savedata/x.bin"));
     assert(is_protected(L"shader_cache/a.cso"));
+    assert(is_protected(L"appearance_cache/v1/game/jpn/cvskin05.arc"));
     assert(is_protected(L"Screenshots/a.png"));
     assert(is_protected(L"mods/textures/x.png"));
     assert(is_protected(L"JOGO/NPEB00553/USRDIR/EBOOT.BIN"));
@@ -220,6 +221,12 @@ int main()
         RemoveDirectoryW(link.c_str());   /* the junction only, before remove_all */
     }
     fs::remove_all(base, ec);
+    assert(is_protected(L"bin/gamedata/dev_hdd0/save.bin"));
+    assert(is_protected(L"bin/appearance_cache/v1/character.arc"));
+    assert(is_protected(L"bin/mods/textures/custom.dds"));
+    assert(is_protected(L"bin/cv_launcher.ini"));
+    assert(!is_protected(L"bin/CodeVeronicaPort_JP.exe"));
+    assert(!is_protected(L"Code Veronica.exe"));
     std::printf("updater tests: ok\n");
     return 0;
 }

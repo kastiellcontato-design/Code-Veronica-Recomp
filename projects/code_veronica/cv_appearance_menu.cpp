@@ -12,6 +12,7 @@
 #include "../../libs/input/pad_phys.h"
 #include "../../libs/input/pad_keyboard_filter.h"
 #include "cv_appearance_menu_preview.h"
+#include "cv_appearance_prepare.h"
 #include "cv_appearance_runtime.h"
 #include "../../libs/video/rsx_ui_batch.h"
 #include "../../libs/video/rsx_ui_cadence.h"
@@ -252,11 +253,13 @@ void draw_settings(const ppu_context* caller) {
         appearance_assets_attempted=true;
         const char* root=std::getenv("PS3_VFS_ROOT");
         if(root) {
-            const auto disc=std::filesystem::path(root)/"USRDIR/BHCV/nativePS3/biocv_disc";
-            auto system=disc/"jpn/system";
-            if(!std::filesystem::exists(system/"pl00.arc"))system=disc/"eng/system";
-            if(!appearance_preview.open(system))
-                std::fprintf(stderr,"[appearance] Preview unavailable: %s\n",appearance_preview.error().c_str());
+            try {
+                const auto system=cv_appearance::appearance_system_directory(std::filesystem::path(root));
+                if(!appearance_preview.open(system))
+                    std::fprintf(stderr,"[appearance] Preview unavailable: %s\n",appearance_preview.error().c_str());
+            } catch(const std::exception& e) {
+                std::fprintf(stderr,"[appearance] Preview unavailable: %s\n",e.what());
+            }
         }
     }
     cv_appearance::frame(const_cast<ppu_context*>(caller),true);

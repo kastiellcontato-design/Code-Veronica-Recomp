@@ -1,55 +1,46 @@
 #include "cv_appearance_menu_preview.h"
+#include "cv_appearance_prepare.h"
 #include <iterator>
 #include <cstdio>
 #define NOMINMAX
 #include <windows.h>
 #include <cstdlib>
+#include <exception>
 namespace cv_appearance {
 bool AppearancePreview::open(const std::filesystem::path& directory) {
  if(ready_&&directory_==directory)return true;
- // The locally derived lens bank follows the selected game's language.
- // This is a per-process file overlay; installed game archives stay intact.
- wchar_t executable[32768]{};
- const DWORD length=GetModuleFileNameW(nullptr,executable,32768);
- if(length&&length<32768){
-  const auto project=std::filesystem::path(executable).parent_path().parent_path().parent_path();
-  const auto expanded=project/"appearance-assets/humanoids";
-  _putenv_s("CV_APPEARANCE_ASSET_ROOT",expanded.string().c_str());
-  expanded_directory_=expanded/directory.parent_path().filename();
-  const auto lens=project/"appearance-assets"/("pl03-"+directory.parent_path().filename().string()+".arc");
-  if(std::filesystem::is_regular_file(lens))_putenv_s("CV_WESKER_LENS_ARC",lens.string().c_str());
- }
- PlayerAsset assets[appearance_count];PreviewModel models[appearance_count];std::string error;
- for(unsigned i=0;i<original_appearance_count;i++){
-  if(!load_player_asset(directory/(std::string(catalog[i].archive)+".arc"),assets[i],error)||
-     (i&&!compatible_player_skin(assets[0],assets[i],error))||
-     !make_preview(assets[i],models[i],error)){
-   error_=std::string(catalog[i].name)+": "+error;ready_=false;pixels_.clear();return false;
-  }
-  if(i==4&&!add_preview_glasses(assets[i],models[i],error)){error_=error;return false;}
-  std::vector<Resource> hands;
-  if(!load_archive_resources(directory/(std::string(catalog[i].hands)+".arc"),hands,error)||
-     !add_preview_hands(assets[i],hands,models[i],error)){
-   error_=std::string(catalog[i].name)+": "+error;ready_=false;pixels_.clear();return false;
-  }
- }
- for(unsigned i=0;i<original_appearance_count;i++){assets_[i]=std::move(assets[i]);models_[i]=std::move(models[i]);}
- directory_=directory;
- selected_=0;ready_=true;error_.clear();pixels_.clear();epoch_=std::chrono::steady_clock::now();last_={};return true;
+ ready_=false;directory_=directory;error_.clear();pixels_.clear();
+ for(unsigned i=0;i<appearance_count;i++){assets_[i]={};models_[i]={};}
+ try {
+  cache_root_=appearance_cache_root(directory);
+  _putenv_s("CV_APPEARANCE_ASSET_ROOT",cache_root_.string().c_str());
+  _putenv_s("CV_WESKER_LENS_ARC","");
+ } catch(const std::exception& e){error_=e.what();return false;}
+ selected_=0;ready_=true;
+ // Only the baseline is required to open the menu. Other entries are loaded
+ // independently on selection, so an optional asset cannot block every skin.
+ if(!load(0)){ready_=false;return false;}
+ epoch_=std::chrono::steady_clock::now();last_={};return true;
 }
 bool AppearancePreview::load(unsigned index){
  if(!ready_||index>=appearance_count)return false;
- if(assets_[index].body_nodes)return true;
- PlayerAsset asset;PreviewModel model;std::string error;
- const auto path=expanded_directory_/(std::string(catalog[index].archive)+".arc");
- if(!load_player_asset(path,asset,error)||!compatible_player_skin(assets_[0],asset,error)||!make_preview(asset,model,error)){
+ if(assets_[index].body_nodes){error_.clear();return true;}
+ PlayerAsset asset;PreviewModel model;std::string error;std::filesystem::path path;
+ if(!prepare_appearance_asset(directory_,cache_root_,index,path,error)){
+  error_=std::string(catalog[index].name)+": "+error;
+  std::fprintf(stderr,"[appearance] %s\n",error_.c_str());return false;
+ }
+ if(index==4)_putenv_s("CV_WESKER_LENS_ARC",path.string().c_str());
+ if(!load_player_asset(path,asset,error)||
+    (index&&!compatible_player_skin(assets_[0],asset,error))||!make_preview(asset,model,error)||
+    (index==4&&!add_preview_glasses(asset,model,error))){
   error_=std::string(catalog[index].name)+": "+error;
   std::fprintf(stderr,"[appearance] %s\n",error_.c_str());return false;
  }
  if(catalog[index].hands){
   std::vector<Resource> hands;
   if(!load_archive_resources(directory_/(std::string(catalog[index].hands)+".arc"),hands,error)||!add_preview_hands(asset,hands,model,error)){
-   error_=error;return false;
+   error_=std::string(catalog[index].name)+": "+error;return false;
   }
  }
  assets_[index]=std::move(asset);models_[index]=std::move(model);error_.clear();return true;

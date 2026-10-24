@@ -369,9 +369,15 @@ int compare_versions(const std::wstring& a, const std::wstring& b)
 bool is_protected(const fs::path& relative)
 {
     static const wchar_t* const dirs[] = { L"gamedata", L"dev_hdd0", L"dev_flash", L"saves", L"shader_cache",
-        L"eboot_cache", L"screenshots", L"mods", L"textures", L"jogo", L"save-library-backups" };
+        L"eboot_cache", L"appearance_cache", L"screenshots", L"mods", L"textures", L"jogo", L"save-library-backups" };
     if (!safe_path(relative)) return true;
     for (const auto& part : relative) if (part == L".." || part == L".") return true;
+    // Organized packages put both runtimes and personal data below bin/.
+    if(lower(relative.begin()->wstring())==L"bin") {
+        fs::path nested;auto part=relative.begin();++part;
+        for(;part!=relative.end();++part)nested/=*part;
+        if(!nested.empty())return is_protected(nested);
+    }
     const std::wstring first = lower(relative.begin()->wstring());
     for (const wchar_t* d : dirs) if (first == d) return true;
     const std::wstring name = lower(relative.filename().wstring()), ext = lower(relative.extension().wstring());

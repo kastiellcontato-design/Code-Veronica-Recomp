@@ -1178,7 +1178,18 @@ void upd_start_install()
         if(e==cv_update::OK&&g_upd.prog.cancel)e=cv_update::ERR_CANCELED;
         if (e == cv_update::OK) {
             PostMessageW(hwnd, WM_UPDATE, UPD_MSG_INSTALLING, 0);
-            try{e = cv_update::install(zip, exe.parent_path(), exe.filename().wstring());}catch(...){e=cv_update::ERR_WRITE;}
+            try{
+                auto install_directory=exe.parent_path();
+                std::wstring entry_name=exe.filename().wstring();
+#ifdef CV_DISTRIBUTION
+                if(install_directory.filename()==L"bin" &&
+                   fs::is_regular_file(install_directory.parent_path()/L"Code Veronica.exe")) {
+                    install_directory=install_directory.parent_path();
+                    entry_name=L"Code Veronica.exe";
+                }
+#endif
+                e=cv_update::install(zip,install_directory,entry_name);
+            }catch(...){e=cv_update::ERR_WRITE;}
         }
         PostMessageW(hwnd, WM_UPDATE, UPD_MSG_FINISHED, LPARAM(e));
     }).detach();
@@ -3684,7 +3695,11 @@ DWORD WINAPI launcher_thread(void*)
     SetTimer(g.hwnd, 1, 30, NULL);
     {   /* Updates: delete what an install replaced, say it happened, look for a newer release. */
         wchar_t self[MAX_PATH]; GetModuleFileNameW(NULL, self, MAX_PATH);
-        const fs::path dir = fs::path(self).parent_path();
+        fs::path dir = fs::path(self).parent_path();
+#ifdef CV_DISTRIBUTION
+        if(dir.filename()==L"bin" && fs::is_regular_file(dir.parent_path()/L"Code Veronica.exe"))
+            dir=dir.parent_path();
+#endif
         if (const char* d = getenv("CV_UPDATE_DONE"); d && *d)
             g.play_msg = g_upd.status = upd_fill(ux(upd_text::UPDATED), k_launcher_version);
         std::thread([dir] { cv_update::cleanup(dir); }).detach();

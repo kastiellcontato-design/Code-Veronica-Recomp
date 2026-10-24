@@ -15,7 +15,7 @@ public:
  const PlayerAsset* asset(unsigned index) {return load(index)?assets_+index:nullptr;}
 private:
  bool load(unsigned index);
- std::filesystem::path expanded_directory_;
+ std::filesystem::path cache_root_;
  PlayerAsset assets_[appearance_count];PreviewModel models_[appearance_count];std::vector<rsx_ui_quad> pixels_;
  std::string error_;std::filesystem::path directory_;unsigned selected_=0;
  bool ready_=false;float px_=0,py_=0,pw_=0,ph_=0;

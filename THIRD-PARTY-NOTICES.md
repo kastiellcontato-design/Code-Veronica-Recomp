@@ -50,3 +50,10 @@ THE SOFTWARE.
 ## FFmpeg and LGPL
 
 The FFmpeg libraries are used as separate, replaceable DLLs next to the executables. Their source code is available at <https://github.com/FFmpeg/FFmpeg/tree/n7.1.5>. The `at3_standalone` decoder sources are included unmodified (apart from small build shims) in [third_party/at3_standalone](third_party/at3_standalone), together with the rest of this repository's source code, so the program can be rebuilt with a modified version of them.
+
+## zlib
+
+zlib 1.3.2, by Jean-loup Gailly and Mark Adler, is statically linked for local
+appearance archive preparation. Unmodified upstream sources and pinned download
+checksum: `third_party/zlib/UPSTREAM.json`. License: `licenses/zlib-LICENSE.txt`
+in the player package and `third_party/zlib/LICENSE` in the source tree.

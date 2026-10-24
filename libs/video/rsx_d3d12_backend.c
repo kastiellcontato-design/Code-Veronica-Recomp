@@ -1699,16 +1699,20 @@ static LRESULT CALLBACK d3d12_wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         }
         break;
     case WM_KEYDOWN:
+#ifndef CV_DISTRIBUTION
         if(wp==VK_F9&&!(lp&(1<<30))){mc_request();return 0;}
+#endif
         if (lighter_probe_key(wp, lp)) return 0;
         /* Esc no longer quits: the window's X or Alt+F4 does. */
         if (wp == VK_INSERT && !(lp & (1 << 30)) && g_rsx_menu_hook) g_rsx_menu_hook();
         else if (!(lp & (1 << 30)) && g_rsx_key_hook) g_rsx_key_hook((unsigned)wp);
 
+#ifndef CV_DISTRIBUTION
         if (wp == VK_F12 && !(lp & (1 << 30))) {   /* F12: rsxcap the next frame */
             extern volatile int g_rsx_cap_request;
             g_rsx_cap_request = 1;
         }
+#endif
         return 0;
     }
     return DefWindowProcA(hwnd, msg, wp, lp);
