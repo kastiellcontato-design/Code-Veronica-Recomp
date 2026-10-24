@@ -16,32 +16,57 @@ Ele faz tudo o que o original faz:
 - **tempo de jogo**: o timer do próprio jogo, em 1/60 de segundo, e a opção de
   tirar o tempo das portas (LRT).
 
-## Como usar
+## Ativar pelo catálogo oficial do LiveSplit (recomendado)
 
-1. Abra o LiveSplit, clique com o botão direito e escolha **Edit Layout...**
-2. Clique em **+** → **Control** → **Scriptable Auto Splitter**.
-3. Clique duas vezes no componente, em **Script Path** escolha
-   `recvx-ps3recomp.asl` e marque os splits que quiser nas opções.
-4. Clique com o botão direito → **Compare Against** → **Game Time**.
-5. Abra o jogo pelo atalho de sempre. O LiveSplit acha o jogo sozinho.
+O autosplitter do port já está no catálogo oficial:
+[PR #2964 mesclada](https://github.com/LiveSplit/LiveSplit.AutoSplitters/pull/2964).
 
-Use apenas um autosplitter por vez. Se o autosplitter para emuladores estiver
-ativo em **Edit Splits**, clique em **Deactivate** antes de usar o script do
-port pelo layout. As opções deste script ficam no **Scriptable Auto Splitter**.
-Salve o layout (**Save Layout As...**) para guardar suas escolhas.
+1. Abra o LiveSplit. Se quiser usar um split pronto, primeiro abra o `.lss`
+   de Any% ou S-Rank do ZIP em **Open Splits → From File**.
+2. Entre em **Edit Splits** e cole em **Game Name** exatamente este nome,
+   incluindo os dois-pontos e o texto entre parênteses:
 
-## Cadastro na lista do LiveSplit
+   **Resident Evil: Code: Veronica X (PS3 Recomp)**
 
-O nome proposto para a lista é **Resident Evil: Code: Veronica X (PS3 Recomp)**.
-O cadastro depende da revisão dos mantenedores do LiveSplit. Até a aprovação,
-use a instalação manual acima. Depois da aprovação, será possível digitar esse
-nome em **Edit Splits → Game Name** e clicar em **Activate**, sem adicionar o
-componente manual ao mesmo tempo. Isso não garante que o nome apareça nas
-sugestões de busca nem aprovação em rankings de speedrun.
+3. Clique em **Activate** e depois em **Settings**. Se o autosplitter antigo
+   de emuladores estiver ativo, desative-o antes de trocar. Se a lista ainda
+   não tiver atualizado, feche e abra o LiveSplit e digite o nome novamente;
+   não é necessário depender das sugestões de preenchimento.
+4. Marque **Start** e **Split** e confira os eventos de acordo com sua rota.
+   Ative **Load Remover Time** se quiser descontar o tempo das portas.
+5. No menu principal do LiveSplit, use **Compare Against → Game Time**.
+   A remoção dos carregamentos afeta Game Time; Real Time continua contando.
+6. Inicie o port e salve os splits e o layout do LiveSplit.
 
-Com **Load Remover Time** marcado, o tempo de jogo pausa a cada porta. Com o
-patch "Pular animação das portas" ligado, a pausa é curta, cerca de 1 segundo,
-porque o próprio patch já tira quase todo o load. Sem o patch, é de uns 6 segundos.
+Nesse método não precisa selecionar um arquivo ASL manualmente. Use apenas
+um autosplitter: remova o componente **Scriptable Auto Splitter** adicionado
+manualmente em **Edit Layout** antes de ativar o autosplitter do catálogo.
+
+## Por que manter o ZIP?
+
+Ele contém dois splits prontos com ícones, scripts de Any% e S-Rank com as
+marcações de cada rota, o script geral, licenças e instruções em português e
+inglês. O ZIP é opcional para ativar o autosplitter pelo catálogo. Os tempos
+e o histórico dos splits são exemplos; limpe-os no LiveSplit se quiser
+iniciar seu próprio histórico.
+
+## Instalação manual (alternativa para usar os presets do ZIP)
+
+1. Extraia o ZIP completo para uma pasta permanente e abra o `.lss` desejado.
+   Em **Edit Splits**, desative qualquer autosplitter do catálogo.
+2. Em **Edit Layout**, use **+ → Control → Scriptable Auto Splitter**.
+3. Nas configurações desse componente, use **Browse** e escolha
+   `recvx-port-AnyPercent.asl` para Any% ou `recvx-port-SRank.asl` para S-Rank.
+   Esses scripts já têm as marcações correspondentes aos splits incluídos.
+   Para montar sua própria rota, use `recvx-ps3recomp.asl`.
+4. Marque **Start** e **Split**, selecione **Compare Against → Game Time**
+   no menu principal e salve o layout para guardar o caminho do script.
+
+Não ative uma rota de todas as portas se estiver usando splits somente por
+itens. Com **Load Remover Time** marcado, Game Time pausa enquanto a flag de
+porta do jogo estiver ativa; Door Skip pode encurtar esse intervalo. Sem LRT,
+Game Time usa o timer interno do jogo. A inclusão no catálogo não representa
+aprovação em rankings: consulte os moderadores da categoria.
 
 ## Como o jogo é encontrado
 

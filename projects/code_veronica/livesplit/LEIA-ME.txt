@@ -1,0 +1,50 @@
+﻿CODE VERONICA - LIVESPLIT SPEEDRUN v1.0
+
+Autosplitter original de Kapdap. Adaptacao para o port PC por Kastiel.
+Licenca e creditos preservados em LICENSE-recvx.txt.
+Splits e icones organizados por Kastiel.
+
+ATIVACAO PELO CATALOGO OFICIAL (RECOMENDADO)
+O autosplitter do port ja foi incluido no catalogo oficial do LiveSplit.
+
+1. Extraia este ZIP. No LiveSplit, use Open Splits > From File para abrir
+   o .lss Any% ou S-Rank, se quiser uma lista de splits pronta com icones.
+2. Abra Edit Splits. Em Game Name, cole EXATAMENTE:
+
+   Resident Evil: Code: Veronica X (PS3 Recomp)
+
+3. Clique Activate e depois Settings. Desative o autosplitter antigo de
+   emuladores antes de trocar, se estiver ativo. Se nao aparecer, feche e
+   abra o LiveSplit e digite o nome exato novamente; nao depende de sugestoes.
+4. Marque Start e Split. Confira os eventos de acordo com sua rota e ative
+   Load Remover Time se quiser descontar o tempo das portas.
+5. No menu principal, selecione Compare Against > Game Time.
+   O LRT pausa Game Time durante portas; Real Time continua contando.
+6. Abra o port e salve seus splits e o layout no LiveSplit.
+
+Nao precisa apontar para um ASL manualmente nesse metodo. Use so um
+autosplitter: remova de Edit Layout um componente Scriptable Auto Splitter
+adicionado manualmente antes de ativar a versao do catalogo.
+
+O QUE ESTE ZIP OFERECE
+Dois arquivos .lss com icones, presets Any%/S-Rank com marcacoes de rota,
+script geral, licenca e guias. O ZIP e opcional para a ativacao pelo catalogo.
+Tempos e historico sao exemplos; limpe-os no LiveSplit para seu proprio uso.
+
+PRESETS MANUAIS (ALTERNATIVA)
+1. Mantenha o ZIP extraido numa pasta permanente e abra o .lss desejado.
+2. Em Edit Splits, desative qualquer autosplitter do catalogo.
+3. Em Edit Layout: + > Control > Scriptable Auto Splitter.
+4. Nas configuracoes do componente, use Browse e escolha:
+   Any%: recvx-port-AnyPercent.asl
+   S-Rank: recvx-port-SRank.asl
+   Rota personalizada: recvx-ps3recomp.asl
+5. Marque Start e Split. Os presets ja trazem as marcacoes das rotas dos
+   splits incluidos. Confira as opcoes antes de iniciar sua tentativa.
+6. Use Compare Against > Game Time e salve o layout para guardar o caminho.
+
+Os scripts funcionam somente no port PC EU/JP/US, nao nos emuladores.
+Nao ative uma rota de todas as portas para splits somente por itens.
+Catalogo oficial nao significa aprovacao em rankings; consulte os moderadores.
+
+Projeto: https://github.com/kastieloficial/RE-Code-Veronica-Recomp

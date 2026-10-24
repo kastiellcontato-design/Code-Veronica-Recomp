@@ -5,7 +5,7 @@ port. Based on [Kapdap's Code: Veronica autosplitter](https://github.com/kapdap/
 adapted for the PC port by Kastiel. The original MIT license and contributor
 credits are retained; see [LICENSE-recvx.txt](LICENSE-recvx.txt).
 
-[Instruções em português](LEIA-ME.md) · [Port project](https://github.com/kastiellcontato-design/Code-Veronica-Recomp)
+[Instruções em português](LEIA-ME.md) · [Port project](https://github.com/kastieloficial/RE-Code-Veronica-Recomp)
 
 ## Supported executables
 
@@ -18,32 +18,55 @@ credits are retained; see [LICENSE-recvx.txt](LICENSE-recvx.txt).
 This script only attaches to the PC port. Use Kapdap's original script for
 RPCS3, PCSX2 or Dolphin. The port executable must export `g_cv_livesplit`.
 
-## Install now
+## Activate through the official LiveSplit catalog (recommended)
 
-1. Download [recvx-ps3recomp.asl](https://raw.githubusercontent.com/kastiellcontato-design/Code-Veronica-Recomp/code-veronica/projects/code_veronica/livesplit/recvx-ps3recomp.asl).
-2. In LiveSplit, open **Edit Layout → + → Control → Scriptable Auto Splitter**.
-3. Open that component's settings, browse to the ASL file, enable **Start** and
-   **Split**, and select the item, boss, event or door splits for your route.
-4. Select **Compare Against → Game Time** from LiveSplit's right-click menu.
-5. Start the port, then save your layout to preserve your settings.
+The port autosplitter is now included in the official catalog:
+[merged PR #2964](https://github.com/LiveSplit/LiveSplit.AutoSplitters/pull/2964).
 
-Use only one autosplitter. Deactivate the emulator autosplitter in **Edit Splits**
-when using this component. Existing split files and their icons can still be
-used, but their selected events must match the intended route. Full door routes
-are optional; do not enable one for an item-only split list.
+1. Open LiveSplit. To use a ready-made split list, first open the Any% or
+   S-Rank `.lss` from the optional LiveSplit ZIP with **Open Splits → From File**.
+2. Open **Edit Splits**. In **Game Name**, paste this exact name, including
+   punctuation and the text in parentheses:
 
-With **Load Remover Time** enabled, Game Time pauses while the game's door flag
-is active. Real Time continues normally. With it disabled, Game Time uses the
-original in-game timer (60 ticks per second). A door-skip patch can shorten the
-paused interval.
+   **Resident Evil: Code: Veronica X (PS3 Recomp)**
 
-## LiveSplit catalog submission
+3. Click **Activate**, then **Settings**. If the old emulator autosplitter is
+   active, deactivate it before switching. If the catalog has not refreshed,
+   restart LiveSplit and enter the exact name again; autocomplete is not required.
+4. Enable **Start** and **Split** and check that the selected item, boss,
+   event or door splits match your route. Enable **Load Remover Time** if desired.
+5. In LiveSplit's main right-click menu select **Compare Against → Game Time**.
+   Load removal affects Game Time; Real Time continues normally.
+6. Start the PC port, then save your splits and layout.
 
-The proposed game name is **Resident Evil: Code: Veronica X (PS3 Recomp)**.
-Catalog availability is pending maintainer approval. After approval, enter that
-exact name in **Edit Splits → Game Name**, click **Activate**, then **Settings**.
-Use this catalog installation instead of adding a second manual component.
-Search suggestions and speedrun leaderboard eligibility are separate matters.
+You do not need to browse to an ASL file with this method. Use only one
+autosplitter: remove a manually added **Scriptable Auto Splitter** component
+from **Edit Layout** before activating the catalog version.
+
+## What the optional ZIP adds
+
+The ZIP is still useful: it includes two ready-made split lists with icons,
+Any% and S-Rank scripts with route-specific default selections, this general
+script, licenses, and English/Portuguese instructions. The ZIP is not required
+to activate the catalog autosplitter. Stored times/history in the split lists
+are examples; clear them in LiveSplit if you want to start your own history.
+
+## Manual installation (alternative, for the included route presets)
+
+1. Extract the complete LiveSplit ZIP into a permanent folder and open its
+   desired `.lss` file. In **Edit Splits**, deactivate any catalog autosplitter.
+2. Use **Edit Layout → + → Control → Scriptable Auto Splitter**.
+3. In the component's settings, browse to `recvx-port-AnyPercent.asl` for Any%
+   or `recvx-port-SRank.asl` for S-Rank. Their default event selections match
+   the included split lists. Use `recvx-ps3recomp.asl` for a custom route.
+4. Enable **Start** and **Split**. Select **Compare Against → Game Time**
+   from LiveSplit's main menu, then save your layout to retain the script path.
+
+Do not enable a full door route for an item-only split list. With **Load
+Remover Time** enabled, Game Time pauses while the game's door flag is active.
+With it disabled, Game Time uses the original in-game timer (60 ticks per
+second). Door skip can shorten the paused interval. Catalog inclusion does
+not establish leaderboard eligibility; consult the category moderators.
 
 ## Memory interface
 

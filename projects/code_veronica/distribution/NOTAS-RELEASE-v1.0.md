@@ -29,7 +29,7 @@ Use **Veronica PKG Extractor ou RPCS3** para extrair seu próprio jogo. No launc
 
 Compatibilidade: versões PSN base **01.00**, **NPEB00553 (Europa)**, **NPUB30467 (USA)** e **NPJB00135 (Japão)**. EU/US precisam da sua licença RAP; JP não precisa. Nenhum jogo original, PKG, licença RAP, firmware ou save pessoal está incluído.
 
-O autosplitter original é de **Kapdap**, adaptado para o port por **Kastiel**, com licença e créditos preservados. A disponibilidade no catálogo automático do LiveSplit depende da aprovação dos mantenedores; o ZIP permite instalação manual. A aceitação do port em rankings de speedrun depende das regras e dos moderadores de cada categoria.
+O autosplitter original é de **Kapdap**, adaptado para o port por **Kastiel**, com licença e créditos preservados. O autosplitter já está no catálogo oficial do LiveSplit: em **Edit Splits → Game Name**, digite exatamente **Resident Evil: Code: Veronica X (PS3 Recomp)** e clique em **Activate → Settings**. Use **Compare Against → Game Time** para descontar os carregamentos. O ZIP opcional mantém os splits prontos com ícones e os presets manuais. A aceitação do port em rankings de speedrun depende das regras e dos moderadores de cada categoria.
 
 O port continua em desenvolvimento: podem existir diferenças gráficas e de iluminação, e 60 FPS dependem do computador. Se encontrar um problema, envie uma descrição, a região do jogo e o `bin/run-log.txt` em uma issue. Os arquivos `.sha256` são opcionais e permitem conferir a integridade dos downloads.
 
@@ -62,6 +62,6 @@ Use **Veronica PKG Extractor or RPCS3** to extract your own game. Add the folder
 
 Supported: PSN base version **01.00**, **NPEB00553 (Europe)**, **NPUB30467 (USA)**, and **NPJB00135 (Japan)**. EU/US require your RAP license; JP does not. No original game files, PKGs, RAP licenses, firmware, or personal saves are included.
 
-Original autosplitter by **Kapdap**, adapted to the PC port by **Kastiel**; original license and credits retained. Automatic LiveSplit catalog availability depends on maintainer approval; the ZIP supports manual installation. Speedrun leaderboard eligibility is determined by each category's rules and moderators.
+Original autosplitter by **Kapdap**, adapted to the PC port by **Kastiel**; original license and credits retained. The autosplitter is now in the official LiveSplit catalog: in **Edit Splits → Game Name**, enter exactly **Resident Evil: Code: Veronica X (PS3 Recomp)**, then click **Activate → Settings**. Select **Compare Against → Game Time** for load removal. The optional ZIP retains ready-made split lists with icons and manual presets. Speedrun leaderboard eligibility is determined by each category's rules and moderators.
 
 The port is still in development: graphical/lighting differences may remain, and 60 FPS depends on the PC. Please report issues with a description, game region, and `bin/run-log.txt`. Optional `.sha256` files let you verify download integrity.

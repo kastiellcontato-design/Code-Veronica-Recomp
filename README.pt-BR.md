@@ -203,7 +203,7 @@ Um **SRT** (speedrun tool) nativo, desenhado pelo próprio jogo, ligado e deslig
 - **Inimigos** com barra de vida e retrato, e **barra de vida dos chefes** (no painel ou no centro, em cima ou embaixo).
 - **Inventário** com a arma equipada, a munição e os ícones originais dos itens, lidos dos arquivos do seu jogo.
 - Qualquer canto, disposição em linha ou coluna, inventário ao lado ou embaixo, tamanho de 50% a 200%, opacidade do fundo, borda, idioma do painel, ou uma **janela separada** que você coloca onde quiser (por exemplo num segundo monitor ou no OBS).
-- Um autosplitter do **LiveSplit** que também reconhece o port vem em `projects/code_veronica/livesplit/`.
+- **Catálogo oficial do LiveSplit:** em **Edit Splits → Game Name**, digite exatamente **Resident Evil: Code: Veronica X (PS3 Recomp)** e clique em **Activate → Settings**. Use **Compare Against → Game Time** para descontar os carregamentos. O ZIP opcional inclui splits prontos de Any%/S-Rank com ícones e presets manuais. [Guia de configuração](projects/code_veronica/livesplit/LEIA-ME.md).
 
 ### Ferramentas de treino, saves e itens
 
