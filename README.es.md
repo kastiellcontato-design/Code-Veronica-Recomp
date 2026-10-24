@@ -26,7 +26,7 @@ Vuelve a jugar a la versión de PS3 en PC. Practica rutas con SRT nativo, selecc
 |---|---|
 | [CodeVeronica-PC-v1.0.zip](https://github.com/kastiellcontato-design/Code-Veronica-Recomp/releases/download/v1.0/CodeVeronica-PC-v1.0.zip) | Port para Windows con launcher y soporte EU/JP/US. Extrae todo y abre **Code Veronica.exe**. |
 | [Veronica-PKG-Extractor-v1.0.zip](https://github.com/kastiellcontato-design/Code-Veronica-Recomp/releases/download/v1.0/Veronica-PKG-Extractor-v1.0.zip) | Herramienta opcional para preparar tu propio PKG. También puedes usar RPCS3. |
-| [CodeVeronica-LiveSplit-Speedrun-v1.0.zip](https://github.com/kastiellcontato-design/Code-Veronica-Recomp/releases/download/v1.0/CodeVeronica-LiveSplit-Speedrun-v1.0.zip) | Autosplitter del port, presets Any%/S-Rank y splits con iconos. |
+| [CodeVeronica-LiveSplit-Speedrun-v1.0.zip](https://github.com/kastiellcontato-design/Code-Veronica-Recomp/releases/download/v1.0/CodeVeronica-LiveSplit-Speedrun-v1.0.zip) | Splits Any%/S-Rank con iconos y guía del catálogo oficial de LiveSplit. |
 
 Cada ZIP incluye instrucciones en inglés y portugués. No se incluyen archivos ni licencias del juego original.
 
@@ -203,7 +203,7 @@ Un **SRT** (speedrun tool) nativo, dibujado por el propio juego, que se activa y
 - **Enemigos** con barra de vida y retrato, y **barras de vida de los jefes** (en el panel o centradas arriba o abajo).
 - **Inventario** con el arma equipada, la munición y los iconos originales de los objetos, leídos de los archivos de tu juego.
 - Cualquier esquina, disposición en fila o columna, inventario al lado o debajo, tamaño del 50% al 200%, opacidad del fondo, borde, idioma del panel, o una **ventana separada** que puedes colocar donde quieras (por ejemplo en un segundo monitor o en OBS).
-- **Catálogo oficial de LiveSplit:** en **Edit Splits → Game Name**, escribe exactamente **Resident Evil: Code: Veronica X (PS3 Recomp)** y pulsa **Activate → Settings**. Selecciona **Compare Against → Game Time** para descontar las cargas. El ZIP opcional incluye splits Any%/S-Rank con iconos y presets manuales. [Guía de configuración](projects/code_veronica/livesplit/README.md).
+- **Catálogo oficial de LiveSplit:** en **Edit Splits → Game Name**, escribe exactamente **Resident Evil: Code: Veronica X (PS3 Recomp)** y pulsa **Activate → Settings**. Selecciona **Compare Against → Game Time** para descontar las cargas. El ZIP opcional incluye splits Any%/S-Rank con iconos e instrucciones del catálogo. [Guía de configuración](projects/code_veronica/livesplit/README.md).
 
 ### Herramientas de práctica, partidas y objetos
 

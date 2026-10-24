@@ -44,23 +44,15 @@ manualmente em **Edit Layout** antes de ativar o autosplitter do catálogo.
 
 ## Por que manter o ZIP?
 
-Ele contém dois splits prontos com ícones, scripts de Any% e S-Rank com as
-marcações de cada rota, o script geral, licenças e instruções em português e
-inglês. O ZIP é opcional para ativar o autosplitter pelo catálogo. Os tempos
-e o histórico dos splits são exemplos; limpe-os no LiveSplit se quiser
-iniciar seu próprio histórico.
+Ele contém dois splits prontos de Any% e S-Rank com ícones, marcações de
+rota, licença/créditos e instruções em português e inglês. O nome do jogo já
+corresponde ao catálogo. Não há arquivos ASL no ZIP: o LiveSplit baixa e
+carrega o script automaticamente ao clicar em **Activate**. O ASL fonte
+continua neste repositório para o catálogo funcionar.
 
-## Instalação manual (alternativa para usar os presets do ZIP)
-
-1. Extraia o ZIP completo para uma pasta permanente e abra o `.lss` desejado.
-   Em **Edit Splits**, desative qualquer autosplitter do catálogo.
-2. Em **Edit Layout**, use **+ → Control → Scriptable Auto Splitter**.
-3. Nas configurações desse componente, use **Browse** e escolha
-   `recvx-port-AnyPercent.asl` para Any% ou `recvx-port-SRank.asl` para S-Rank.
-   Esses scripts já têm as marcações correspondentes aos splits incluídos.
-   Para montar sua própria rota, use `recvx-ps3recomp.asl`.
-4. Marque **Start** e **Split**, selecione **Compare Against → Game Time**
-   no menu principal e salve o layout para guardar o caminho do script.
+Os tempos e o histórico são exemplos; limpe-os no LiveSplit se quiser
+iniciar seu próprio histórico. O ZIP é opcional para quem prefere montar
+sua própria lista de splits.
 
 Não ative uma rota de todas as portas se estiver usando splits somente por
 itens. Com **Load Remover Time** marcado, Game Time pausa enquanto a flag de

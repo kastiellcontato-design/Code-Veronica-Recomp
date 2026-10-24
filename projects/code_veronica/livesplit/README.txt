@@ -1,4 +1,4 @@
-﻿CODE VERONICA - LIVESPLIT SPEEDRUN v1.0
+CODE VERONICA - LIVESPLIT SPEEDRUN v1.0
 
 Original autosplitter by Kapdap. PC port adaptation by Kastiel.
 Original license and credits retained in LICENSE-recvx.txt.
@@ -27,24 +27,13 @@ autosplitter: remove any manually added Scriptable Auto Splitter component
 from Edit Layout before activating the catalog version.
 
 WHAT THIS ZIP ADDS
-Two .lss files with icons, Any%/S-Rank scripts with route-specific default
-selections, a general script, license and guides. The ZIP is optional for
-catalog activation. Stored times/history are examples; clear them in
-LiveSplit to begin your own history.
+Two ready-made .lss files (Any% and S-Rank) with icons, their route settings,
+license/credits and guides. The game name already matches the official
+catalog. This ZIP contains no local ASL files: LiveSplit automatically
+downloads and loads the script when you click Activate.
+Stored times/history are examples; clear them in LiveSplit to begin your own.
 
-MANUAL PRESETS (ALTERNATIVE)
-1. Keep the ZIP extracted in a permanent folder and open the desired .lss.
-2. In Edit Splits, deactivate any catalog autosplitter.
-3. Edit Layout > + > Control > Scriptable Auto Splitter.
-4. Open the component's settings, Browse to the matching script:
-   Any%: recvx-port-AnyPercent.asl
-   S-Rank: recvx-port-SRank.asl
-   Custom route: recvx-ps3recomp.asl
-5. Enable Start and Split. Presets include the default event selections
-   matching the supplied split lists; review them before starting your run.
-6. Select Compare Against > Game Time and save your layout to retain the path.
-
-These scripts attach only to the PC port (EU/JP/US), not emulators.
+The catalog autosplitter attaches only to the PC port (EU/JP/US), not emulators.
 Do not enable a full door route for item-only splits. Catalog inclusion does
 not establish leaderboard eligibility; check with the category moderators.
 

@@ -10,7 +10,7 @@ Primeira versão pública jogável do port para Windows x64 de **Resident Evil C
 |---|---|
 | **CodeVeronica-PC-v1.0.zip** | Jogo/launcher do port, executáveis das três regiões e instruções em português e inglês. Não inclui os arquivos do jogo original. |
 | **Veronica-PKG-Extractor-v1.0.zip** | Ferramenta opcional para extrair seu PKG de Code Veronica em uma pasta compatível com o launcher. |
-| **CodeVeronica-LiveSplit-Speedrun-v1.0.zip** | Autosplitter para o port PC, presets Any% e S-Rank, dois arquivos de splits com ícones e guia de instalação. |
+| **CodeVeronica-LiveSplit-Speedrun-v1.0.zip** | Splits prontos de Any% e S-Rank com ícones e instruções para ativar o autosplitter pelo catálogo oficial do LiveSplit. Não é necessário selecionar um ASL manualmente. |
 
 Extraia o ZIP completo do port e abra **Code Veronica.exe**. Há apenas um executável principal na pasta inicial; os executáveis regionais e as DLLs ficam em `bin`. A abertura não exige CMD. A correção do log compartilhado foi mantida e verificada para permitir a passagem do launcher ao executável regional.
 
@@ -43,7 +43,7 @@ First public playable Windows x64 release of the **Resident Evil Code: Veronica 
 |---|---|
 | **CodeVeronica-PC-v1.0.zip** | PC port/launcher, all three regional executables, and English/Portuguese instructions. Original game files are not included. |
 | **Veronica-PKG-Extractor-v1.0.zip** | Optional standalone tool to extract your Code Veronica PKG into a launcher-compatible folder. |
-| **CodeVeronica-LiveSplit-Speedrun-v1.0.zip** | Dedicated PC-port autosplitter, Any% and S-Rank presets, two split files with icons, and setup guides. |
+| **CodeVeronica-LiveSplit-Speedrun-v1.0.zip** | Ready-made Any% and S-Rank split files with icons and official LiveSplit catalog setup guides. No manual ASL selection is required. |
 
 Extract the entire port ZIP and open **Code Veronica.exe**. There is one main executable at the top level; regional executables and DLLs are under `bin`. No terminal is required. Shared logging has been retained and checked so launching another regional executable does not fail because the log is already open.
 
@@ -62,6 +62,6 @@ Use **Veronica PKG Extractor or RPCS3** to extract your own game. Add the folder
 
 Supported: PSN base version **01.00**, **NPEB00553 (Europe)**, **NPUB30467 (USA)**, and **NPJB00135 (Japan)**. EU/US require your RAP license; JP does not. No original game files, PKGs, RAP licenses, firmware, or personal saves are included.
 
-Original autosplitter by **Kapdap**, adapted to the PC port by **Kastiel**; original license and credits retained. The autosplitter is now in the official LiveSplit catalog: in **Edit Splits → Game Name**, enter exactly **Resident Evil: Code: Veronica X (PS3 Recomp)**, then click **Activate → Settings**. Select **Compare Against → Game Time** for load removal. The optional ZIP retains ready-made split lists with icons and manual presets. Speedrun leaderboard eligibility is determined by each category's rules and moderators.
+Original autosplitter by **Kapdap**, adapted to the PC port by **Kastiel**; original license and credits retained. The autosplitter is now in the official LiveSplit catalog: in **Edit Splits → Game Name**, enter exactly **Resident Evil: Code: Veronica X (PS3 Recomp)**, then click **Activate → Settings**. Select **Compare Against → Game Time** for load removal. The optional ZIP retains ready-made split lists with icons and catalog setup instructions. Speedrun leaderboard eligibility is determined by each category's rules and moderators.
 
 The port is still in development: graphical/lighting differences may remain, and 60 FPS depends on the PC. Please report issues with a description, game region, and `bin/run-log.txt`. Optional `.sha256` files let you verify download integrity.

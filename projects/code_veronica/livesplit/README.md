@@ -45,22 +45,15 @@ from **Edit Layout** before activating the catalog version.
 
 ## What the optional ZIP adds
 
-The ZIP is still useful: it includes two ready-made split lists with icons,
-Any% and S-Rank scripts with route-specific default selections, this general
-script, licenses, and English/Portuguese instructions. The ZIP is not required
-to activate the catalog autosplitter. Stored times/history in the split lists
-are examples; clear them in LiveSplit if you want to start your own history.
+The ZIP includes two ready-made Any% and S-Rank `.lss` files with icons,
+route settings, license/credits, and English/Portuguese instructions. Their
+game name already matches the catalog entry. No ASL files are bundled:
+LiveSplit downloads and loads the script automatically when you click
+**Activate**. The source ASL remains in this repository for the catalog.
 
-## Manual installation (alternative, for the included route presets)
-
-1. Extract the complete LiveSplit ZIP into a permanent folder and open its
-   desired `.lss` file. In **Edit Splits**, deactivate any catalog autosplitter.
-2. Use **Edit Layout → + → Control → Scriptable Auto Splitter**.
-3. In the component's settings, browse to `recvx-port-AnyPercent.asl` for Any%
-   or `recvx-port-SRank.asl` for S-Rank. Their default event selections match
-   the included split lists. Use `recvx-ps3recomp.asl` for a custom route.
-4. Enable **Start** and **Split**. Select **Compare Against → Game Time**
-   from LiveSplit's main menu, then save your layout to retain the script path.
+Stored times/history in the split lists are examples; clear them in
+LiveSplit if you want to start your own history. The ZIP is optional if you
+prefer to create your own split list.
 
 Do not enable a full door route for an item-only split list. With **Load
 Remover Time** enabled, Game Time pauses while the game's door flag is active.
