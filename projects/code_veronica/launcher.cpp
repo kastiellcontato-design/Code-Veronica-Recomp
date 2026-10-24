@@ -231,7 +231,7 @@ struct Settings {
     bool shader_opt[6] = { true, true, true, true, true, true };   /* k_shader_opts, Desempenho page */
     std::wstring tex_dir;              /* texture mods (Mods page); empty: "mods/textures" beside the exe */
     std::wstring tex_dump_dir;         /* where dumps go; empty: <tex_dir>\<version>\dump */
-    bool tex_replace = false, tex_dump = false, tex_dump_all = false;
+    bool tex_replace = false, tex_dump = false, tex_dump_all = false, tex_dds = false;
     bool test_tools=false; // optional experimental map window, off by default
     int music_volume=100,sfx_volume=100;
     bool battle_unlocked=false;
@@ -497,6 +497,7 @@ Settings load_settings()
     s.tex_dump_dir = ini_get(L"texturas", L"pasta_extraidas", L"");
     s.tex_replace = _wtoi(ini_get(L"texturas", L"substituir", L"0").c_str()) != 0;
     s.tex_dump = _wtoi(ini_get(L"texturas", L"extrair", L"0").c_str()) != 0;
+    s.tex_dds=ini_get(L"texturas",L"formato",L"png")==L"dds";
     s.tex_dump_all = _wtoi(ini_get(L"texturas", L"extrair_todos", L"0").c_str()) != 0;
     if(s.tex_dump_all)s.tex_dump=false;
     s.overlay_items = _wtoi(ini_get(L"overlay", L"itens", L"3").c_str()) & ((1 << NOVERLAY) - 1);
@@ -588,6 +589,7 @@ void save_settings(const Settings& s)
     ini_set(L"texturas", L"pasta_extraidas", s.tex_dump_dir);
     ini_set(L"texturas", L"substituir", s.tex_replace ? L"1" : L"0");
     ini_set(L"texturas", L"extrair", s.tex_dump ? L"1" : L"0");
+    ini_set(L"texturas",L"formato",s.tex_dds?L"dds":L"png");
     ini_set(L"texturas", L"extrair_todos", s.tex_dump_all ? L"1" : L"0");
     ini_set(L"pastas", L"patches", s.patch_dir);
     {
@@ -797,7 +799,7 @@ enum {
     ID_SHADER_OPT = 2200,                                          /* + k_shader_opts index */
     ID_SRT=2400, ID_SRT_PART=2410, ID_DD_SRT_ENEMIES=2420, ID_DD_SRT_CORNER, ID_DD_SRT_LANGUAGE, ID_SRT_SCALE, ID_SRT_OPACITY,
     ID_DD_OV_CORNER = 2450, ID_DD_OV_LAYOUT, ID_DD_SRT_INVPOS, ID_DD_SRT_WINDOW, ID_DD_SRT_BOSSBAR, ID_DD_OV_SIZE, ID_DD_OV_BG,
-    ID_TEX_BROWSE = 2300, ID_TEX_OPEN, ID_TEX_REPLACE, ID_TEX_DUMP, ID_TEX_DUMP_BROWSE, ID_TEX_DUMP_OPEN, ID_TEX_ALL, ID_TEX_ALL_RUN,
+    ID_TEX_BROWSE = 2300, ID_TEX_OPEN, ID_TEX_REPLACE, ID_TEX_DUMP, ID_TEX_DUMP_BROWSE, ID_TEX_DUMP_OPEN, ID_TEX_ALL, ID_TEX_ALL_RUN, ID_TEX_FORMAT_PNG, ID_TEX_FORMAT_DDS,
     ID_SOCIAL_GITHUB=2580, ID_SOCIAL_YOUTUBE,
     ID_UPD_TOGGLE=2590, ID_UPD_CHECK, ID_UPD_INSTALL, ID_UPD_LATER, ID_UPD_CANCEL, ID_UPD_CLOSE,
     ID_PAGE_THUMB = 2600, ID_PAGE_TRACK,
@@ -2404,12 +2406,12 @@ int count_png(const fs::path& dir, bool recurse, const fs::path& excluded = {})
     int n = 0; std::error_code ec;
     if (!recurse) {
         for (auto& e : fs::directory_iterator(dir, ec))
-            if (e.is_regular_file(ec) && _wcsicmp(e.path().extension().c_str(), L".png") == 0) n++;
+            if (e.is_regular_file(ec) && (_wcsicmp(e.path().extension().c_str(), L".png") == 0||_wcsicmp(e.path().extension().c_str(), L".dds") == 0)) n++;
         return n;
     }
     for (auto it = fs::recursive_directory_iterator(dir, ec); !ec && it != fs::recursive_directory_iterator(); it.increment(ec)) {
         if (it->is_directory(ec)) { if (_wcsicmp(it->path().filename().c_str(), L"dump") == 0 || (!excluded.empty() && cv_texture_paths::same_folder(it->path(),excluded))) it.disable_recursion_pending(); continue; }
-        if (_wcsicmp(it->path().extension().c_str(), L".png") == 0) n++;
+        if ((_wcsicmp(it->path().extension().c_str(), L".png") == 0||_wcsicmp(it->path().extension().c_str(), L".dds") == 0)) n++;
     }
     return n;
 }
@@ -2488,6 +2490,11 @@ void draw_mods(Graphics& gr, const Font& head, const Font& body, const Font& fsm
     swprintf(note, 512, T(S_TEX_DUMP_COUNT_FMT), g.tex_dumped);
     path_row(gr, x, y, T(S_TEX_DUMP_FOLDER), tex_dump_folder().wstring(), note, true, extraction.running?-1:ID_TEX_DUMP_BROWSE, ID_TEX_DUMP_OPEN, body, fsm, 220);
     y += 70;
+    const wchar_t* format_labels[LANG_COUNT]={L"Formato de exportação",L"Export format",L"Formato de exportación",L"書き出し形式",L"Format d’exportation",L"Exportformat",L"Formato di esportazione",L"Format eksportu",L"Dışa aktarma biçimi",L"صيغة التصدير",L"导出格式",L"내보내기 형식",L"Формат экспорта"};
+    text(gr,format_labels[g_lang],x,y+7,body,C_TEXT,StringAlignmentNear,230,28);
+    button(gr,RectF(x+250,y,100,32),L"PNG",ID_TEX_FORMAT_PNG,body,!g.s.tex_dds,!extraction.running);
+    button(gr,RectF(x+362,y,100,32),L"DDS",ID_TEX_FORMAT_DDS,body,g.s.tex_dds,!extraction.running);
+    y+=50;
     option_card(gr, x, y, w, 92, g.s.tex_replace, ID_TEX_REPLACE, T(S_TEX_REPLACE_T), T(S_TEX_REPLACE_D), body, fsm);
     y += 104;
     option_card(gr, x, y, w, 92, g.s.tex_dump, ID_TEX_DUMP, T(S_TEX_DUMP_T), T(S_TEX_DUMP_D), body, fsm);
@@ -3054,12 +3061,15 @@ void click(int id)
     else if (id == ID_TEX_ALL && !cv_texture_export_status().running) {
         g.s.tex_dump_all=!g.s.tex_dump_all;if(g.s.tex_dump_all)g.s.tex_dump=false;set_texture_env();changed();
     }
+    else if((id==ID_TEX_FORMAT_PNG||id==ID_TEX_FORMAT_DDS)&&!cv_texture_export_status().running){
+        g.s.tex_dds=id==ID_TEX_FORMAT_DDS;set_texture_env();g.tex_rep=-1;changed();
+    }
     else if (id == ID_TEX_ALL_RUN) {
         if(cv_texture_export_status().running)cv_texture_export_cancel();
         else if(g.s.tex_dump_all){
             g.s.tex_dump=false;set_texture_env();changed();
             const fs::path source=fs::path(g.s.game)/L"USRDIR"/L"BHCV"/L"nativePS3"/L"biocv_disc";
-            if(!cv_texture_export_start(source,tex_dump_folder()))g.play_msg=T(S_TEX_ALL_FAILED);
+            if(!cv_texture_export_start(source,tex_dump_folder(),g.s.tex_dds))g.play_msg=T(S_TEX_ALL_FAILED);
             else g.play_msg.clear();
         }
     }
@@ -3399,6 +3409,7 @@ void set_texture_env()
     set_env("TEXTURE_GAME", save_utf8(fs::path(texture_game_code())));
     set_env("TEXTURE_DUMP_DIR", save_utf8(tex_dump_folder()));
     texpack_set_dump_directory(tex_dump_folder().c_str());
+    texpack_set_dump_format(g.s.tex_dds);
     set_env("TEXTURE_REPLACE", g.s.tex_replace ? "1" : "0");
     set_env("TEXTURE_DUMP", g.s.tex_dump && !g.s.tex_dump_all ? "1" : "0");
     texpack_flags_changed();

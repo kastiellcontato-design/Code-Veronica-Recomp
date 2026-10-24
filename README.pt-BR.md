@@ -228,7 +228,7 @@ A página **Patches** lista mudanças no próprio código do jogo. Elas valem na
 
 ### Mods de textura (experimental)
 
-O port consegue **trocar as texturas do jogo por imagens PNG** e também **extrair as texturas originais** para você, já com o nome certo. Tudo fica na página **Mods** do launcher.
+O port consegue **trocar as texturas do jogo por imagens PNG ou DDS** e também **extrair as texturas originais** para você, já com o nome certo. Tudo fica na página **Mods** do launcher.
 
 **Como funcionam os nomes.** Cada textura tem um código: 16 caracteres hexadecimais no começo do nome do arquivo, por exemplo
 
@@ -237,19 +237,25 @@ O port consegue **trocar as texturas do jogo por imagens PNG** e também **extra
 └──── código ──┘ └tam.┘ └formato┘
 ```
 
-Só o **código** importa. O PNG novo pode ter **qualquer tamanho** (uma textura 512×256 pode virar 2048×1024 em HD) e o resto do nome é livre, mas ele precisa **começar com o mesmo código**. Só arquivos `.png` são lidos.
+Só o **código** importa. O arquivo de substituição pode ter outra resolução (uma textura 512×256 pode virar 2048×1024 em HD), mas o nome precisa **começar com o mesmo código**. Packs aceitam **`.png` e `.dds`**, inclusive misturados. Se os dois usarem o mesmo código, **DDS tem prioridade**.
+
+**DDS:** texturas 2D em BC1/DXT1, BC2/DXT3, BC3/DXT5, BC7 e formatos comuns RGB/RGBA/BGRA. A transparência recortada ou suave é preservada; arquivos com alfa pré-multiplicado (incluindo DXT2/DXT4) precisam ser convertidos para alfa direto antes do uso. Blocos BC compatíveis continuam comprimidos na GPU, e os mipmaps presentes no DDS são usados sem recompressão. BC7 exige dimensões de base múltiplas de 4; texturas BC1/2/3 pequenas ou sem alinhamento são convertidas para RGBA. Cubemaps, arrays, volumes, HDR e outros formatos não são substituições aceitas; arquivos inválidos ou incompatíveis mantêm a textura original.
+
+**Exportação:** na aba **Mods**, escolha **Formato de exportação → PNG ou DDS**. A escolha vale tanto para a extração durante a partida quanto para **Extrair texturas de todos os mapas**, e fica salva no launcher. A extração completa em DDS preserva os blocos DXT e mipmaps armazenados; texturas ARGB são exportadas em RGBA8 sem perda adicional. Durante a partida, o DDS contém o nível base: DXT permanece comprimido e outras texturas usam RGBA8. A exportação continua usando os códigos do PS3 e não sobrescreve arquivos existentes.
+
+> Este suporte faz parte do código atual e requer uma nova compilação. Os ZIPs de distribuição v1.0 já gerados não são atualizados automaticamente.
 
 **Passo 1 — Extraia as texturas** (para saber o código de cada uma)
 
 1. Abra o launcher e vá em **Mods**.
 2. Escolha um modo de extração:
-   - **Extrair texturas de todos os mapas**: lê os arquivos do jogo sem precisar jogar. Selecione e clique em **Iniciar extração**. Leva alguns minutos, mostra o progresso e pode ser cancelado. Um arquivo CSV diz de qual arquivo do jogo veio cada PNG.
+   - **Extrair texturas de todos os mapas**: lê os arquivos do jogo sem precisar jogar. Selecione e clique em **Iniciar extração**. Leva alguns minutos, mostra o progresso e pode ser cancelado. Um arquivo CSV diz de qual arquivo do jogo veio cada imagem.
    - **Extrair texturas das salas visitadas**: ligue e jogue; cada textura nova que aparece (salas, personagens, itens, efeitos) é salva. Use para as imagens que o jogo cria enquanto roda, que não ficam guardadas nos arquivos.
-3. Os PNGs vão para a **Pasta das texturas extraídas** (por padrão `mods\texture-dumps\<versão>`, ao lado do executável). PNGs que já existem nunca são sobrescritos, então as suas edições ficam seguras.
+3. Os arquivos vão para a **Pasta das texturas extraídas** (por padrão `mods\texture-dumps\<versão>`, ao lado do executável). Arquivos que já existem nunca são sobrescritos, então as suas edições ficam seguras.
 
 **Passo 2 — Faça o mod**
 
-1. Copie os PNGs que você quer mudar e edite (ou aumente) em qualquer editor de imagem.
+1. Copie os arquivos PNG ou DDS que você quer mudar e edite (ou aumente) em qualquer editor de imagem.
 2. **Mantenha o código no começo do nome.** O tamanho pode mudar.
 3. Coloque os arquivos na **Pasta das texturas do mod** (por padrão `mods\textures`), dentro da subpasta da sua versão: `NPEB00553`, `NPUB30467` ou `NPJB00135`. Sem subpasta, a própria pasta vale para todas as versões. Pode criar subpastas dentro dela para organizar o pacote como quiser.
 
@@ -257,10 +263,10 @@ Só o **código** importa. O PNG novo pode ter **qualquer tamanho** (uma textura
 
 1. Ligue **Substituir texturas** na página Mods (reinicie o jogo se você trocou a pasta do mod).
 2. No jogo, aperte **F9** (controle: R1+R2+L1+L2+□ / RB+RT+LB+LT+X) para comparar o mod com as texturas originais quando quiser.
-3. Pacotes grandes não pesam de cara: cada PNG só é carregado quando a textura dele aparece na tela.
+3. Pacotes grandes não pesam de cara: cada arquivo só é carregado quando a textura dele aparece na tela.
 
 > [!TIP]
-> **Adaptando pacotes de texturas HD do PS2.** Packs de PS2 podem usar arquivos **`.dds`**, mas o port atualmente lê apenas **`.png`**. Primeiro **converta as imagens DDS para PNG**, preservando a transparência; mudar apenas a extensão não converte o arquivo. Depois, use **Extrair texturas de todos os mapas** para obter as referências do PS3, identifique a textura correspondente e nomeie o PNG convertido com o **código de 16 caracteres do PS3**. Coloque-o na pasta do mod como no Passo 2. A compatibilidade deve ser conferida por textura: recortes, orientação, transparência e organização da imagem podem diferir entre PS2 e PS3; apenas converter e renomear não garante o resultado correto.
+> **Adaptando pacotes de texturas HD do PS2.** DDS nos formatos acima pode ser usado diretamente, sem converter para PNG. Use **Extrair texturas de todos os mapas** para obter referências do PS3, identifique cada imagem correspondente e renomeie o arquivo do pack com o **código de 16 caracteres do PS3**, mantendo sua extensão real `.dds` ou `.png`. Não basta trocar a extensão. Confira recortes, orientação, transparência e organização de cada imagem: esses detalhes podem diferir entre PS2 e PS3. Coloque os arquivos na pasta do mod como no Passo 2.
 
 Observações: as faces de cubemaps (reflexos) são extraídas em `reference\cubemaps` só para consulta; por enquanto a troca funciona com texturas 2D. Nunca compartilhe as texturas originais extraídas; compartilhe só as imagens que você editou.
 

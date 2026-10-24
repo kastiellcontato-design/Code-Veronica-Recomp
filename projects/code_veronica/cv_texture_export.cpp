@@ -9,6 +9,7 @@
 #include "cv_texture_export.h"
 #include "../../libs/filesystem/edat.h"
 #include "../../libs/video/rsx_texture_pack.h"
+#include "../../libs/video/rsx_texture_dds.h"
 #include "../../libs/video/rsx_texture_layout.h"
 #include <atomic>
 #include <thread>
@@ -53,7 +54,17 @@ bool png(const fs::path& path,uint32_t w,uint32_t h,const std::vector<uint8_t>& 
     const bool exists=GetLastError()==ERROR_ALREADY_EXISTS||GetLastError()==ERROR_FILE_EXISTS;
     DeleteFileW(tmp.c_str());return exists;
 }
+bool dds_write(const fs::path& path,const std::vector<uint8_t>& bytes){
+    fs::path tmp=path;tmp+=L".export-"+std::to_wstring(GetCurrentProcessId())+L".tmp";
+    HANDLE f=CreateFileW(tmp.c_str(),GENERIC_WRITE,0,nullptr,CREATE_NEW,FILE_ATTRIBUTE_NORMAL,nullptr);
+    if(f==INVALID_HANDLE_VALUE)return false;
+    DWORD done=0;const bool ok=WriteFile(f,bytes.data(),(DWORD)bytes.size(),&done,nullptr)&&done==bytes.size();CloseHandle(f);
+    if(ok&&MoveFileExW(tmp.c_str(),path.c_str(),0))return true;
+    const auto error=GetLastError();DeleteFileW(tmp.c_str());
+    return ok&&(error==ERROR_ALREADY_EXISTS||error==ERROR_FILE_EXISTS);
+}
 struct Exporter {
+    bool dds=false;
     fs::path output;
     CLSID codec{};
     std::unordered_set<uint64_t> seen;
@@ -91,7 +102,7 @@ struct Exporter {
         if(!w||!h||w>8192||h>8192||!mips||start<16+4*mips||start>b.size()||n>b.size()-start||n>MAX_TEXTURE){update([](auto& s){++s.errors;});return;}
         const uint8_t* data=b.data()+start;
         const auto hash=texpack_hash(data,n,w,h,rsx);
-        char leaf[128];snprintf(leaf,sizeof leaf,"%016llX_%ux%u_%s.png",(unsigned long long)hash,w,h,name);
+        char leaf[128];snprintf(leaf,sizeof leaf,"%016llX_%ux%u_%s.%s",(unsigned long long)hash,w,h,name,dds?"dds":"png");
         // Record duplicates too: one shared PNG can belong to several maps.
         auto quote=[](std::string v){std::string q="\"";for(char c:v){if(c=='\"')q+='\"';q+=c;}return q+'\"';};
         const std::string relative=reference?std::string("reference/cubemaps/")+leaf:leaf;
@@ -100,6 +111,24 @@ struct Exporter {
         const auto target=output/fs::u8path(relative);std::error_code ec;
         if(reference){fs::create_directories(target.parent_path(),ec);if(ec){update([](auto& s){++s.errors;});return;}}
         if(fs::exists(target,ec)){update([](auto& s){++s.existing;});return;}
+        if(dds) {
+            uint32_t count=0;for(uint32_t d=w>h?w:h;d;d>>=1)++count;
+            if(mips>count||mips>16){update([](auto& s){++s.errors;});return;}
+            std::vector<uint8_t> result(128);uint32_t lw=w,lh=h;
+            if(!texpack_dds_header(result.data(),w,h,mips,bc==1?71:bc==2?74:bc==3?77:28)){update([](auto& s){++s.errors;});return;}
+            for(uint32_t level=0;level<mips;level++) {
+                const size_t offset=be32(b.data()+16+level*4);
+                const size_t bytes=bc?((size_t)(lw+3)/4)*((lh+3)/4)*(bc==1?8:16):(size_t)lw*lh*4;
+                if(offset<16+4*mips||offset>b.size()||bytes>b.size()-offset||bytes>MAX_TEXTURE||result.size()>MAX_TEXTURE-bytes){update([](auto& s){++s.errors;});return;}
+                const size_t end=result.size();result.resize(end+bytes);
+                if(bc)memcpy(result.data()+end,b.data()+offset,bytes);
+                else {rsx_tex_layout layout{};rsx_texture_layout(0x85,lw,lh,&layout);rsx_texture_decode(result.data()+end,lw*4,b.data()+offset,lw,lh,&layout,0);}
+                lw=lw>1?lw/2:1;lh=lh>1?lh/2:1;
+                if(worker.stop)return;
+            }
+            if(dds_write(target,result))update([](auto& s){++s.written;});else update([](auto& s){++s.errors;});
+            return;
+        }
         std::vector<uint8_t> rgba((size_t)w*h*4);
         if(bc)texpack_decode_bc(bc,data,((size_t)(w+3)/4)*(bc==1?8:16),w,h,rgba.data());
         else {
@@ -144,12 +173,12 @@ struct Exporter {
 bool within(const fs::path& a,const fs::path& b){
     auto x=a.begin(),y=b.begin();for(;y!=b.end();++y,++x)if(x==a.end()||_wcsicmp(x->c_str(),y->c_str()))return false;return true;
 }
-void run(fs::path source,fs::path output){
+void run(fs::path source,fs::path output,bool dds){
     try{
         Gdiplus::GdiplusStartupInput input;ULONG_PTR token=0;
         if(Gdiplus::GdiplusStartup(&token,&input,nullptr)!=Gdiplus::Ok)throw 1;
         struct Shutdown {ULONG_PTR token;~Shutdown(){Gdiplus::GdiplusShutdown(token);}} shutdown{token};
-        Exporter exporter;exporter.output=output;
+        Exporter exporter;exporter.output=output;exporter.dds=dds;
         UINT count=0,bytes=0;Gdiplus::GetImageEncodersSize(&count,&bytes);if(!bytes)throw 1;
         std::vector<uint8_t> memory(bytes);auto* codecs=(Gdiplus::ImageCodecInfo*)memory.data();
         Gdiplus::GetImageEncoders(count,bytes,codecs);bool found=false;
@@ -169,7 +198,7 @@ void run(fs::path source,fs::path output){
         if(!worker.stop){fs::create_directories(output,ec);if(ec)throw 1;}
         if(!worker.stop){
             exporter.report.open(output/(L"extraction-"+std::to_wstring(GetCurrentProcessId())+L"-"+std::to_wstring(GetTickCount64())+L".csv"),std::ios::binary);
-            if(!exporter.report)throw 1;exporter.report<<"archive,asset,png\n";
+            if(!exporter.report)throw 1;exporter.report<<(dds?"archive,asset,dds\n":"archive,asset,png\n");
         }
         for(const auto& path:files){if(worker.stop)break;exporter.file(path);update([](auto& s){++s.files;});}
         if(exporter.report.is_open()){exporter.report.flush();if(!exporter.report)throw 1;}
@@ -177,14 +206,14 @@ void run(fs::path source,fs::path output){
     update([](auto& s){s.canceled=worker.stop.load();s.running=false;s.finished=true;});
 }
 }
-bool cv_texture_export_start(const std::filesystem::path& source,const std::filesystem::path& output){
+bool cv_texture_export_start(const std::filesystem::path& source,const std::filesystem::path& output,bool dds){
     if(cv_texture_export_status().running)return false;
     if(worker.thread.joinable())worker.thread.join();
     auto failed=[](){update([](auto& s){s={};s.failed=true;s.finished=true;});return false;};
     std::error_code ec;const auto src=std::filesystem::weakly_canonical(source,ec);if(ec||source.empty()||!fs::exists(src,ec))return failed();
     const auto dst=std::filesystem::weakly_canonical(output,ec);if(ec||output.empty()||within(dst,src))return failed();
     worker.stop=false;update([](auto& s){s={};s.running=true;});
-    try{worker.thread=std::thread(run,src,dst);}catch(...){update([](auto& s){s.running=false;s.failed=true;s.finished=true;});return false;}return true;
+    try{worker.thread=std::thread(run,src,dst,dds);}catch(...){update([](auto& s){s.running=false;s.failed=true;s.finished=true;});return false;}return true;
 }
 void cv_texture_export_cancel(){worker.stop=true;}
 CvTextureExportStatus cv_texture_export_status(){std::lock_guard<std::mutex> lock(worker.mutex);return worker.status;}

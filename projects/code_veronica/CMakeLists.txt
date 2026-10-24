@@ -728,3 +728,13 @@ if(WIN32)
  target_compile_options(code_veronica_audio_gain_tests PRIVATE /UNDEBUG)
  set_target_properties(code_veronica_audio_gain_tests PROPERTIES OUTPUT_NAME "cv_audio_gain_tests_${CV_REGION_LC}")
 endif()
+
+# DDS parsing, asynchronous pack loading and production GPU upload on WARP.
+if(WIN32)
+    add_executable(code_veronica_texture_dds_tests EXCLUDE_FROM_ALL
+        tests/test_texture_dds.cpp tests/texture_dds_gpu.c tests/texture_export_stb.c
+        "${PS3RECOMP_DIR}/libs/video/rsx_texture_pack.c")
+    target_include_directories(code_veronica_texture_dds_tests PRIVATE "${PS3RECOMP_DIR}/libs/video")
+    target_compile_options(code_veronica_texture_dds_tests PRIVATE /UNDEBUG)
+    target_link_libraries(code_veronica_texture_dds_tests PRIVATE d3d12 dxgi dxguid d3dcompiler)
+endif()

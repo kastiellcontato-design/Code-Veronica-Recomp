@@ -9,6 +9,7 @@
 #include "../../../libs/codec/stb_image.h"
 #include <cstdlib>
 #include "../../../libs/video/rsx_texture_pack.h"
+#include "../../../libs/video/rsx_texture_dds.h"
 #include <cassert>
 #include <fstream>
 #include <thread>
@@ -132,6 +133,26 @@ int main(int argc,char** argv){
     auto bad=texture(0x14);be(bad,16,0xfffffff0);auto broken=archive({bad,texture(0xff)});write(root/L"bad.arc",broken);
     assert(cv_texture_export_start(root/L"bad.arc",root/L"bad-png"));result=wait();assert(result.errors==1&&result.unsupported==1);
     assert(cv_texture_export_start(src,root/L"cancel-png"));cv_texture_export_cancel();result=wait();assert(result.canceled);
+    // DDS round trip: original BC blocks/mips and decoded ARGB alpha.
+    auto bc_alpha=texture(0x18);bc_alpha[20]=128;bc_alpha[21]=64;
+    auto rgba_alpha=texture(0x28);for(size_t p=20;p<rgba_alpha.size();p+=4)rgba_alpha[p]=128;
+    auto bc_cutout=texture(0x14);memset(bc_cutout.data()+20,0,8);bc_cutout[22]=bc_cutout[23]=255;memset(bc_cutout.data()+24,255,4);
+    auto chain=texture(0x14);chain.resize(52);be(chain,8,(4<<19)|(4<<6)|3);be(chain,16,28);be(chain,20,36);be(chain,24,44);
+    for(size_t p=28;p<52;p++)chain[p]=(uint8_t)p;
+    const auto dds_source=root/L"dds-test.arc",dds_output=root/L"dds";
+    write(dds_source,archive({bc_alpha,rgba_alpha,bc_cutout,chain}));const auto source_before=read(dds_source);
+    assert(cv_texture_export_start(dds_source,dds_output,true));result=wait();assert(!result.failed&&result.errors==0&&result.written+result.existing==4);
+    size_t examined=0;
+    for(const auto& item:fs::directory_iterator(dds_output))if(item.path().extension()==L".dds") {
+        const auto bytes=read(item.path());auto* im=texpack_dds_parse(bytes.data(),bytes.size());assert(im);
+        if(im->levels==3){assert(im->format==71&&im->bytes==24&&!memcmp(im->data,chain.data()+28,24));}
+        else if(im->format==28){assert(im->data[3]==128);}
+        else {std::vector<uint8_t> rgba(64);texpack_decode_bc(im->format==71?1:3,im->data,im->row_bytes[0],4,4,rgba.data());assert(rgba[3]==(im->format==71?0:128));}
+        texpack_free(im);examined++;
+    }
+    assert(examined==4&&read(dds_source)==source_before);
+    assert(cv_texture_export_start(dds_source,dds_output,true));result=wait();assert(result.written==0&&result.existing==4);
+    std::puts("[DDS EXPORT TEST] PASS: source BC bytes/mips preserved, RGBA/BC alpha, round trip, preserved source and existing DDS.");
     check_texture_folders(root);
     if(argc>=3){
         const auto actual=fs::u8path(argv[2]);assert(cv_texture_export_start(actual,root/L"real"));result=wait();

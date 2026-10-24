@@ -228,7 +228,7 @@ The **Patches** page lists changes to the game's own code. They apply at once, e
 
 ### Texture mods (experimental)
 
-The port can **replace the game's textures with PNG images** and can also **extract the original textures** for you, already with the right names. Everything is on the **Mods** page of the launcher.
+The port can **replace the game's textures with PNG or DDS images** and can also **extract the original textures** for you, already with the right names. Everything is on the **Mods** page of the launcher.
 
 **How the names work.** Every texture has a code: 16 hexadecimal characters at the start of the file name, for example
 
@@ -237,19 +237,25 @@ The port can **replace the game's textures with PNG images** and can also **extr
 └──── code ────┘ └size┘ └format┘
 ```
 
-Only the **code** matters. A replacement PNG can have **any size** (a 512×256 texture can become 2048×1024 for HD) and the rest of the name is free, but it must **start with the same code**. Only `.png` files are read.
+Only the **code** matters. A replacement can use a different resolution (a 512×256 texture can become 2048×1024 for HD), but its name must **start with the same code**. Packs accept **`.png` and `.dds`**, including mixed folders. If both use the same code, **DDS takes priority**.
+
+**DDS:** 2D BC1/DXT1, BC2/DXT3, BC3/DXT5, BC7 and common RGB/RGBA/BGRA formats. Cutout and soft transparency are preserved; premultiplied-alpha files (including DXT2/DXT4) must be converted to straight alpha first. Compatible BC blocks remain compressed on the GPU, and supplied DDS mipmaps are used without recompression. BC7 requires base dimensions divisible by 4; small or unaligned BC1/2/3 textures fall back to RGBA. Cubemaps, arrays, volumes, HDR and other formats are not supported replacements; invalid or unsupported files leave the original texture in use.
+
+**Export:** on the **Mods** page, choose **Export format → PNG or DDS**. This saved setting applies both to extraction during play and **Extract textures from all maps**. Full DDS extraction preserves stored DXT blocks and mipmaps; ARGB textures are exported as RGBA8 without additional quality loss. During play, DDS exports the base level: DXT stays compressed and other textures use RGBA8. Exported files still use PS3 codes and never overwrite existing files.
+
+> This support is part of the current source and requires a new build. Previously generated v1.0 distribution ZIPs are not updated automatically.
 
 **Step 1 — Extract the textures** (to know the code of each one)
 
 1. Open the launcher and go to **Mods**.
 2. Choose an extraction mode:
-   - **Extract textures from all maps**: reads the game files without playing. Select it and click **Start extraction**. It takes a few minutes, shows its progress and can be canceled. A CSV file lists which game file each PNG came from.
+   - **Extract textures from all maps**: reads the game files without playing. Select it and click **Start extraction**. It takes a few minutes, shows its progress and can be canceled. A CSV file lists which game file each image came from.
    - **Dump textures from visited rooms**: turn it on and play; every new texture that appears (rooms, characters, items, effects) is saved. Use it for images the game creates while running, which are not stored in the files.
-3. The PNGs go to the **Extracted textures folder** (by default `mods\texture-dumps\<version>` next to the executable). Existing PNGs are never overwritten, so your edits are safe.
+3. The files go to the **Extracted textures folder** (by default `mods\texture-dumps\<version>` next to the executable). Existing files are never overwritten, so your edits are safe.
 
 **Step 2 — Make the mod**
 
-1. Copy the PNGs you want to change and edit them (or upscale them) in any image editor.
+1. Copy the PNG or DDS files you want to change and edit them (or upscale them) in any image editor.
 2. **Keep the code at the start of the name.** You may change the size.
 3. Put them in the **Mod textures folder** (by default `mods\textures`), inside the subfolder of your version: `NPEB00553`, `NPUB30467` or `NPJB00135`. Without a subfolder, the folder itself is used for all versions. Subfolders inside it are allowed, so you can organize the pack as you like.
 
@@ -257,10 +263,10 @@ Only the **code** matters. A replacement PNG can have **any size** (a 512×256 t
 
 1. Turn on **Replace textures** on the Mods page (restart the game if you changed the mod folder).
 2. In game, press **F9** (controller: R1+R2+L1+L2+□ / RB+RT+LB+LT+X) to compare the mod with the original textures at any time.
-3. Big packs do not cost memory up front: each PNG is only loaded when its texture appears on screen.
+3. Big packs do not cost memory up front: each file is only loaded when its texture appears on screen.
 
 > [!TIP]
-> **Adapting PS2 HD texture packs.** PS2 packs may use **`.dds`** files, but the port currently reads only **`.png`**. First **convert the DDS images to PNG**, preserving transparency; changing the extension alone does not convert a file. Then use **Extract textures from all maps** to obtain PS3 references, identify the matching texture, and name the converted PNG with the **16-character PS3 code**. Place it in the mod folder as in Step 2. Check compatibility per texture: cropping, orientation, transparency and image layout may differ between PS2 and PS3; conversion and renaming alone do not guarantee a correct result.
+> **Adapting PS2 HD texture packs.** DDS files in the formats above can be used directly, without converting to PNG. Use **Extract textures from all maps** to obtain PS3 references, identify each matching image, and rename the pack file with its **16-character PS3 code**, keeping its actual `.dds` or `.png` extension. Changing an extension does not convert a file. Check cropping, orientation, transparency and image layout per texture: these may differ between PS2 and PS3. Place the files in the mod folder as in Step 2.
 
 Notes: cube-map faces (reflections) are extracted to `reference\cubemaps` for reference only; replacement currently supports 2D textures. Never share the extracted original textures; share only your own edited images.
 

@@ -31,6 +31,7 @@
 #include "rsx_tex_hook.h"
 #include "rsx_perf_overlay.h"
 #include "rsx_texture_pack.h"
+#include "rsx_texture_upload.h"
 #include "../codec/stb_image_write.h"
 #include "rsx_fp_decompiler.h"
 #include "rsx_dxc.h"
@@ -6489,7 +6490,7 @@ static u32 tex_csum(const u8* base, u32 nbytes)
  * While a replacement is still decoding, its texture draws with its own image.
  * Moddable: B8, A8R8G8B8, G8B8 and DXT1/3/5 -- the formats drawn as such.
  * -------------------------------------------------------------------------*/
-typedef struct { u64 hash; int state; ID3D12Resource* res; u64 bytes; u64 last; } RepEntry;
+typedef struct { u64 hash; int state; ID3D12Resource* res; u64 bytes; u64 last; u32 opaque; } RepEntry;
 enum { REP_NEW = 0, REP_NONE, REP_LOADING, REP_READY, REP_DROPPED };
 #define REP_CAP 65536u
 static RepEntry* s_rep;
@@ -6517,52 +6518,10 @@ static RepEntry* rep_find(u64 h, int add)
 }
 static ID3D12Resource* rep_upload(const texpack_image* im)
 {
-    D3D12_HEAP_PROPERTIES hp = {0}; hp.Type = D3D12_HEAP_TYPE_DEFAULT;
-    D3D12_RESOURCE_DESC td = {0};
-    td.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-    td.Width = im->w; td.Height = im->h; td.DepthOrArraySize = 1;
-    td.MipLevels = (UINT16)im->levels; td.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-    td.SampleDesc.Count = 1; td.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-    ID3D12Resource* res = NULL; ID3D12Resource* up = NULL;
-    if (FAILED(s_d3d.device->lpVtbl->CreateCommittedResource(s_d3d.device, &hp, D3D12_HEAP_FLAG_NONE, &td,
-            D3D12_RESOURCE_STATE_COPY_DEST, NULL, &IID_ID3D12Resource, (void**)&res)))
-        return NULL;
-    D3D12_PLACED_SUBRESOURCE_FOOTPRINT fp[16]; UINT rows[16]; UINT64 rowsz[16], total = 0;
-    s_d3d.device->lpVtbl->GetCopyableFootprints(s_d3d.device, &td, 0, im->levels, 0, fp, rows, rowsz, &total);
-    D3D12_HEAP_PROPERTIES hu = {0}; hu.Type = D3D12_HEAP_TYPE_UPLOAD;
-    D3D12_RESOURCE_DESC bd = {0};
-    bd.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER; bd.Width = total; bd.Height = 1;
-    bd.DepthOrArraySize = 1; bd.MipLevels = 1; bd.SampleDesc.Count = 1; bd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-    u8* m = NULL; D3D12_RANGE nr = {0, 0};
-    if (FAILED(s_d3d.device->lpVtbl->CreateCommittedResource(s_d3d.device, &hu, D3D12_HEAP_FLAG_NONE, &bd,
-            D3D12_RESOURCE_STATE_GENERIC_READ, NULL, &IID_ID3D12Resource, (void**)&up)) ||
-        FAILED(up->lpVtbl->Map(up, 0, &nr, (void**)&m)) || !m) {
-        if (up) up->lpVtbl->Release(up);
-        res->lpVtbl->Release(res);
-        return NULL;
-    }
-    for (u32 l = 0; l < im->levels; l++) {
-        const u32 lw = fp[l].Footprint.Width;
-        for (u32 y = 0; y < rows[l]; y++)
-            memcpy(m + fp[l].Offset + (u64)y * fp[l].Footprint.RowPitch,
-                   im->data + im->level_off[l] + (size_t)y * lw * 4, (size_t)lw * 4);
-    }
-    up->lpVtbl->Unmap(up, 0, NULL);
-    for (u32 l = 0; l < im->levels; l++) {
-        D3D12_TEXTURE_COPY_LOCATION dst = {0}, src = {0};
-        dst.pResource = res; dst.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX; dst.SubresourceIndex = l;
-        src.pResource = up; src.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT; src.PlacedFootprint = fp[l];
-        s_d3d.cmd_list->lpVtbl->CopyTextureRegion(s_d3d.cmd_list, &dst, 0, 0, 0, &src, NULL);
-    }
-    D3D12_RESOURCE_BARRIER b = {0};
-    b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-    b.Transition.pResource = res;
-    b.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
-    b.Transition.StateAfter  = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-    b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-    s_d3d.cmd_list->lpVtbl->ResourceBarrier(s_d3d.cmd_list, 1, &b);
-    defer_release(up);   /* once the GPU has copied it */
-    return res;
+    ID3D12Resource* up=NULL;
+    ID3D12Resource* result=texpack_gpu_upload(s_d3d.device,s_d3d.cmd_list,im,&up);
+    if(up)defer_release(up);
+    return result;
 }
 static void rep_drop(RepEntry* e)
 {
@@ -6587,7 +6546,7 @@ static void texrep_frame(void)
         RepEntry* e = rep_find(h, 0);
         if (r > 0 && e && e->state == REP_LOADING) {
             ID3D12Resource* res = rep_upload(im);
-            if (res) { e->res = res; e->state = REP_READY; e->bytes = im->bytes; e->last = s_tex_frame;
+            if (res) { e->res = res; e->opaque=im->opaque; e->state = REP_READY; e->bytes = im->bytes; e->last = s_tex_frame;
                        s_rep_bytes += im->bytes; used += im->bytes; }
             else e->state = REP_NONE;
         } else if (e && e->state == REP_LOADING) e->state = r < 0 ? REP_NONE : REP_DROPPED;
@@ -6609,10 +6568,16 @@ static void texrep_frame(void)
  * and put back goes through the same remap. */
 static void tex_dump_image(u64 hash, const u8* map0, u32 pitch, u32 w, u32 h, u32 basef)
 {
-    u8* rgba = (u8*)malloc((size_t)w * h * 4);
-    if (!rgba) return;
+    u8* rgba = NULL;
     const char* name = basef == 0x85 ? "ARGB" : basef == 0x8B ? "G8B8" : basef == 0x81 ? "B8"
                      : basef == 0x86 ? "DXT1" : basef == 0x87 ? "DXT3" : "DXT5";
+    if(texpack_dump_is_dds()&&basef>=0x86&&basef<=0x88){
+        size_t row=((size_t)w+3)/4*(basef==0x86?8:16),rows=(h+3)/4;
+        u8* data=(u8*)malloc(row*rows);if(!data)return;
+        for(size_t y=0;y<rows;y++)memcpy(data+y*row,map0+y*pitch,row);
+        texpack_dump_dds(hash,w,h,name,basef==0x86?71:basef==0x87?74:77,data,row*rows);return;
+    }
+    rgba=(u8*)malloc((size_t)w*h*4);if(!rgba)return;
     if (basef >= 0x86 && basef <= 0x88) texpack_decode_bc((int)(basef - 0x85), map0, pitch, w, h, rgba);
     else
         for (u32 y = 0; y < h; y++) {
@@ -6654,7 +6619,7 @@ static void texdump_for_slot(int ts)
 }
 /* The replacement to draw a texture slot with, if one is loaded; asks for it
  * the first time the texture is seen. */
-static ID3D12Resource* texrep_for_slot(int ts)
+static ID3D12Resource* texrep_for_slot(int ts, u32* opaque)
 {
     VPTexSlot* t = &s_d3d.vp_tex[ts];
     if (!texpack_replace_on()) return NULL;
@@ -6674,7 +6639,7 @@ static ID3D12Resource* texrep_for_slot(int ts)
     }
     if (e->state == REP_DROPPED) { e->state = REP_LOADING; texpack_request(e->hash); return NULL; }
     if (e->state != REP_READY) return NULL;
-    e->last = s_tex_frame;
+    e->last = s_tex_frame; *opaque=e->opaque;
     return e->res;
 }
 
@@ -10457,8 +10422,9 @@ static void prepass_range(u32 from, u32 to)
                          * same channels, so the guest's remap still applies. */
                         texdump_for_slot(ts);
                         ID3D12Resource* _tr = s_d3d.vp_tex[ts].ui_res;
-                        if (!_tr) _tr = texrep_for_slot(ts);
-                        if (_tr) sf = DXGI_FORMAT_R8G8B8A8_UNORM;
+                        u32 _opaque=0;
+                        if (!_tr) _tr = texrep_for_slot(ts,&_opaque);
+                        if (_tr) { D3D12_RESOURCE_DESC _desc; _tr->lpVtbl->GetDesc(_tr,&_desc); sf=_desc.Format; }
                         else _tr = s_d3d.vp_tex[ts].res;
                         { static int nb = 0; const char* e = getenv("TEX_DUMP");
                           if (e && nb < 6 && ((dr->tex[_u].off & 0x0FFFFFFFu) ==
@@ -10469,10 +10435,9 @@ static void prepass_range(u32 from, u32 to)
                                       s_d3d.vp_tex[ts].cube, dr->tex[_u].fmt, dr->tex[_u].ctrl1,
                                       rsx_remap_to_d3d(dr->tex[_u].ctrl1, _bf), (void*)_tr,
                                       _tr != s_d3d.vp_tex[ts].res, 10); } }
-                        srv_req_ex(&_rq[_u], _tr, sf,
-                                  (_bf == 0x81) ? 0x1000
-                                                : rsx_remap_to_d3d(dr->tex[_u].ctrl1, _bf),
-                                  _cube);
+                        u32 _mapping=(_bf==0x81)?0x1000:rsx_remap_to_d3d(dr->tex[_u].ctrl1,_bf);
+                        _mapping=texpack_alpha_mapping(_mapping,_opaque);
+                        srv_req_ex(&_rq[_u], _tr, sf, _mapping, _cube);
                         continue;
                     }
                 }

@@ -6,6 +6,7 @@
  * render thread only hashes, looks up and uploads (rsx_d3d12_backend.c).
  */
 #include "rsx_texture_pack.h"
+#include "rsx_texture_dds.h"
 #include <windows.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -141,6 +142,7 @@ static int set_add(HashSet* s, uint64_t h)   /* 1 if new */
 /* A file name that starts with 16 hex digits names that hash. */
 static int name_hash(const wchar_t* name, uint64_t* out)
 {
+    if (wcslen(name) < 16) return 0;
     uint64_t h = 0;
     for (int i = 0; i < 16; i++) {
         const wchar_t c = name[i];
@@ -154,6 +156,7 @@ static int name_hash(const wchar_t* name, uint64_t* out)
     *out = h ? h : 1;
     return 1;
 }
+static int is_dds(const wchar_t* name) { const size_t n=wcslen(name); return n>4&&!_wcsicmp(name+n-4,L".dds"); }
 static int is_png(const wchar_t* name)
 {
     const size_t n = wcslen(name);
@@ -183,7 +186,17 @@ static void idx_add(uint64_t h, const wchar_t* path)
         free(s_idx); s_idx = t; s_idx_cap = cap;
     }
     uint32_t i = slot_of(h, s_idx_cap);
-    while (s_idx[i].hash) { if (s_idx[i].hash == h) return; i = (i + 1) & (s_idx_cap - 1); }   /* the first one found wins */
+    while (s_idx[i].hash) {
+        if (s_idx[i].hash == h) {
+            /* DDS wins over PNG; equal types use a stable lexical path. */
+            const int newer=is_dds(path), older=is_dds(s_idx[i].path);
+            if(newer>older||(newer==older&&_wcsicmp(path,s_idx[i].path)<0)) {
+                wchar_t* copy=_wcsdup(path);if(copy){free(s_idx[i].path);s_idx[i].path=copy;}
+            }
+            return;
+        }
+        i = (i + 1) & (s_idx_cap - 1);
+    }
     s_idx[i].hash = h; s_idx[i].path = _wcsdup(path);
     if (s_idx[i].path) s_idx_n++; else s_idx[i].hash = 0;
 }
@@ -213,7 +226,7 @@ static void scan_dir(const wchar_t* dir, int depth)
                 scan_dir(full, depth + 1);
         } else {
             uint64_t hh;
-            if (is_png(n) && name_hash(n, &hh)) idx_add(hh, full);
+            if ((is_png(n)||is_dds(n)) && name_hash(n, &hh)) idx_add(hh, full);
         }
     } while (FindNextFileW(h, &fd));
     FindClose(h);
@@ -256,7 +269,7 @@ static uint8_t* read_file(const wchar_t* path, size_t* n)
     if (!_fseeki64(f, 0, SEEK_END)) {
         const long long sz = _ftelli64(f);
         _fseeki64(f, 0, SEEK_SET);
-        if (sz > 0 && sz < (1ll << 31) && (b = (uint8_t*)malloc((size_t)sz)) != NULL &&
+        if (sz > 0 && sz <= (512ll << 20) && (b = (uint8_t*)malloc((size_t)sz)) != NULL &&
             fread(b, 1, (size_t)sz, f) != (size_t)sz) { free(b); b = NULL; }
         if (b) *n = (size_t)sz;
     }
@@ -276,9 +289,11 @@ static texpack_image* decode_png(const wchar_t* path)
     if (!px) return NULL;
     texpack_image* im = NULL;
     if (w > 0 && h > 0 && w <= 16384 && h <= 16384 && (im = (texpack_image*)calloc(1, sizeof *im)) != NULL) {
+        im->format=28;
         im->w = (uint32_t)w; im->h = (uint32_t)h;
         size_t total = 0;
         for (uint32_t lw = im->w, lh = im->h; im->levels < 16; ) {
+            im->row_bytes[im->levels]=lw*4; im->rows[im->levels]=lh;
             im->level_off[im->levels++] = total;
             total += (size_t)lw * lh * 4;
             if (lw == 1 && lh == 1) break;
@@ -320,7 +335,11 @@ static DWORD WINAPI decode_thread(LPVOID arg)
         /* The render thread takes a few a frame: hold back while plenty wait. */
         while (s_ready_bytes > (LONG64)READY_CAP_BYTES) Sleep(5);
         const IdxEnt* e = idx_find(j->hash);
-        j->img = e ? decode_png(e->path) : NULL;
+        j->img=NULL;
+        if(e) {
+            if(is_dds(e->path)) { size_t n=0;uint8_t* file=read_file(e->path,&n);j->img=texpack_dds_parse(file,n);free(file); }
+            else j->img=decode_png(e->path);
+        }
         j->failed = !j->img;
         if (j->failed && e) fprintf(stderr, "[TEXPACK] could not read %ls%c", e->path, 10);
         AcquireSRWLockExclusive(&s_lock);
@@ -367,12 +386,20 @@ void texpack_free(texpack_image* img)
 }
 
 /* ---- dumping ----------------------------------------------------------------- */
-typedef struct DumpJob { struct DumpJob* next; uint64_t hash; uint32_t w, h; char name[8]; uint8_t* rgba; wchar_t directory[PATH_CAP]; } DumpJob;
+typedef struct DumpJob { struct DumpJob* next; uint64_t hash; uint32_t w, h, format, dds; size_t bytes; char name[8]; uint8_t* rgba; wchar_t directory[PATH_CAP]; } DumpJob;
 static CONDITION_VARIABLE s_dcv = CONDITION_VARIABLE_INIT;
 static DumpJob *s_d_head, *s_d_tail;
 static volatile LONG64 s_d_bytes;
 static HashSet s_dumped;
-static int s_dumped_listed, s_dump_thread;
+static int s_dumped_listed;
+static int s_dump_dds;
+int texpack_dump_is_dds(void){AcquireSRWLockShared(&s_dlock);int d=s_dump_dds;ReleaseSRWLockShared(&s_dlock);return d;}
+void texpack_set_dump_format(int dds){
+    AcquireSRWLockExclusive(&s_dlock);
+    if(s_dump_dds!=!!dds){s_dump_dds=!!dds;free(s_dumped.k);memset(&s_dumped,0,sizeof s_dumped);s_dumped_listed=0;InterlockedIncrement(&s_dump_generation);}
+    ReleaseSRWLockExclusive(&s_dlock);
+}
+static int s_dump_thread;
 
 int texpack_set_dump_directory(const wchar_t* directory)
 {
@@ -411,15 +438,17 @@ static DWORD WINAPI dump_thread(LPVOID arg)
         ReleaseSRWLockExclusive(&s_dlock);
         mkdirs(j->directory);
         wchar_t path[PATH_CAP], tmp[PATH_CAP + 8];
-        swprintf(path, PATH_CAP, L"%ls\\%016llX_%ux%u_%hs.png", j->directory, (unsigned long long)j->hash, j->w, j->h, j->name);
+        swprintf(path, PATH_CAP, L"%ls\\%016llX_%ux%u_%hs.%ls", j->directory, (unsigned long long)j->hash, j->w, j->h, j->name,j->dds?L"dds":L"png");
         swprintf(tmp, PATH_CAP + 8, L"%ls.tmp", path);
         FILE* f = GetFileAttributesW(path) == INVALID_FILE_ATTRIBUTES ? _wfopen(tmp, L"wb") : NULL;
         if (f) {
             /* written under a temporary name: a game closed mid-write leaves no half PNG */
-            const int ok = stbi_write_png_to_func(png_write, f, (int)j->w, (int)j->h, 4, j->rgba, (int)j->w * 4);
+            int ok=0;
+            if(j->dds){uint8_t header[128];ok=texpack_dds_header(header,j->w,j->h,1,j->format)&&fwrite(header,1,128,f)==128&&fwrite(j->rgba,1,j->bytes,f)==j->bytes;}
+            else ok=stbi_write_png_to_func(png_write, f, (int)j->w, (int)j->h, 4, j->rgba, (int)j->w * 4);
             if (fclose(f) || !ok || !MoveFileExW(tmp, path, 0)) DeleteFileW(tmp);
         }
-        InterlockedAdd64(&s_d_bytes, -(LONG64)((size_t)j->w * j->h * 4));
+        InterlockedAdd64(&s_d_bytes, -(LONG64)j->bytes);
         free(j->rgba);
         free(j);
     }
@@ -431,7 +460,7 @@ int texpack_dump_wanted(uint64_t hash)
     if (!s_dumped_listed) {   /* what earlier sessions wrote is not written again */
         s_dumped_listed = 1;
         wchar_t pat[PATH_CAP];
-        swprintf(pat, PATH_CAP, L"%ls\\*.png", s_dump_override[0] ? s_dump_override : s_dump_dir);
+        swprintf(pat, PATH_CAP, L"%ls\\*.%ls", s_dump_override[0] ? s_dump_override : s_dump_dir,s_dump_dds?L"dds":L"png");
         WIN32_FIND_DATAW fd;
         HANDLE h = FindFirstFileExW(pat, FindExInfoBasic, &fd, FindExSearchNameMatch, NULL, FIND_FIRST_EX_LARGE_FETCH);
         if (h != INVALID_HANDLE_VALUE) {
@@ -443,18 +472,18 @@ int texpack_dump_wanted(uint64_t hash)
     ReleaseSRWLockExclusive(&s_dlock);
     return fresh;
 }
-void texpack_dump(uint64_t hash, uint32_t w, uint32_t h, const char* fmt_name, uint8_t* rgba)
+static void dump_enqueue(uint64_t hash,uint32_t w,uint32_t h,const char* fmt_name,uint8_t* rgba,size_t bytes,uint32_t format,int force_dds)
 {
-    const size_t bytes = (size_t)w * h * 4;
     if (!rgba) return;
     paths();
     if (s_d_bytes + (LONG64)bytes > (LONG64)DUMP_CAP_BYTES) { free(rgba); return; }   /* the disk is behind: skip */
     DumpJob* j = (DumpJob*)calloc(1, sizeof *j);
     if (!j) { free(rgba); return; }
-    j->hash = hash; j->w = w; j->h = h; j->rgba = rgba;
+    j->hash = hash; j->w = w; j->h = h; j->rgba = rgba;j->bytes=bytes;j->format=format;
     strncpy(j->name, fmt_name ? fmt_name : "RGBA", sizeof j->name - 1);
     InterlockedAdd64(&s_d_bytes, (LONG64)bytes);
     AcquireSRWLockExclusive(&s_dlock);
+    j->dds=force_dds||s_dump_dds;
     wcscpy(j->directory, s_dump_override[0] ? s_dump_override : s_dump_dir);
     if (!s_dump_thread) {
         s_dump_thread = 1;
@@ -466,6 +495,9 @@ void texpack_dump(uint64_t hash, uint32_t w, uint32_t h, const char* fmt_name, u
     ReleaseSRWLockExclusive(&s_dlock);
     WakeConditionVariable(&s_dcv);
 }
+
+void texpack_dump(uint64_t hash,uint32_t w,uint32_t h,const char* name,uint8_t* rgba){dump_enqueue(hash,w,h,name,rgba,(size_t)w*h*4,28,0);}
+void texpack_dump_dds(uint64_t hash,uint32_t w,uint32_t h,const char* name,uint32_t format,uint8_t* data,size_t bytes){dump_enqueue(hash,w,h,name,data,bytes,format,1);}
 
 /* ---- BC1/BC2/BC3 to RGBA8, for dumping compressed textures ------------------ */
 static void rgb565(uint16_t c, uint8_t* o)
