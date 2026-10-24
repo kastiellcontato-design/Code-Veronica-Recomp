@@ -1,0 +1,45 @@
+VERONICA PKG EXTRACTOR v1.0
+
+Extrator independente para Resident Evil Code: Veronica X (PSN de PS3).
+
+COMO USAR
+1. Abra VeronicaPKGExtractor.exe. Não precisa instalar, abrir CMD ou ter Python.
+2. Arraste seu arquivo .pkg para a janela ou clique em Selecionar.
+3. Escolha uma pasta de destino existente e gravável.
+4. Clique em Extrair PKG e aguarde a conclusão.
+5. No launcher do Veronica Port, adicione a pasta criada pelo extrator.
+
+A saída fica assim:
+  <destino>\NPJB00135\PARAM.SFO
+  <destino>\NPJB00135\USRDIR\EBOOT.BIN
+  ... com todos os outros arquivos e subpastas do pacote.
+O código da pasta depende da região: NPJB00135, NPEB00553 ou NPUB30467.
+
+COMPATIBILIDADE
+- Windows 10/11 x64. Execução normal, sem administrador.
+- Somente PKGs retail PSN de PS3, jogo base 01.00, das três regiões acima.
+- Não aceita PKGs de PS4/PS5, atualizações, DLCs ou pacotes de desenvolvimento.
+- Usa somente CPU e disco. A velocidade depende do processador e do armazenamento.
+- Interface em português ou inglês, com seletor na janela.
+
+SEUS ARQUIVOS
+O PKG de entrada é somente lido e permanece intacto. EBOOT.BIN, arquivos EDAT
+e demais conteúdos são extraídos como estão no pacote; não são convertidos
+nem descriptografados além da camada do contêiner PKG. Não cria RAP ou licenças.
+EU/US ainda precisam da licença RAP correspondente no launcher.
+Nenhum arquivo de jogo ou licença acompanha esta ferramenta.
+
+Se a pasta da versão já existir, a ferramenta pede outro destino. Não sobrescreve.
+Cancelar remove a extração incompleta. A pasta final só aparece após concluir.
+Não remova o disco externo durante a extração. Escolha uma pasta comum, sem
+links/junções, com espaço suficiente. Não execute de dentro do ZIP.
+
+VALIDAÇÃO DESTA PRIMEIRA VERSÃO
+Testes automatizados com pacotes sintéticos criptografados: regiões, estrutura,
+arquivos vazios, caminhos inválidos, cancelamento, nomes com acentos e recusa de
+sobrescrita. A extração de um PKG real de Code Veronica ainda precisa do teste
+do usuário. A ferramenta valida cabeçalho, tabela, limites e PARAM.SFO; não
+promete detectar toda alteração possível no conteúdo do pacote.
+
+Desenvolvido por Kastiel. Base de formato: leitor tools/pkg_extract.py do projeto.
+Código e licença MIT: https://github.com/kastiellcontato-design/re-cvx-ps3recomp
