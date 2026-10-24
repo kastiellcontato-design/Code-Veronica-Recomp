@@ -1,8 +1,8 @@
 /* cv_updater.h -- the launcher's automatic update from the GitHub releases.
  *
  * check:    GET releases/latest (or CV_UPDATE_URL: another URL or a local
- *           JSON file, for tests), take its tag as the version and its first
- *           .zip asset as the package.
+ *           JSON file, for tests), take its tag as the version and the recognized
+ *           port ZIP as the package; ignore auxiliary/source ZIPs.
  * download: the package into %TEMP%\CodeVeronicaUpdate, with progress, its
  *           size and (when GitHub gives one) its SHA-256 checked.
  * install:  unpack it (Windows' own tar.exe) and copy its files over the
@@ -34,7 +34,7 @@ enum Error { OK, ERR_NETWORK, ERR_NO_RELEASE, ERR_NO_PACKAGE, ERR_DOWNLOAD, ERR_
 
 struct Release {
     std::wstring tag, name, notes;         /* tag_name ("v1.1"), name, body */
-    std::wstring asset_url, asset_name;    /* the package: the first .zip asset */
+    std::wstring asset_url, asset_name;    /* the recognized port ZIP, excluding auxiliary tools */
     uint64_t asset_size = 0;
     std::string sha256;                    /* lower-case hex from the asset's digest; "" if none */
 };

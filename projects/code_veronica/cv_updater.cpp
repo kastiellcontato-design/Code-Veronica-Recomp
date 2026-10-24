@@ -386,6 +386,27 @@ bool is_protected(const fs::path& relative)
     return false;
 }
 
+// Only the port package is an update. Auxiliary/source ZIPs must never be
+// selected, regardless of the ordering returned by GitHub. Normalize the
+// separators GitHub uses when a release asset is renamed with spaces.
+static bool is_port_package(const std::wstring& filename) {
+    const auto name=lower(filename);
+    if(name.size()<4||name.substr(name.size()-4)!=L".zip")return false;
+    std::wstring compact;
+    for(wchar_t c:name.substr(0,name.size()-4)) {
+        if(c==L'.'||c==L'-'||c==L'_'||c==L' ')continue;
+        compact+=c;
+    }
+    for(const wchar_t* prefix:{L"codeveronicarecompreleasev",L"codeveronicarecomppcv",L"codeveronicapcv",L"veronicaportv"}) {
+        const std::wstring start(prefix);
+        if(compact.rfind(start,0)!=0||compact.size()==start.size())continue;
+        bool numeric=true;
+        for(size_t i=start.size();i<compact.size();++i)if(compact[i]<L'0'||compact[i]>L'9'){numeric=false;break;}
+        if(numeric)return true;
+    }
+    return false;
+}
+
 bool parse_release(const std::string& json, Release* out)
 {
     JValue root; JParser jp{ json.data(), json.data() + json.size() };
@@ -397,14 +418,11 @@ bool parse_release(const std::string& json, Release* out)
     r.name = from_utf8(root.str("name"));
     r.notes = from_utf8(root.str("body"));
     if (r.tag.empty()) return false;
-    int selected_rank=0;
+
     if (const JValue* assets = root.get("assets"); assets && assets->t == JValue::ARR)
         for (const JValue& a : assets->a) {
             const std::wstring name = from_utf8(a.str("name"));
-            if (name.size() < 4 || lower(name.substr(name.size() - 4)) != L".zip") continue;
-            const auto lname=lower(name);
-            const int rank=(lname.rfind(L"codeveronica-pc-",0)==0||lname.rfind(L"veronicaport-",0)==0)?2:1;
-            if(selected_rank>=rank)continue;selected_rank=rank;
+            if (!is_port_package(name) || !r.asset_name.empty()) continue;
             r.asset_size=0;r.sha256.clear();
             r.asset_name = name;
             r.asset_url = from_utf8(a.str("browser_download_url"));
