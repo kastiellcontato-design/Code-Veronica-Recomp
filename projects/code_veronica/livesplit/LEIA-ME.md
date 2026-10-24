@@ -4,8 +4,9 @@
 ([re-cvx-autosplitter](https://github.com/kapdap/re-cvx-autosplitter), licença
 MIT, veja `LICENSE-recvx.txt`) com suporte ao nosso port. Ele reconhece as
 três versões: `CodeVeronicaPort.exe` (EU, NPEB00553), `CodeVeronicaPort_JP.exe`
-(JP, NPJB00135) e `CodeVeronicaPort_US.exe` (US, NPUB30467). Também continua
-funcionando no RPCS3, no PCSX2 e no Dolphin, como o original.
+(JP, NPJB00135) e `CodeVeronicaPort_US.exe` (US, NPUB30467). Esta adaptação
+por Kastiel se conecta somente ao port. Para emuladores, use o script original
+do Kapdap.
 
 Ele faz tudo o que o original faz:
 
@@ -24,11 +25,19 @@ Ele faz tudo o que o original faz:
 4. Clique com o botão direito → **Compare Against** → **Game Time**.
 5. Abra o jogo pelo atalho de sempre. O LiveSplit acha o jogo sozinho.
 
-Use só este script. Se o autosplitter da lista do LiveSplit estiver ativado
-(**Edit Splits** → **Activate**), clique em **Deactivate**: ele não se conecta
-ao port, e as opções marcadas nele não fazem efeito. As opções que valem são as
-do **Scriptable Auto Splitter** do layout. Salve o layout (**Save Layout As...**)
-para não perdê-las.
+Use apenas um autosplitter por vez. Se o autosplitter para emuladores estiver
+ativo em **Edit Splits**, clique em **Deactivate** antes de usar o script do
+port pelo layout. As opções deste script ficam no **Scriptable Auto Splitter**.
+Salve o layout (**Save Layout As...**) para guardar suas escolhas.
+
+## Cadastro na lista do LiveSplit
+
+O nome proposto para a lista é **Resident Evil: Code: Veronica X (PS3 Recomp)**.
+O cadastro depende da revisão dos mantenedores do LiveSplit. Até a aprovação,
+use a instalação manual acima. Depois da aprovação, será possível digitar esse
+nome em **Edit Splits → Game Name** e clicar em **Activate**, sem adicionar o
+componente manual ao mesmo tempo. Isso não garante que o nome apareça nas
+sugestões de busca nem aprovação em rankings de speedrun.
 
 Com **Load Remover Time** marcado, o tempo de jogo pausa a cada porta. Com o
 patch "Pular animação das portas" ligado, a pausa é curta, cerca de 1 segundo,

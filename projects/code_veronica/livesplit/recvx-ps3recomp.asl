@@ -10,7 +10,7 @@
  *  license that can be found in the LICENSE file or at
  *  https://opensource.org/licenses/MIT.
  *
- *  ps3recomp port support: this copy also attaches to the PC port's
+ *  ps3recomp port support: this adaptation attaches only to the PC port's
  *  executables (CodeVeronicaPort.exe, CodeVeronicaPort_JP.exe, CodeVeronicaPort_US.exe).
  *  Each exports g_cv_livesplit: "PS3RECOMP-CVX", then where the PS3's memory
  *  starts in the process (offset 16) and the release code (offset 24). The
@@ -18,14 +18,9 @@
  *  the PS3 pointer tables below serve the port unchanged.
  */
 
-state("rpcs3") {}
 state("CodeVeronicaPort") {}
 state("CodeVeronicaPort_JP") {}
 state("CodeVeronicaPort_US") {}
-state("pcsx2") {}
-state("pcsx2-qtx64") {}
-state("pcsx2-qt") {}
-state("dolphin") {}
 
 startup
 {
@@ -341,7 +336,9 @@ startup
     settings.Add("infogroup", false, "Info");
     settings.Add("infogroup1", false, "Resident Evil: Code: Veronica Auto Splitter by Kapdap", "infogroup");
     settings.Add("infogroup2", false, "Website: https://github.com/kapdap/re-cvx-autosplitter", "infogroup");
-    settings.Add("infogroup3", false, "Last Update: 2025-08-27T19:35:00+1200", "infogroup");
+    settings.Add("infogroup3", false, "Upstream version: 2025-08-27T19:35:00+1200", "infogroup");
+    settings.Add("infogroup4", false, "PS3 Recomp PC adaptation by Kastiel", "infogroup");
+    settings.Add("infogroup5", false, "Port: https://github.com/kastiellcontato-design/Code-Veronica-Recomp", "infogroup");
 }
 
 init
