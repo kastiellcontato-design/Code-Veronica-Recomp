@@ -18,6 +18,18 @@ Vuelve a jugar a la versión de PS3 en PC. Practica rutas con SRT nativo, selecc
 > [!IMPORTANT]
 > **No se incluye ningún archivo del juego.** Este repositorio y sus lanzamientos contienen solo el port: ningún dato del juego, ningún ejecutable del juego y ningún código generado a partir de él. Necesitas tu **propia copia original** del juego de PS3 (versión de PSN). *Resident Evil*, *Code: Veronica* y todos los nombres, personajes e imágenes relacionados son marcas y derechos de autor de **Capcom**. Es un proyecto de fans. **No está afiliado, autorizado ni respaldado por Capcom ni por Sony Interactive Entertainment**.
 
+## Descargas — v1.0
+
+[**Code Veronica Recomp Release v1.0**](https://github.com/kastiellcontato-design/Code-Veronica-Recomp/releases/tag/v1.0)
+
+| Descarga | Contenido |
+|---|---|
+| [CodeVeronica-PC-v1.0.zip](https://github.com/kastiellcontato-design/Code-Veronica-Recomp/releases/download/v1.0/CodeVeronica-PC-v1.0.zip) | Port para Windows con launcher y soporte EU/JP/US. Extrae todo y abre **Code Veronica.exe**. |
+| [Veronica-PKG-Extractor-v1.0.zip](https://github.com/kastiellcontato-design/Code-Veronica-Recomp/releases/download/v1.0/Veronica-PKG-Extractor-v1.0.zip) | Herramienta opcional para preparar tu propio PKG. También puedes usar RPCS3. |
+| [CodeVeronica-LiveSplit-Speedrun-v1.0.zip](https://github.com/kastiellcontato-design/Code-Veronica-Recomp/releases/download/v1.0/CodeVeronica-LiveSplit-Speedrun-v1.0.zip) | Autosplitter del port, presets Any%/S-Rank y splits con iconos. |
+
+Cada ZIP incluye instrucciones en inglés y portugués. No se incluyen archivos ni licencias del juego original.
+
 <p align="center">
   <img src="docs/images/gameplay-claire-red-room.jpg" alt="Resident Evil Code: Veronica X" width="880">
 </p>
