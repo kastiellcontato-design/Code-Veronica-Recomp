@@ -287,9 +287,9 @@ Uma seleção do launcher e do jogo. As outras telas estão reunidas em uma gale
   <img src="docs/images/presentation/launcher-graphics.png" alt="Launcher e opções gráficas" width="880">
 </p>
 
-| Sala da caixa de música | Fuga do Steve Mutante |
+| Sala da caixa de música | Steve Mutante |
 |:---:|:---:|
-| <img src="docs/images/gameplay-music-box-room.jpg" alt="Sala da caixa de música" width="420"> | <img src="docs/images/gameplay-hunter-armory.jpg" alt="Fuga do Steve Mutante" width="420"> |
+| <img src="docs/images/gameplay-music-box-room.jpg" alt="Sala da caixa de música" width="420"> | <img src="docs/images/gameplay-hunter-armory.jpg" alt="Steve Mutante" width="420"> |
 
 [Ver a galeria completa de capturas](docs/GALLERY.pt-BR.md)
 

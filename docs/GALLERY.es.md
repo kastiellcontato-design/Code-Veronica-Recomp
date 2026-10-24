@@ -60,7 +60,7 @@ Capturas originales del port. En las imágenes del launcher se ha recortado úni
 </p>
 
 <p align="center">
-  <img src="images/gameplay-hunter-armory.jpg" alt="Huida de Steve mutante" width="880">
+  <img src="images/gameplay-hunter-armory.jpg" alt="Steve mutante" width="880">
 </p>
 
 <p align="center">

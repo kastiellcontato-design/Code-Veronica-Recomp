@@ -60,7 +60,7 @@ Original captures from the port. Launcher previews below have only their Windows
 </p>
 
 <p align="center">
-  <img src="images/gameplay-hunter-armory.jpg" alt="Escape from Mutant Steve" width="880">
+  <img src="images/gameplay-hunter-armory.jpg" alt="Mutant Steve" width="880">
 </p>
 
 <p align="center">
