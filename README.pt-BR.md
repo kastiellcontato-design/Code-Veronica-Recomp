@@ -260,7 +260,7 @@ Só o **código** importa. O PNG novo pode ter **qualquer tamanho** (uma textura
 3. Pacotes grandes não pesam de cara: cada PNG só é carregado quando a textura dele aparece na tela.
 
 > [!TIP]
-> **Usando pacotes de texturas HD do PS2.** Os pacotes de texturas HD feitos para a versão de PS2 do Code: Veronica costumam funcionar, porque as texturas são as mesmas, mas **os nomes dos arquivos são diferentes**: cada arquivo precisa ser **renomeado para o código do PS3** da textura correspondente. Extraia as texturas com **Extrair texturas de todos os mapas**, ache o PNG extraído que mostra a mesma imagem do arquivo do PS2 e renomeie o arquivo do PS2 com o nome desse PNG (pelo menos o código de 16 caracteres). Depois coloque na pasta do mod como no Passo 2.
+> **Adaptando pacotes de texturas HD do PS2.** Packs de PS2 podem usar arquivos **`.dds`**, mas o port atualmente lê apenas **`.png`**. Primeiro **converta as imagens DDS para PNG**, preservando a transparência; mudar apenas a extensão não converte o arquivo. Depois, use **Extrair texturas de todos os mapas** para obter as referências do PS3, identifique a textura correspondente e nomeie o PNG convertido com o **código de 16 caracteres do PS3**. Coloque-o na pasta do mod como no Passo 2. A compatibilidade deve ser conferida por textura: recortes, orientação, transparência e organização da imagem podem diferir entre PS2 e PS3; apenas converter e renomear não garante o resultado correto.
 
 Observações: as faces de cubemaps (reflexos) são extraídas em `reference\cubemaps` só para consulta; por enquanto a troca funciona com texturas 2D. Nunca compartilhe as texturas originais extraídas; compartilhe só as imagens que você editou.
 

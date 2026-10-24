@@ -260,7 +260,7 @@ Only the **code** matters. A replacement PNG can have **any size** (a 512×256 t
 3. Big packs do not cost memory up front: each PNG is only loaded when its texture appears on screen.
 
 > [!TIP]
-> **Using PS2 HD texture packs.** HD texture packs made for the PS2 version of Code: Veronica usually work, because the textures are the same, but **their file names are different**: each file must be **renamed to the PS3 code** of the matching texture. Extract the textures with **Extract textures from all maps**, find the extracted PNG that shows the same image as the PS2 file, and rename the PS2 file with that PNG's name (at least its 16-character code). Then put it in the mod folder as in Step 2.
+> **Adapting PS2 HD texture packs.** PS2 packs may use **`.dds`** files, but the port currently reads only **`.png`**. First **convert the DDS images to PNG**, preserving transparency; changing the extension alone does not convert a file. Then use **Extract textures from all maps** to obtain PS3 references, identify the matching texture, and name the converted PNG with the **16-character PS3 code**. Place it in the mod folder as in Step 2. Check compatibility per texture: cropping, orientation, transparency and image layout may differ between PS2 and PS3; conversion and renaming alone do not guarantee a correct result.
 
 Notes: cube-map faces (reflections) are extracted to `reference\cubemaps` for reference only; replacement currently supports 2D textures. Never share the extracted original textures; share only your own edited images.
 
