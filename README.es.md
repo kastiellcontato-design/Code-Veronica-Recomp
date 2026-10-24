@@ -99,7 +99,10 @@ NPEB00553\            (o NPUB30467 / NPJB00135)
 
 **Paso a paso**
 
-1. **Obtén la carpeta del juego a partir de tu PKG.** Lo más fácil es instalar el PKG en [RPCS3](https://rpcs3.net) (*File → Install Packages/Raps/Edats*). La carpeta queda en `RPCS3\dev_hdd0\game\NPEB00553` (o `NPUB30467` / `NPJB00135`). Cualquier herramienta de extracción de PKG de PS3 que genere la misma carpeta también sirve. RPCS3 solo se usa aquí para desempaquetar el juego; el port no lo necesita después.
+1. **Obtén la carpeta del juego a partir de tu PKG. Elige un método:**
+   - **Veronica PKG Extractor (descarga separada y opcional):** cuando esté disponible, descarga `Veronica-PKG-Extractor-v1.0.zip` desde [Releases](https://github.com/kastiellcontato-design/re-cvx-ps3recomp/releases), junto a `CodeVeronica-PC-v1.0.zip`. Descomprime la herramienta, abre `VeronicaPKGExtractor.exe`, arrastra o selecciona tu PKG, elige el destino y pulsa **Extract PKG**. Se crea la carpeta `NPEB00553`, `NPUB30467` o `NPJB00135` con los archivos originales del paquete. Añade esa carpeta al launcher. Solo acepta las tres versiones PSN base compatibles de Code Veronica, versión 01.00.
+   - **RPCS3:** instala el PKG con *File → Install Packages/Raps/Edats*. La carpeta queda en `RPCS3\dev_hdd0\game\NPEB00553` (o `NPUB30467` / `NPJB00135`). Añade esa carpeta al launcher. RPCS3 solo se necesita para esta preparación.
+   Ambos métodos generan la carpeta que necesita el port. **Solo necesitas uno.** Si ya tienes el juego extraído, no necesitas descargar el extractor. El launcher no abre PKGs directamente y el extractor no crea licencias RAP.
 2. **Busca tu licencia (`.rap`)** para las versiones europea y americana. Es el archivo `.rap` de la cuenta que compró el juego. En RPCS3 está en `dev_hdd0\home\00000001\exdata`, con el código del juego en el nombre (por ejemplo `EP0102-NPEB00553_00-…​.rap`). Si el `.rap` está dentro de la carpeta del juego, el launcher lo encuentra solo. **La versión japonesa no necesita `.rap`.**
 3. **Deja los archivos originales como están.** No hace falta descifrar nada: la primera vez, el port descifra el `EBOOT.BIN` con tu licencia en su propia carpeta `eboot_cache` (tarda menos de un segundo). Los archivos del juego nunca se modifican.
 

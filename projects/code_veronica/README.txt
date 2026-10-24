@@ -35,10 +35,30 @@ The port reads the game from a FOLDER. A .pkg file cannot be opened
 directly: it must be installed or extracted first, like the PS4 ports that
 use game folders.
 
-a) Install your .pkg in RPCS3 (File > Install Packages/Raps/Edats). The game
-   folder is then RPCS3\dev_hdd0\game\NPEB00553 (or NPUB30467 / NPJB00135).
-   Any tool that extracts the PKG into the same folder also works. After
-   that, the port does not need RPCS3 any more.
+a) Choose ONE method to prepare your game folder:
+
+   OPTION 1 - VERONICA PKG EXTRACTOR (separate, optional download)
+   When published, the port Release will provide two downloads:
+     CodeVeronica-PC-v1.0.zip .............. the port for playing
+     Veronica-PKG-Extractor-v1.0.zip ....... the PKG extraction tool
+   Releases: https://github.com/kastiellcontato-design/re-cvx-ps3recomp/releases
+   Unzip the tool and open VeronicaPKGExtractor.exe.
+   Drop or select your PKG, choose a destination and click Extract PKG.
+   The tool creates the title-ID folder with all the original package files.
+   Add that folder on the launcher's Games page.
+   Only the three PSN base releases, version 01.00, in this guide are supported.
+
+   OPTION 2 - RPCS3
+   Install your .pkg using File > Install Packages/Raps/Edats.
+   The folder is at RPCS3\dev_hdd0\game\NPEB00553 (or NPUB30467 / NPJB00135).
+   Official download: https://rpcs3.net/download
+   Guide: https://rpcs3.net/quickstart
+   Add that folder on the launcher's Games page.
+
+   Use just one method. If you already have the game folder, skip the extractor.
+   The launcher does not open PKGs directly. The extractor creates no RAP licenses.
+   RPCS3 is not needed to play after preparing the game folder.
+
 b) The right folder is the one with PARAM.SFO and USRDIR\EBOOT.BIN.
 c) Europe and USA: find the .rap file of the account that bought the game.
    In RPCS3 it is in dev_hdd0\home\00000001\exdata, with the title ID in its

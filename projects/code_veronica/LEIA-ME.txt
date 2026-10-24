@@ -34,10 +34,30 @@ Não precisa de firmware do PS3 nem do RPCS3 para jogar.
 O port lê o jogo de uma PASTA. Um arquivo .pkg não abre direto: ele precisa
 ser instalado ou extraído antes, como nos ports de PS4 que usam pasta.
 
-a) Instale o seu .pkg no RPCS3 (File > Install Packages/Raps/Edats). A pasta
-   do jogo fica em RPCS3\dev_hdd0\game\NPEB00553 (ou NPUB30467 / NPJB00135).
-   Qualquer ferramenta que extraia o PKG para a mesma pasta também serve.
-   Depois disso o port não precisa mais do RPCS3.
+a) Escolha UMA das opções para preparar a pasta do jogo:
+
+   OPÇÃO 1 - VERONICA PKG EXTRACTOR (separado e opcional)
+   Na mesma Release do port, quando publicada, haverá dois downloads:
+     CodeVeronica-PC-v1.0.zip .............. o port para jogar
+     Veronica-PKG-Extractor-v1.0.zip ....... ferramenta para extrair o PKG
+   Página: https://github.com/kastiellcontato-design/re-cvx-ps3recomp/releases
+   Extraia o ZIP da ferramenta e abra VeronicaPKGExtractor.exe.
+   Arraste ou selecione seu PKG, escolha o destino e clique em Extrair PKG.
+   Será criada a pasta com o código do jogo e todos os arquivos do pacote.
+   Adicione essa pasta na página Jogos do launcher.
+   Aceita somente os três jogos PSN base 01.00 da tabela deste guia.
+
+   OPÇÃO 2 - RPCS3
+   Instale seu .pkg em File > Install Packages/Raps/Edats.
+   A pasta fica em RPCS3\dev_hdd0\game\NPEB00553 (ou NPUB30467 / NPJB00135).
+   Download oficial: https://rpcs3.net/download
+   Guia: https://rpcs3.net/quickstart
+   Adicione essa pasta na página Jogos do launcher.
+
+   Use somente um método. Se já tem a pasta do jogo, não precisa do extrator.
+   O launcher não abre PKGs diretamente. O extrator não cria licenças RAP.
+   O RPCS3 não é necessário para jogar depois da preparação.
+
 b) A pasta certa é a que tem o PARAM.SFO e o USRDIR\EBOOT.BIN.
 c) Europeia e americana: ache o arquivo .rap da conta que comprou o jogo. No
    RPCS3 ele fica em dev_hdd0\home\00000001\exdata e tem o código do jogo no

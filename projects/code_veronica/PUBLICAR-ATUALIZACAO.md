@@ -50,6 +50,30 @@ instalar esta build manualmente uma vez. As próximas podem chegar pelo launcher
 
 Nenhuma publicação é feita automaticamente pelo empacotador.
 
+## Primeira Release: dois downloads separados
+
+Anexe os dois ZIPs à mesma Release. O extrator é opcional e fica separado do
+pacote do port, para não obrigar quem já tem o jogo em pasta a baixar a ferramenta.
+
+| Download | Arquivo local pronto | Uso |
+|---|---|---|
+| `CodeVeronica-PC-v1.0.zip` | `build-distribution/pacote/CodeVeronica-PC-v1.0.zip` | Port e launcher para jogar |
+| `Veronica-PKG-Extractor-v1.0.zip` | `build-pkg-extractor/pacote/Veronica-PKG-Extractor-v1.0.zip` | Extrator opcional do PKG em pasta |
+
+Anexe também os respectivos `.zip.sha256`, se desejar. A versão do extrator é
+independente da versão do port. Mantenha o nome do ZIP do port com o prefixo
+`CodeVeronica-PC-`: o atualizador deve selecionar esse pacote, não o extrator.
+Não inclua nenhum PKG, RAP, jogo extraído, cache, save ou configuração pessoal.
+
+Nas notas, apresente primeiro o port e depois o extrator. Explique que o jogador
+pode preparar a pasta com o Veronica PKG Extractor OU com o RPCS3. Se o jogo já
+está extraído, basta baixar o port. Os dois métodos continuam exigindo a licença
+RAP nas regiões EU/US; o extrator não fornece nem gera essa licença.
+
+Modelo bilíngue pronto: `distribution/NOTAS-RELEASE-v1.0.md`. Revise as notas ao
+publicar. Estes arquivos e o empacotador não fazem push nem publicam a Release.
+
+
 ## Conteúdo e proteção dos dados
 
 O ZIP contém os três executáveis, DLLs de FFmpeg/FSR/DXC, avisos de licença e um

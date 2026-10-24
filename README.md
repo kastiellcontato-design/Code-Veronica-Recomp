@@ -99,7 +99,10 @@ NPEB00553\            (or NPUB30467 / NPJB00135)
 
 **Step by step**
 
-1. **Get the game folder from your PKG.** The easiest way is to install your PKG in [RPCS3](https://rpcs3.net) (*File → Install Packages/Raps/Edats*). The folder is then at `RPCS3\dev_hdd0\game\NPEB00553` (or `NPUB30467` / `NPJB00135`). Any PS3 PKG extraction tool that produces the same folder also works. RPCS3 is only used here to unpack your game; the port does not need it afterwards.
+1. **Get the game folder from your PKG. Choose either method:**
+   - **Veronica PKG Extractor (optional, separate download):** when available, download `Veronica-PKG-Extractor-v1.0.zip` from the project's [Releases](https://github.com/kastiellcontato-design/re-cvx-ps3recomp/releases), alongside `CodeVeronica-PC-v1.0.zip`. Unzip the tool, open `VeronicaPKGExtractor.exe`, drop or select your PKG, choose a destination and click **Extract PKG**. It creates the `NPEB00553`, `NPUB30467` or `NPJB00135` folder with the original package files. Add that folder to the launcher. This tool is only for the three supported Code Veronica PSN base releases, version 01.00.
+   - **RPCS3:** install your PKG using *File → Install Packages/Raps/Edats*. The game folder is at `RPCS3\dev_hdd0\game\NPEB00553` (or `NPUB30467` / `NPJB00135`). Add that folder to the launcher. RPCS3 is only needed for this preparation step.
+   Both methods produce the game folder the port needs. **You only need one method.** If your game is already extracted, the extractor download is unnecessary. The launcher does not open PKGs directly, and the extractor does not create RAP licenses.
 2. **Find your license (`.rap`)** for the European and American versions. It is the `.rap` file of the account that bought the game. In RPCS3 it is in `dev_hdd0\home\00000001\exdata`, with the title ID in its name (for example `EP0102-NPEB00553_00-…​.rap`). If the `.rap` file is inside the game folder, the launcher finds it on its own. **The Japanese version does not need a `.rap`.**
 3. **Keep the original files as they are.** You do not need to decrypt anything: on the first start, the port decrypts `EBOOT.BIN` with your license into its own `eboot_cache` folder (it takes less than a second). Your game files are never modified.
 
