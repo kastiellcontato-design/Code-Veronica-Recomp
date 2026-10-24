@@ -287,9 +287,9 @@ A few examples of the launcher and gameplay. Additional screens are collected in
   <img src="docs/images/presentation/launcher-graphics.png" alt="Launcher and graphics settings" width="880">
 </p>
 
-| Music box room | Hunter encounter |
+| Music box room | Escape from Mutant Steve |
 |:---:|:---:|
-| <img src="docs/images/gameplay-music-box-room.jpg" alt="Music box room" width="420"> | <img src="docs/images/gameplay-hunter-armory.jpg" alt="Hunter encounter" width="420"> |
+| <img src="docs/images/gameplay-music-box-room.jpg" alt="Music box room" width="420"> | <img src="docs/images/gameplay-hunter-armory.jpg" alt="Escape from Mutant Steve" width="420"> |
 
 [View the complete screenshot gallery](docs/GALLERY.md)
 

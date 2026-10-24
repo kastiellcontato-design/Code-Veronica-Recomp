@@ -287,9 +287,9 @@ Una selección del launcher y del juego. Las demás pantallas están reunidas en
   <img src="docs/images/presentation/launcher-graphics.png" alt="Launcher y opciones gráficas" width="880">
 </p>
 
-| Sala de la caja de música | Encuentro con Hunter |
+| Sala de la caja de música | Huida de Steve mutante |
 |:---:|:---:|
-| <img src="docs/images/gameplay-music-box-room.jpg" alt="Sala de la caja de música" width="420"> | <img src="docs/images/gameplay-hunter-armory.jpg" alt="Encuentro con Hunter" width="420"> |
+| <img src="docs/images/gameplay-music-box-room.jpg" alt="Sala de la caja de música" width="420"> | <img src="docs/images/gameplay-hunter-armory.jpg" alt="Huida de Steve mutante" width="420"> |
 
 [Ver la galería completa de capturas](docs/GALLERY.es.md)
 
