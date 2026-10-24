@@ -65,7 +65,7 @@ struct Visual {
  uint32_t motion_table=0,glasses_work=0;
  size_t mdl_offset=0,skin_offset=0,glasses_offset=0;
  uint32_t glasses_object=0,glasses_textures=0;
- bool ready=false;
+ bool ready=false,textures_bound=false;
 };
 Visual visuals[appearance_count];
 unsigned desired=0,current=0;
@@ -352,6 +352,26 @@ void bind_glasses_bank(){
  vm_write32(glasses_entity+0x118,visual().glasses_textures);
  vm_write32(glasses_entity+0x88,vm_read32(glasses_entity+0x88)|0x20u);
 }
+// Cached geometry outlives a player load, but the engine's TEXLIST -> DDS
+// associations do not necessarily do so (title/new game and character loads).
+// Re-register all three banks before attaching a cached body to a new actor.
+// Never re-realize the model here: its relocated pointers and motions are live.
+bool rebind_cached_textures(ppu_context* ctx){
+ if(visual().textures_bound)return true;
+ if(!mapped(visual().variant_archive,0x68))return false;
+ Call call(ctx);
+ const uint32_t engine_archive=vm_read32(kPlayerArchive);
+ vm_write32(kPlayerArchive,visual().variant_archive);
+ const uint32_t list=call.run(func_001E2324,0);
+ vm_write32(kPlayerArchive,engine_archive);
+ if(!mapped(list,0x68))return false;
+ const uint32_t banks[]={visual().variant[4],visual().variant_expressions[0],visual().variant_expressions[1]};
+ for(uint32_t bank:banks)if(!mapped(bank,8))return false;
+ for(uint32_t bank:banks)if(!call.run(func_000121AC,bank,list,0,1))return false;
+ visual().textures_bound=true;
+ std::fprintf(stderr,"[appearance] cached texture banks rebound character=%u choice=%u resource=%08X\n",character,desired,list);
+ return true;
+}
 void install(ppu_context* ctx,uint32_t actor){
  if(active||!visual().ready)return;
  if(vm_read32(actor+0x90)<3||vm_read32(actor+0x174)!=0||vm_read32(actor+0x18c)!=0)return;
@@ -366,6 +386,13 @@ void install(ppu_context* ctx,uint32_t actor){
     if(target&&(target<source||target>=source+count*52||(target-source)%52))return;
    }
   }
+ }
+ // Do not install geometry with stale/missing material associations. In
+ // particular, Chris -> title -> new Claire can reuse this cached visual.
+ if(!rebind_cached_textures(ctx)){
+  failed=true;message="Appearance textures unavailable; original appearance retained";
+  std::fprintf(stderr,"[appearance] cached texture binding unavailable; body not installed character=%u choice=%u\n",character,desired);
+  return;
  }
  original.actor=actor;original.auxiliary_count=0;
  for(unsigned i=0;i<2;i++){
@@ -564,7 +591,7 @@ bool realize(Call& call,uint32_t list){
   for(unsigned i=0;i<100;i++)if(visual().motion_valid[i])
    call.run(func_000322AC,motion+visual().motion_offsets[i],visual().motion_table+i*24);
  }
- visual().ready=true;return true;
+ visual().textures_bound=true;visual().ready=true;return true;
 }
 } // namespace
 unsigned applied(){return active?current:0;}
@@ -672,7 +699,12 @@ void resolved_path(uint32_t file,uint32_t destination){
  std::memcpy(vm_base+destination+0x40,name,length);
 }
 // Restore before the regular room/player loader replaces its display models.
-void before_player_load(){restore();original={};}
+void before_player_load(){
+ restore();original={};
+ // Keep relocated geometry cached, but treat every texture association as
+ // invalid across the native loader. Only the selected visual is rebound.
+ for(auto& item:visuals)item.textures_bound=false;
+}
 // Entity ID zero normally runs a timed particle state machine. Our accessory
 // uses that ID only for dispatch; submit its real ML_WORK to the model pass.
 bool update_glasses(uint32_t entity){
