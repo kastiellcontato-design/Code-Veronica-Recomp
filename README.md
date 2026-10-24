@@ -8,15 +8,24 @@
 
 **English** | [Português (Brasil)](README.pt-BR.md) | [Español](README.es.md)
 
+
+Replay the PS3 version on PC. Practice routes with a native SRT, room selection and saves anywhere.
+
+[Game setup](#preparing-your-game) · [Speedrun practice](#built-for-speedrun-practice) · [Features](#features) · [Gallery](docs/GALLERY.md)
+
 </div>
 
 > [!IMPORTANT]
 > **No game files are included.** This repository and its releases contain only the port: no game data, no game executable and no code generated from it. You need your **own original copy** of the PS3 game (PSN release). *Resident Evil*, *Code: Veronica* and all related names, characters and images are trademarks and copyrights of **Capcom**. This is a fan project. It is **not affiliated with, authorized or endorsed by Capcom or Sony Interactive Entertainment**.
 
-![Gameplay](docs/images/gameplay-claire-red-room.jpg)
+<p align="center">
+  <img src="docs/images/gameplay-claire-red-room.jpg" alt="Resident Evil Code: Veronica X" width="880">
+</p>
 
-## Contents
+<details>
+<summary><strong>Contents</strong></summary>
 
+- [Speedrun practice](#built-for-speedrun-practice)
 - [What is this?](#what-is-this)
 - [Why the PS3 version](#why-the-ps3-version)
 - [Supported versions](#supported-versions)
@@ -35,6 +44,8 @@
 - [Credits](#credits)
 - [License](#license)
 
+</details>
+
 ## What is this?
 
 This is a native Windows x64 port of **Resident Evil Code: Veronica X** for PlayStation 3. It is not an emulator. The game's PowerPC (PPU) and SPU code is translated ahead of time into C/C++ with [ps3recomp](https://github.com/sp00nznet/ps3recomp), then compiled into a normal Windows executable. The PS3 system libraries are reimplemented, and the RSX graphics run on Direct3D 12.
@@ -47,6 +58,20 @@ I am a big fan of Resident Evil and of Capcom, and Code: Veronica is one of my f
 
 The port is for **every player**: people who want to replay the game with higher resolution, 60 FPS and modern controllers, and also people who run it competitively.
 
+## Built for speedrun practice
+
+Alongside a modern PC presentation, **Veronica Port is built for speedrun practice**. Repeat a difficult room, prepare a boss fight or work on an inventory route using tools available directly in the port.
+
+| Practice tool | What it helps you do |
+|---|---|
+| **Native SRT · F8** | Monitor player and enemy health, inventory, ammo and in-game time. |
+| **Room selection · F7** | Load a room and choose its entry point to repeat a section. |
+| **Save and load anywhere · F7** | Keep separate practice saves and return to a setup quickly. |
+| **Item menu · F6** | Prepare weapons and supplies for a specific test. |
+| **LiveSplit integration** | Use the included autosplitter that also attaches to the port. |
+
+Enable the optional practice tools in **Cheats**. They are tools for training; whether a run is eligible depends on its category and community rules.
+
 ## Supported versions
 
 Only the **PSN releases, version 01.00**, are supported. Each region has its own executable; they all share the same launcher, settings, saves and caches, and each launcher starts the right executable for the chosen game folder.
@@ -58,8 +83,6 @@ Only the **PSN releases, version 01.00**, are supported. Each region has its own
 | Japan (*BIOHAZARD CODE: Veronica Kanzenban*) | `NPJB00135` | `CodeVeronicaPort_JP.exe` | Not needed |
 
 Game updates, disc releases and other versions are not supported. The launcher checks the version and tells you if a folder is not compatible.
-
-![Title screen of the Japanese version](docs/images/title-menu-jp.jpg)
 
 ## Requirements
 
@@ -147,10 +170,19 @@ The launcher can also check the GitHub releases and update itself (it can be tur
 
 ### SRT for speedrunners
 
-| | |
-|---|---|
-| ![SRT with the Albinoid boss bar](docs/images/srt-albinoid-chris.jpg) | ![SRT during the Tyrant fight](docs/images/srt-tyrant-claire.jpg) |
-| ![Gulp Worm boss bar](docs/images/srt-gulp-worm-bar.jpg) | ![SRT panel with a boss](docs/images/srt-panel-boss.png) |
+<p align="center">
+  <img src="docs/images/srt-albinoid-chris.jpg" alt="SRT — Albinoid" width="880">
+  <br><sub>Native SRT and boss health bar during gameplay.</sub>
+</p>
+
+<details>
+<summary>View the SRT panel in detail</summary>
+
+<p align="center">
+  <img src="docs/images/presentation/srt-panel-boss.png" alt="SRT" width="268">
+</p>
+
+</details>
 
 A native **SRT** (speedrun tool) overlay drawn by the game itself, toggled with `F8`:
 
@@ -163,7 +195,7 @@ A native **SRT** (speedrun tool) overlay drawn by the game itself, toggled with 
 
 ### Practice tools, saves and items
 
-- **Archives** window (`F7`, enabled in Advanced): **load any room or map** (with the room's entry point) to practice a section, **save anywhere** into an independent save library with thumbnails, and **load** those saves at any time.
+- **Archives** window (`F7`, enabled in Cheats): **load any room or map** (with the room's entry point) to practice a section, **save anywhere** into an independent save library with thumbnails, and **load** those saves at any time.
 - **Item menu** (`F6`, enabled in Cheats): put any item or weapon in the current character's inventory, or take one out, without leaving the game.
 - **Cheats**: infinite health and infinite ammo, switchable during play.
 - **Patches**: skip door animations, skip the opening logos and intro, plus your own patches in RPCS3's `patch.yml` format.
@@ -171,7 +203,9 @@ A native **SRT** (speedrun tool) overlay drawn by the game itself, toggled with 
 
 ### In-game RECOMP SETTINGS and character swap
 
-![RECOMP SETTINGS with the appearance selector](docs/images/recomp-settings-appearance.jpg)
+<p align="center">
+  <img src="docs/images/recomp-settings-appearance.jpg" alt="RECOMP SETTINGS with the appearance selector" width="880">
+</p>
 
 In the game's own **OPTION** menu, the **RECOMP SETTINGS** page changes resolution, anti-aliasing, display mode, brightness, contrast, saturation, sharpening (FSR RCAS) and anisotropic filtering without opening the launcher, with **Reset colors** to go back to the defaults.
 
@@ -238,7 +272,7 @@ On a controller, hold the four shoulder buttons first, then press the last butto
 |---|---|---|---|---|
 | `Insert` / `F5` | R1+R2+L1+L2+L3 | RB+RT+LB+LT+LS | R+ZR+L+ZL+LS | Options menu (display, audio, SRT, quit) |
 | `F6` | R1+R2+L1+L2+△ | RB+RT+LB+LT+Y | R+ZR+L+ZL+X | Item menu (enable it in Cheats) |
-| `F7` | R1+R2+L1+L2+○ | RB+RT+LB+LT+B | R+ZR+L+ZL+A | Archives: maps, save, load (enable it in Advanced) |
+| `F7` | R1+R2+L1+L2+○ | RB+RT+LB+LT+B | R+ZR+L+ZL+A | Archives: maps, save, load (enable it in Cheats) |
 | `F8` | R1+R2+L1+L2+✕ | RB+RT+LB+LT+A | R+ZR+L+ZL+B | Show or hide the SRT |
 | `F9` | R1+R2+L1+L2+□ | RB+RT+LB+LT+X | R+ZR+L+ZL+Y | Mod textures on/off |
 | `F10` | R1+R2+L1+L2+R3 | RB+RT+LB+LT+RS | R+ZR+L+ZL+RS | Screenshot (saved in `screenshots\`) |
@@ -247,14 +281,17 @@ Default keyboard layout without a controller: arrows = D-pad, `X` = Cross, `Z` =
 
 ## Screenshots
 
-| | |
-|---|---|
-| ![Launcher graphics](docs/images/launcher-graphics.png) | ![Shortcuts](docs/images/launcher-shortcuts.png) |
-| ![Controls](docs/images/launcher-controls.png) | ![Cheats and item menu](docs/images/launcher-cheats.png) |
-| ![Music box room](docs/images/gameplay-music-box-room.jpg) | ![Hunter](docs/images/gameplay-hunter-armory.jpg) |
-| ![Tyrant](docs/images/gameplay-tyrant-countdown.jpg) | ![Zombies](docs/images/gameplay-zombies.jpg) |
-| ![Chris](docs/images/gameplay-chris.jpg) | ![Japanese version](docs/images/gameplay-inventory-jp.jpg) |
-| ![SRT settings](docs/images/launcher-srt.png) | |
+A few examples of the launcher and gameplay. Additional screens are collected in a separate gallery.
+
+<p align="center">
+  <img src="docs/images/presentation/launcher-graphics.png" alt="Launcher and graphics settings" width="880">
+</p>
+
+| Music box room | Hunter encounter |
+|:---:|:---:|
+| <img src="docs/images/gameplay-music-box-room.jpg" alt="Music box room" width="420"> | <img src="docs/images/gameplay-hunter-armory.jpg" alt="Hunter encounter" width="420"> |
+
+[View the complete screenshot gallery](docs/GALLERY.md)
 
 ## Known issues
 

@@ -8,15 +8,24 @@
 
 [English](README.md) | [Português (Brasil)](README.pt-BR.md) | **Español**
 
+
+Vuelve a jugar a la versión de PS3 en PC. Practica rutas con SRT nativo, selección de salas y guardado en cualquier lugar.
+
+[Preparar el juego](#preparar-el-juego) · [Practicar speedruns](#también-pensado-para-practicar-speedruns) · [Funciones](#funciones) · [Galería](docs/GALLERY.es.md)
+
 </div>
 
 > [!IMPORTANT]
 > **No se incluye ningún archivo del juego.** Este repositorio y sus lanzamientos contienen solo el port: ningún dato del juego, ningún ejecutable del juego y ningún código generado a partir de él. Necesitas tu **propia copia original** del juego de PS3 (versión de PSN). *Resident Evil*, *Code: Veronica* y todos los nombres, personajes e imágenes relacionados son marcas y derechos de autor de **Capcom**. Es un proyecto de fans. **No está afiliado, autorizado ni respaldado por Capcom ni por Sony Interactive Entertainment**.
 
-![Gameplay](docs/images/gameplay-claire-red-room.jpg)
+<p align="center">
+  <img src="docs/images/gameplay-claire-red-room.jpg" alt="Resident Evil Code: Veronica X" width="880">
+</p>
 
-## Índice
+<details>
+<summary><strong>Índice</strong></summary>
 
+- [Practicar speedruns](#también-pensado-para-practicar-speedruns)
 - [Qué es](#qué-es)
 - [Por qué la versión de PS3](#por-qué-la-versión-de-ps3)
 - [Versiones compatibles](#versiones-compatibles)
@@ -35,6 +44,8 @@
 - [Créditos](#créditos)
 - [Licencia](#licencia)
 
+</details>
+
 ## Qué es
 
 Es un port nativo para Windows x64 de **Resident Evil Code: Veronica X** de PlayStation 3. No es un emulador. El código PowerPC (PPU) y SPU del juego se traduce por adelantado a C/C++ con [ps3recomp](https://github.com/sp00nznet/ps3recomp) y después se compila como un ejecutable normal de Windows. Las bibliotecas del sistema de PS3 están reimplementadas y los gráficos del RSX funcionan sobre Direct3D 12.
@@ -47,6 +58,20 @@ Soy muy fan de Resident Evil y de Capcom, y Code: Veronica es uno de mis juegos 
 
 El port es para **todos los jugadores**: quienes quieren volver a jugarlo con más resolución, 60 FPS y mandos modernos, y también quienes lo corren de forma competitiva.
 
+## También pensado para practicar speedruns
+
+Además de una presentación moderna en PC, **Veronica Port también está pensado para practicar speedruns**. Repite una sala difícil, prepara un combate contra un jefe o practica una ruta de inventario con las herramientas del propio port.
+
+| Herramienta de práctica | Para qué sirve |
+|---|---|
+| **SRT nativo · F8** | Consulta la salud del personaje y enemigos, inventario, munición y tiempo de juego. |
+| **Selección de salas · F7** | Carga una sala y elige su entrada para repetir una sección. |
+| **Guardar y cargar en cualquier lugar · F7** | Conserva partidas de práctica separadas y vuelve a una situación rápidamente. |
+| **Menú de objetos · F6** | Prepara armas y recursos para una prueba concreta. |
+| **Integración con LiveSplit** | Usa el autosplitter incluido, que también reconoce el port. |
+
+Activa las herramientas opcionales en **Cheats**. Son recursos de práctica; la validez de una run depende de su categoría y de las reglas de la comunidad.
+
 ## Versiones compatibles
 
 Solo son compatibles las **versiones de PSN, 01.00**. Cada región tiene su ejecutable; todos comparten el mismo launcher, ajustes, partidas guardadas y cachés, y cualquiera de ellos abre el ejecutable correcto para la carpeta elegida.
@@ -58,8 +83,6 @@ Solo son compatibles las **versiones de PSN, 01.00**. Cada región tiene su ejec
 | Japón (*BIOHAZARD CODE: Veronica Kanzenban*) | `NPJB00135` | `CodeVeronicaPort_JP.exe` | No hace falta |
 
 Las actualizaciones del juego, las versiones en disco y otras versiones no funcionan. El launcher comprueba la versión y avisa si la carpeta no es compatible.
-
-![Pantalla de título de la versión japonesa](docs/images/title-menu-jp.jpg)
 
 ## Requisitos
 
@@ -127,7 +150,7 @@ El launcher también puede buscar nuevas versiones en los lanzamientos de GitHub
 - Launcher propio en **13 idiomas**: Português (Brasil), English, Español, 日本語, Français, Deutsch, Italiano, Polski, Türkçe, العربية, 简体中文, 한국어 y Русский.
 - Biblioteca con las tres regiones, comprobación de la versión y de la licencia, y la bandera de cada región.
 - Sigue abierto durante el juego como **menú de opciones** (`Insert`/`F5`), para cambiar ajustes sin salir de la partida.
-- Páginas: Juegos, Gráficos, Partidas y capturas, Controles, Atajos, Parches, Mods, SRT, Trucos, Rendimiento y Avanzado (idioma, caché de shaders, visor del registro del juego).
+- Páginas: Juegos, Gráficos, Partidas y capturas, Controles, Atajos, Parches, Mods, SRT, Cheats, Rendimiento y Avanzado (idioma, caché de shaders, visor del registro del juego).
 - Pausa opcional cuando la ventana del juego pierde el foco.
 
 ### Gráficos y rendimiento
@@ -147,10 +170,19 @@ El launcher también puede buscar nuevas versiones en los lanzamientos de GitHub
 
 ### SRT para speedrunners
 
-| | |
-|---|---|
-| ![SRT con la barra de vida del Albinoid](docs/images/srt-albinoid-chris.jpg) | ![SRT en la pelea contra el Tyrant](docs/images/srt-tyrant-claire.jpg) |
-| ![Barra de vida del Gulp Worm](docs/images/srt-gulp-worm-bar.jpg) | ![Panel del SRT con jefe](docs/images/srt-panel-boss.png) |
+<p align="center">
+  <img src="docs/images/srt-albinoid-chris.jpg" alt="SRT — Albinoid" width="880">
+  <br><sub>SRT nativo y barra de salud del jefe durante la partida.</sub>
+</p>
+
+<details>
+<summary>Ver el panel del SRT en detalle</summary>
+
+<p align="center">
+  <img src="docs/images/presentation/srt-panel-boss.png" alt="SRT" width="268">
+</p>
+
+</details>
 
 Un **SRT** (speedrun tool) nativo, dibujado por el propio juego, que se activa y desactiva con `F8`:
 
@@ -163,15 +195,17 @@ Un **SRT** (speedrun tool) nativo, dibujado por el propio juego, que se activa y
 
 ### Herramientas de práctica, partidas y objetos
 
-- Ventana **Archivos** (`F7`, se activa en Avanzado): **cargar cualquier sala o mapa** (con el punto de entrada de la sala) para practicar un tramo, **guardar en cualquier lugar** en una biblioteca de partidas independiente, con miniaturas, y **cargar** esas partidas cuando quieras.
-- **Menú de objetos** (`F6`, se activa en Trucos): pon cualquier objeto o arma en el inventario del personaje actual, o quítalo, sin salir de la partida.
+- Ventana **Archivos** (`F7`, se activa en Cheats): **cargar cualquier sala o mapa** (con el punto de entrada de la sala) para practicar un tramo, **guardar en cualquier lugar** en una biblioteca de partidas independiente, con miniaturas, y **cargar** esas partidas cuando quieras.
+- **Menú de objetos** (`F6`, se activa en Cheats): pon cualquier objeto o arma en el inventario del personaje actual, o quítalo, sin salir de la partida.
 - **Trucos**: vida infinita y munición infinita, que se activan y desactivan durante el juego.
 - **Parches**: saltar la animación de las puertas, saltar los logos y la introducción, y tus propios parches en el formato `patch.yml` de RPCS3.
 - Elección de la carpeta de las partidas guardadas.
 
 ### RECOMP SETTINGS y cambio de personaje dentro del juego
 
-![RECOMP SETTINGS con el selector de apariencia](docs/images/recomp-settings-appearance.jpg)
+<p align="center">
+  <img src="docs/images/recomp-settings-appearance.jpg" alt="RECOMP SETTINGS con el selector de apariencia" width="880">
+</p>
 
 En el propio menú **OPTION** del juego, la página **RECOMP SETTINGS** cambia la resolución, el antialiasing, el modo de pantalla, el brillo, el contraste, la saturación, la nitidez (FSR RCAS) y el filtrado anisotrópico sin abrir el launcher, con **Reset colors** para volver a los valores por defecto.
 
@@ -237,8 +271,8 @@ En el mando, mantén primero los cuatro botones superiores y después pulsa el �
 | Teclado | PlayStation | Xbox | Switch | Qué hace |
 |---|---|---|---|---|
 | `Insert` / `F5` | R1+R2+L1+L2+L3 | RB+RT+LB+LT+LS | R+ZR+L+ZL+LS | Menú de opciones (pantalla, audio, SRT, salir) |
-| `F6` | R1+R2+L1+L2+△ | RB+RT+LB+LT+Y | R+ZR+L+ZL+X | Menú de objetos (activar en Trucos) |
-| `F7` | R1+R2+L1+L2+○ | RB+RT+LB+LT+B | R+ZR+L+ZL+A | Archivos: mapas, guardar, cargar (activar en Avanzado) |
+| `F6` | R1+R2+L1+L2+△ | RB+RT+LB+LT+Y | R+ZR+L+ZL+X | Menú de objetos (activar en Cheats) |
+| `F7` | R1+R2+L1+L2+○ | RB+RT+LB+LT+B | R+ZR+L+ZL+A | Archivos: mapas, guardar, cargar (activar en Cheats) |
 | `F8` | R1+R2+L1+L2+✕ | RB+RT+LB+LT+A | R+ZR+L+ZL+B | Muestra u oculta el SRT |
 | `F9` | R1+R2+L1+L2+□ | RB+RT+LB+LT+X | R+ZR+L+ZL+Y | Activa/desactiva las texturas del mod |
 | `F10` | R1+R2+L1+L2+R3 | RB+RT+LB+LT+RS | R+ZR+L+ZL+RS | Captura de pantalla (en `screenshots\`) |
@@ -247,14 +281,17 @@ Teclado por defecto, sin mando: flechas = cruceta, `X` = Cruz, `Z` = Círculo, `
 
 ## Capturas de pantalla
 
-| | |
-|---|---|
-| ![Gráficos en el launcher](docs/images/launcher-graphics.png) | ![Atajos](docs/images/launcher-shortcuts.png) |
-| ![Controles](docs/images/launcher-controls.png) | ![Trucos y menú de objetos](docs/images/launcher-cheats.png) |
-| ![Sala de la caja de música](docs/images/gameplay-music-box-room.jpg) | ![Hunter](docs/images/gameplay-hunter-armory.jpg) |
-| ![Tyrant](docs/images/gameplay-tyrant-countdown.jpg) | ![Zombis](docs/images/gameplay-zombies.jpg) |
-| ![Chris](docs/images/gameplay-chris.jpg) | ![Versión japonesa](docs/images/gameplay-inventory-jp.jpg) |
-| ![Ajustes del SRT](docs/images/launcher-srt.png) | |
+Una selección del launcher y del juego. Las demás pantallas están reunidas en una galería separada.
+
+<p align="center">
+  <img src="docs/images/presentation/launcher-graphics.png" alt="Launcher y opciones gráficas" width="880">
+</p>
+
+| Sala de la caja de música | Encuentro con Hunter |
+|:---:|:---:|
+| <img src="docs/images/gameplay-music-box-room.jpg" alt="Sala de la caja de música" width="420"> | <img src="docs/images/gameplay-hunter-armory.jpg" alt="Encuentro con Hunter" width="420"> |
+
+[Ver la galería completa de capturas](docs/GALLERY.es.md)
 
 ## Problemas conocidos
 

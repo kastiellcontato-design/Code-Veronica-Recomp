@@ -8,15 +8,24 @@
 
 [English](README.md) | **Português (Brasil)** | [Español](README.es.md)
 
+
+Rejogue a versão de PS3 no PC. Treine rotas com SRT nativo, seleção de salas e saves em qualquer lugar.
+
+[Preparar o jogo](#preparando-o-jogo) · [Treino de speedrun](#feito-também-para-treinar-speedrun) · [Funções](#funções) · [Galeria](docs/GALLERY.pt-BR.md)
+
 </div>
 
 > [!IMPORTANT]
 > **Nenhum arquivo do jogo está incluído.** Este repositório e os seus lançamentos trazem só o port: nenhum dado do jogo, nenhum executável do jogo e nenhum código gerado a partir dele. Você precisa ter a **sua própria cópia original** do jogo de PS3 (versão da PSN). *Resident Evil*, *Code: Veronica* e todos os nomes, personagens e imagens relacionados são marcas e direitos autorais da **Capcom**. Este é um projeto de fã. Ele **não tem ligação com a Capcom nem com a Sony Interactive Entertainment, nem é autorizado ou endossado por elas**.
 
-![Gameplay](docs/images/gameplay-claire-red-room.jpg)
+<p align="center">
+  <img src="docs/images/gameplay-claire-red-room.jpg" alt="Resident Evil Code: Veronica X" width="880">
+</p>
 
-## Índice
+<details>
+<summary><strong>Índice</strong></summary>
 
+- [Treino de speedrun](#feito-também-para-treinar-speedrun)
 - [O que é](#o-que-é)
 - [Por que a versão de PS3](#por-que-a-versão-de-ps3)
 - [Versões compatíveis](#versões-compatíveis)
@@ -35,6 +44,8 @@
 - [Créditos](#créditos)
 - [Licença](#licença)
 
+</details>
+
 ## O que é
 
 Este é um port nativo para Windows x64 do **Resident Evil Code: Veronica X** de PlayStation 3. Não é um emulador. O código PowerPC (PPU) e SPU do jogo é traduzido antecipadamente para C/C++ com o [ps3recomp](https://github.com/sp00nznet/ps3recomp) e depois compilado como um executável normal do Windows. As bibliotecas do sistema do PS3 foram reimplementadas, e os gráficos do RSX rodam em Direct3D 12.
@@ -47,6 +58,20 @@ Sou muito fã de Resident Evil e da Capcom, e o Code: Veronica é um dos meus jo
 
 O port é para **todos os jogadores**: quem quer jogar de novo com resolução maior, 60 FPS e controles modernos, e também quem corre o jogo de forma competitiva.
 
+## Feito também para treinar speedrun
+
+Além de uma apresentação moderna no PC, o **Veronica Port também é dedicado ao treino de speedrun**. Repita uma sala difícil, prepare uma luta contra chefe ou treine uma rota de inventário com as ferramentas do próprio port.
+
+| Ferramenta de treino | Como ajuda |
+|---|---|
+| **SRT nativo · F8** | Acompanhe vida do personagem e dos inimigos, inventário, munição e tempo de jogo. |
+| **Seleção de salas · F7** | Carregue uma sala e escolha a entrada para repetir um trecho. |
+| **Salvar e carregar em qualquer lugar · F7** | Crie saves de treino separados e retome uma situação rapidamente. |
+| **Menu de itens · F6** | Prepare armas e recursos para um teste específico. |
+| **Integração com LiveSplit** | Use o autosplitter incluído, que também reconhece o port. |
+
+Ative as ferramentas opcionais na aba **Cheats**. Elas são recursos de treino; a validade de uma run depende da categoria e das regras da comunidade.
+
 ## Versões compatíveis
 
 Só as **versões da PSN, 01.00**, são compatíveis. Cada região tem o seu executável; todos usam o mesmo launcher, configurações, saves e caches, e qualquer um deles abre o executável certo para a pasta escolhida.
@@ -58,8 +83,6 @@ Só as **versões da PSN, 01.00**, são compatíveis. Cada região tem o seu exe
 | Japão (*BIOHAZARD CODE: Veronica Kanzenban*) | `NPJB00135` | `CodeVeronicaPort_JP.exe` | Não precisa |
 
 Atualizações do jogo, versões em disco e outras versões não funcionam. O launcher confere a versão e avisa se a pasta não for compatível.
-
-![Tela de título da versão japonesa](docs/images/title-menu-jp.jpg)
 
 ## Requisitos
 
@@ -147,10 +170,19 @@ O launcher também pode procurar novas versões nos lançamentos do GitHub e se 
 
 ### SRT para speedrunners
 
-| | |
-|---|---|
-| ![SRT com a barra de vida do Albinoid](docs/images/srt-albinoid-chris.jpg) | ![SRT na luta com o Tyrant](docs/images/srt-tyrant-claire.jpg) |
-| ![Barra de vida do Gulp Worm](docs/images/srt-gulp-worm-bar.jpg) | ![Painel do SRT com chefe](docs/images/srt-panel-boss.png) |
+<p align="center">
+  <img src="docs/images/srt-albinoid-chris.jpg" alt="SRT — Albinoid" width="880">
+  <br><sub>SRT nativo e barra de vida do chefe durante a partida.</sub>
+</p>
+
+<details>
+<summary>Ver o painel do SRT em detalhe</summary>
+
+<p align="center">
+  <img src="docs/images/presentation/srt-panel-boss.png" alt="SRT" width="268">
+</p>
+
+</details>
 
 Um **SRT** (speedrun tool) nativo, desenhado pelo próprio jogo, ligado e desligado com `F8`:
 
@@ -163,7 +195,7 @@ Um **SRT** (speedrun tool) nativo, desenhado pelo próprio jogo, ligado e deslig
 
 ### Ferramentas de treino, saves e itens
 
-- Janela **Arquivos** (`F7`, ativada em Avançado): **carregar qualquer sala ou mapa** (com o ponto de entrada da sala) para treinar um trecho, **salvar em qualquer lugar** numa biblioteca de saves independente, com miniaturas, e **carregar** esses saves quando quiser.
+- Janela **Arquivos** (`F7`, ativada em Cheats): **carregar qualquer sala ou mapa** (com o ponto de entrada da sala) para treinar um trecho, **salvar em qualquer lugar** numa biblioteca de saves independente, com miniaturas, e **carregar** esses saves quando quiser.
 - **Menu de itens** (`F6`, ativado em Cheats): coloque qualquer item ou arma no inventário do personagem atual, ou tire, sem sair da partida.
 - **Cheats**: vida infinita e munição infinita, que ligam e desligam durante o jogo.
 - **Patches**: pular a animação das portas, pular os logos e a introdução, e os seus próprios patches no formato `patch.yml` do RPCS3.
@@ -171,7 +203,9 @@ Um **SRT** (speedrun tool) nativo, desenhado pelo próprio jogo, ligado e deslig
 
 ### RECOMP SETTINGS e troca de personagem dentro do jogo
 
-![RECOMP SETTINGS com o seletor de aparência](docs/images/recomp-settings-appearance.jpg)
+<p align="center">
+  <img src="docs/images/recomp-settings-appearance.jpg" alt="RECOMP SETTINGS com o seletor de aparência" width="880">
+</p>
 
 No próprio menu **OPTION** do jogo, a página **RECOMP SETTINGS** muda a resolução, o anti-serrilhado, o modo de exibição, o brilho, o contraste, a saturação, a nitidez (FSR RCAS) e o filtro anisotrópico sem abrir o launcher, com **Reset colors** para voltar ao padrão.
 
@@ -238,7 +272,7 @@ No controle, segure primeiro os quatro botões de ombro e depois aperte o últim
 |---|---|---|---|---|
 | `Insert` / `F5` | R1+R2+L1+L2+L3 | RB+RT+LB+LT+LS | R+ZR+L+ZL+LS | Menu de opções (tela, áudio, SRT, sair) |
 | `F6` | R1+R2+L1+L2+△ | RB+RT+LB+LT+Y | R+ZR+L+ZL+X | Menu de itens (ativar em Cheats) |
-| `F7` | R1+R2+L1+L2+○ | RB+RT+LB+LT+B | R+ZR+L+ZL+A | Arquivos: mapas, salvar, carregar (ativar em Avançado) |
+| `F7` | R1+R2+L1+L2+○ | RB+RT+LB+LT+B | R+ZR+L+ZL+A | Arquivos: mapas, salvar, carregar (ativar em Cheats) |
 | `F8` | R1+R2+L1+L2+✕ | RB+RT+LB+LT+A | R+ZR+L+ZL+B | Mostra ou esconde o SRT |
 | `F9` | R1+R2+L1+L2+□ | RB+RT+LB+LT+X | R+ZR+L+ZL+Y | Liga/desliga as texturas do mod |
 | `F10` | R1+R2+L1+L2+R3 | RB+RT+LB+LT+RS | R+ZR+L+ZL+RS | Screenshot (salva em `screenshots\`) |
@@ -247,14 +281,17 @@ Teclado padrão, sem controle: setas = direcional, `X` = Cruz, `Z` = Círculo, `
 
 ## Capturas de tela
 
-| | |
-|---|---|
-| ![Gráficos no launcher](docs/images/launcher-graphics.png) | ![Atalhos](docs/images/launcher-shortcuts.png) |
-| ![Controles](docs/images/launcher-controls.png) | ![Cheats e menu de itens](docs/images/launcher-cheats.png) |
-| ![Sala da caixa de música](docs/images/gameplay-music-box-room.jpg) | ![Hunter](docs/images/gameplay-hunter-armory.jpg) |
-| ![Tyrant](docs/images/gameplay-tyrant-countdown.jpg) | ![Zumbis](docs/images/gameplay-zombies.jpg) |
-| ![Chris](docs/images/gameplay-chris.jpg) | ![Versão japonesa](docs/images/gameplay-inventory-jp.jpg) |
-| ![Configurações do SRT](docs/images/launcher-srt.png) | |
+Uma seleção do launcher e do jogo. As outras telas estão reunidas em uma galeria separada.
+
+<p align="center">
+  <img src="docs/images/presentation/launcher-graphics.png" alt="Launcher e opções gráficas" width="880">
+</p>
+
+| Sala da caixa de música | Encontro com Hunter |
+|:---:|:---:|
+| <img src="docs/images/gameplay-music-box-room.jpg" alt="Sala da caixa de música" width="420"> | <img src="docs/images/gameplay-hunter-armory.jpg" alt="Encontro com Hunter" width="420"> |
+
+[Ver a galeria completa de capturas](docs/GALLERY.pt-BR.md)
 
 ## Problemas conhecidos
 
