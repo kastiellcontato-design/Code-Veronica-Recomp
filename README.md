@@ -18,13 +18,15 @@ Replay the PS3 version on PC. Practice routes with a native SRT, room selection 
 > [!IMPORTANT]
 > **No game files are included.** This repository and its releases contain only the port: no game data, no game executable and no code generated from it. You need your **own original copy** of the PS3 game (PSN release). *Resident Evil*, *Code: Veronica* and all related names, characters and images are trademarks and copyrights of **Capcom**. This is a fan project. It is **not affiliated with, authorized or endorsed by Capcom or Sony Interactive Entertainment**.
 
-## Downloads — v1.0
+## Downloads — v1.1
 
-[**Code Veronica Recomp Release v1.0**](https://github.com/kastiellcontato-design/Code-Veronica-Recomp/releases/tag/v1.0)
+Fixed missing/distorted lighter shadows and incorrect dark lighting blocks. Update through the launcher or download below. [Previous releases](https://github.com/kastieloficial/RE-Code-Veronica-Recomp/releases) remain available.
+
+[**Code Veronica Recomp Release v1.1**](https://github.com/kastieloficial/RE-Code-Veronica-Recomp/releases/tag/v1.1)
 
 | Download | Contents |
 |---|---|
-| [CodeVeronica-PC-v1.0.zip](https://github.com/kastiellcontato-design/Code-Veronica-Recomp/releases/download/v1.0/CodeVeronica-PC-v1.0.zip) | Windows port with launcher and EU/JP/US support. Extract everything and open **Code Veronica.exe**. |
+| [Code.Veronica.Recomp.Release.v1.1.zip](https://github.com/kastieloficial/RE-Code-Veronica-Recomp/releases/download/v1.1/Code.Veronica.Recomp.Release.v1.1.zip) | Windows port with launcher and EU/JP/US support. Extract everything and open **Code Veronica.exe**. |
 | [Veronica-PKG-Extractor-v1.0.zip](https://github.com/kastiellcontato-design/Code-Veronica-Recomp/releases/download/v1.0/Veronica-PKG-Extractor-v1.0.zip) | Optional tool to prepare your own PKG. RPCS3 is also supported for extraction. |
 | [CodeVeronica-LiveSplit-Speedrun-v1.0.zip](https://github.com/kastiellcontato-design/Code-Veronica-Recomp/releases/download/v1.0/CodeVeronica-LiveSplit-Speedrun-v1.0.zip) | Any%/S-Rank split lists with icons and official LiveSplit catalog setup instructions. |
 
@@ -135,7 +137,7 @@ NPEB00553\            (or NPUB30467 / NPJB00135)
 **Step by step**
 
 1. **Get the game folder from your PKG. Choose either method:**
-   - **Veronica PKG Extractor (optional, separate download):** when available, download `Veronica-PKG-Extractor-v1.0.zip` from the project's [Releases](https://github.com/kastiellcontato-design/re-cvx-ps3recomp/releases), alongside `CodeVeronica-PC-v1.0.zip`. Unzip the tool, open `VeronicaPKGExtractor.exe`, drop or select your PKG, choose a destination and click **Extract PKG**. It creates the `NPEB00553`, `NPUB30467` or `NPJB00135` folder with the original package files. Add that folder to the launcher. This tool is only for the three supported Code Veronica PSN base releases, version 01.00.
+   - **Veronica PKG Extractor (optional, separate download):** when available, download `Veronica-PKG-Extractor-v1.0.zip` from the project's [Releases](https://github.com/kastiellcontato-design/re-cvx-ps3recomp/releases), alongside the latest port ZIP. Unzip the tool, open `VeronicaPKGExtractor.exe`, drop or select your PKG, choose a destination and click **Extract PKG**. It creates the `NPEB00553`, `NPUB30467` or `NPJB00135` folder with the original package files. Add that folder to the launcher. This tool is only for the three supported Code Veronica PSN base releases, version 01.00.
    - **RPCS3:** install your PKG using *File → Install Packages/Raps/Edats*. The game folder is at `RPCS3\dev_hdd0\game\NPEB00553` (or `NPUB30467` / `NPJB00135`). Add that folder to the launcher. RPCS3 is only needed for this preparation step.
    Both methods produce the game folder the port needs. **You only need one method.** If your game is already extracted, the extractor download is unnecessary. The launcher does not open PKGs directly, and the extractor does not create RAP licenses.
 2. **Find your license (`.rap`)** for the European and American versions. It is the `.rap` file of the account that bought the game. In RPCS3 it is in `dev_hdd0\home\00000001\exdata`, with the title ID in its name (for example `EP0102-NPEB00553_00-…​.rap`). If the `.rap` file is inside the game folder, the launcher finds it on its own. **The Japanese version does not need a `.rap`.**

@@ -1,3 +1,6 @@
+NOVIDADES DA v1.1
+Sombras e iluminacao do isqueiro corrigidas: sombras ausentes ou deformadas e blocos escuros indevidos.
+
 ORGANIZAÇÃO DESTE PACOTE
 
   Code Veronica.exe       Abra este arquivo para jogar.
@@ -13,7 +16,7 @@ Para migrar da distribuição antiga, feche o jogo e copie seus arquivos
 pessoais (cv_launcher.ini, saves, mods e caches) para bin, sem substituir
 os EXEs ou DLLs novos. Guarde uma cópia da instalação antiga.
 
-RESIDENT EVIL CODE: VERONICA X - PORT PARA PC v1.0
+RESIDENT EVIL CODE: VERONICA X - PORT PARA PC v1.1
 
 Port não oficial da versão de PS3 para Windows, feito por recompilação
 estática. Feito por Kastiel.
@@ -57,7 +60,7 @@ a) Escolha UMA das opções para preparar a pasta do jogo:
 
    OPÇÃO 1 - VERONICA PKG EXTRACTOR (separado e opcional)
    Na mesma Release do port, quando publicada, haverá dois downloads:
-     CodeVeronica-PC-v1.0.zip .............. o port para jogar
+     Code.Veronica.Recomp.Release.v1.1.zip .............. o port para jogar
      Veronica-PKG-Extractor-v1.0.zip ....... ferramenta para extrair o PKG
    Página: https://github.com/kastiellcontato-design/Code-Veronica-Recomp/releases
    Extraia o ZIP da ferramenta e abra VeronicaPKGExtractor.exe.

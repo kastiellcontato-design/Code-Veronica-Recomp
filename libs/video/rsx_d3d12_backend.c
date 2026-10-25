@@ -19,6 +19,8 @@
 #include <time.h>
 #include "rsx_d3d12_backend.h"
 #include "rsx_primitives.h"
+#include "rsx_clear_rect.h"
+#include "rsx_cube_stride.h"
 #include "rsx_vertex_fetch.h"
 #include "rsx_pose_interpolation.h"
 #include "rsx_pose_gpu.h"
@@ -147,6 +149,7 @@ typedef struct {
         u32 w, h, fmt;  /* dims + RSX base format */
         u32 ctrl1;      /* NV4097 TEXTURE_CONTROL1: component remap crossbar */
         u32 addr;       /* NV4097 TEXTURE_ADDRESS: wrap modes, S [3:0] T [11:8] */
+        u32 pitch;      /* TEXTURE_CONTROL3 source row pitch */
         u32 mips;       /* SET_TEXTURE_FORMAT bits 16..31: mipmap level count.
                          * Cube faces sit one whole mip pyramid apart, so this
                          * is what sets the face stride. */
@@ -260,6 +263,7 @@ typedef struct {
 typedef struct {
     ID3D12Resource* res;
     ID3D12Resource* up;
+    u32 source_pitch;
     u32 off, w, h, fmt; /* current contents (resource reused when dims match) */
     u32 csum;           /* sparse checksum of the source bytes last uploaded */
     int cube;           /* resource is a 6-face cube, sampled as TextureCube */
@@ -438,7 +442,7 @@ typedef struct {
     int                   vp_fp_n;
     u32                   srv_inc;              /* CBV_SRV_UAV descriptor size   */
     /* VP path: latest texture bound per unit (t0-t3). */
-    struct { u32 off, raw, w, h, fmt, ctrl1, addr, mips; int cube; int set; } cur_texs[FP_TEX_UNITS];
+    struct { u32 off, raw, w, h, fmt, ctrl1, addr, mips, pitch; int cube; int set; } cur_texs[FP_TEX_UNITS];
 
     /* Render-to-texture: offscreen RT pool + their RTV heap. */
     OffRT                 off_rt[MAX_OFF_RTS];
@@ -3341,7 +3345,6 @@ static void rsx_capture_frame(u32 fi, u32 ndraws, u32 capidx)
     snprintf(dir, sizeof dir, "%s/frame_%02u", base, capidx);
     CreateDirectoryA(dir, NULL);
     char path[512];
-
     /* Manifest: every op in submission order with full state. */
     snprintf(path, sizeof path, "%s/manifest.txt", dir);
     FILE* mf = fopen(path, "w");
@@ -3377,9 +3380,10 @@ static void rsx_capture_frame(u32 fi, u32 ndraws, u32 capidx)
             const D3D12DrawRecord* r = &s_rb.draws[d];
             if(r->is_copy) {fprintf(mf,"op%03u COPY src=%08X (%u,%u) dst=%08X (%u,%u) %ux%u\n",d,r->copy_src,r->copy_sx,r->copy_sy,r->rt_off,r->copy_dx,r->copy_dy,r->copy_w,r->copy_h);continue;}
             if (r->is_clear)
-                fprintf(mf, "op%03u CLEAR rt=0x%08X mrt=0x%X/0x%X/0x%X cc=(%.3f,%.3f,%.3f,%.3f) zeta=0x%08X\n",
+                fprintf(mf, "op%03u CLEAR rt=0x%08X mrt=0x%X/0x%X/0x%X cc=(%.3f,%.3f,%.3f,%.3f) zeta=0x%08X scissor=%u,%u,%ux%u flags=0x%X\n",
                         d, r->rt_off, r->rt_mrt[0], r->rt_mrt[1], r->rt_mrt[2],
-                        r->cc[0], r->cc[1], r->cc[2], r->cc[3], r->zeta_off);
+                        r->cc[0], r->cc[1], r->cc[2], r->cc[3], r->zeta_off,
+                        r->vp_x,r->vp_y,r->vp_w,r->vp_h,r->clr_flags);
             else {
                 fprintf(mf, "op%03u DRAW  rt=0x%08X mrt=0x%X/0x%X/0x%X vp=%u,%u,%ux%u fp=0x%08X vs=%d "
                             "n=%u cmask=%X blend=%d bk=0x%X t0=0x%08X t1=0x%08X t2=0x%08X t3=0x%08X"
@@ -3401,12 +3405,12 @@ static void rsx_capture_frame(u32 fi, u32 ndraws, u32 capidx)
                         r->s_tgt, r->s_offa, r->s_offb, r->s_clipw, r->s_cliph, 10);
                 for (int u = 0; u < FP_TEX_UNITS; u++)
                     if (r->tex[u].set)
-                        fprintf(mf, "      t%d off=0x%08X fmt=0x%02X (%s%s) %ux%u remap=0x%04X cube=%d mips=%u addr=0x%08X\n", u,
+                        fprintf(mf, "      t%d off=0x%08X fmt=0x%02X (%s%s) %ux%u remap=0x%04X cube=%d mips=%u addr=0x%08X pitch=%u\n", u,
                                 r->tex[u].off, r->tex[u].fmt,
                                 (r->tex[u].fmt & 0x20) ? "LN" : "SZ",
                                 (r->tex[u].fmt & 0x40) ? ",NR" : "",
                                 r->tex[u].w, r->tex[u].h, r->tex[u].ctrl1 & 0xFFFF,
-                                r->tex[u].cube, r->tex[u].mips, r->tex[u].addr);
+                                r->tex[u].cube, r->tex[u].mips, r->tex[u].addr,r->tex[u].pitch);
             }
         }
         fprintf(mf, "--- step snapshots (state before the indicated op) ---\n");
@@ -6686,19 +6690,19 @@ static ID3D12Resource* texrep_for_slot(int ts, u32* opaque)
 static int s_tex_why;   /* 0 = not cached (new or evicted), 1 = changed bytes */
 #define TEX_HINT_N 4096
 static short s_tex_hint[TEX_HINT_N];   /* slot + 1; 0 = none */
-static int vp_upload_tex_slot_impl(u32 off, u32 w, u32 h, u32 fmt, int cube, u32 mips);
-static int vp_upload_tex_slot(u32 off, u32 w, u32 h, u32 fmt, int cube, u32 mips)
+static int vp_upload_tex_slot_impl(u32 off, u32 w, u32 h, u32 fmt, int cube, u32 mips, u32 source_pitch);
+static int vp_upload_tex_slot(u32 off, u32 w, u32 h, u32 fmt, int cube, u32 mips, u32 source_pitch)
 {
     if (cv_cutscene_diag() && !perf_on()) {
         const double start = perf_now();
-        int result = vp_upload_tex_slot_impl(off, w, h, fmt, cube, mips);
+        int result = vp_upload_tex_slot_impl(off, w, h, fmt, cube, mips, source_pitch);
         cv_cutscene_slow("texture-lookup-upload", start);
         return result;
     }
-    if (!perf_on()) return vp_upload_tex_slot_impl(off, w, h, fmt, cube, mips);
+    if (!perf_on()) return vp_upload_tex_slot_impl(off, w, h, fmt, cube, mips, source_pitch);
     double t0 = perf_now();
     s_tex_why = 0;
-    int r = vp_upload_tex_slot_impl(off, w, h, fmt, cube, mips);
+    int r = vp_upload_tex_slot_impl(off, w, h, fmt, cube, mips, source_pitch);
     double el = perf_now() - t0;
     if (el > 0.002) {
         static int n = 0;
@@ -6709,7 +6713,7 @@ static int vp_upload_tex_slot(u32 off, u32 w, u32 h, u32 fmt, int cube, u32 mips
     }
     return r;
 }
-static int vp_upload_tex_slot_impl(u32 off, u32 w, u32 h, u32 fmt, int cube, u32 mips)
+static int vp_upload_tex_slot_impl(u32 off, u32 w, u32 h, u32 fmt, int cube, u32 mips, u32 source_pitch)
 {
     /* TEX_BUDGET=<n>: cap texture uploads per frame. Off by default -- it was
      * tried against the TDR and does not help, because PERF shows the upload
@@ -6733,7 +6737,9 @@ static int vp_upload_tex_slot_impl(u32 off, u32 w, u32 h, u32 fmt, int cube, u32
      * layout.c owns them so the Metal backend can read a guest texture without
      * re-deriving any of it. Only the DXGI mapping below is ours. */
     rsx_tex_layout tl;
-    rsx_texture_layout(fmt, w, h, &tl);
+    /* Honour cube source pitch; retain the existing 2D upload layout. */
+    source_pitch = cube ? source_pitch : 0;
+    rsx_texture_layout_pitched(fmt, w, h, source_pitch, &tl);
     u32 basef = fmt & 0x9F;              /* still needed for the SRV remap */
     int argb = (tl.fmt == RSX_TEXFMT_R8G8B8A8);
     int dxt  = tl.compressed;
@@ -6775,7 +6781,7 @@ static int vp_upload_tex_slot_impl(u32 off, u32 w, u32 h, u32 fmt, int cube, u32
         if (i < 0 || (k >= 0 && i == hint)) continue;
         VPTexSlot* c = &s_d3d.vp_tex[i];
         if (c->res && c->key == key_off && c->w == w && c->h == h && c->fmt == fmt
-            && c->cube == cube) {
+            && c->cube == cube && c->source_pitch == source_pitch) {
             s_tex_hint[hk] = (short)(i + 1);
             if (c->used) return i;                /* already bound this frame */
             if (c->ui_res && c->ui_scale != s_rs) { slot = i; break; }
@@ -7071,11 +7077,11 @@ static int vp_upload_tex_slot_impl(u32 off, u32 w, u32 h, u32 fmt, int cube, u32
         u32 total = 0;
         for (u32 lw = w, lh = h, l = 0; l < (mips ? mips : 1u); l++) {
             total += dxt ? (((lw + 3) / 4) * (bpp == 8 ? 16u : 8u) * ((lh + 3) / 4))
-                         : (lw * lh * bpp);
+                         : (rsx_cube_row_bytes(lw*bpp,source_pitch,swz) * lh);
             if (lw > 1) lw >>= 1;
             if (lh > 1) lh >>= 1;
         }
-        _face_bytes = (total + 127u) & ~127u;
+        _face_bytes = rsx_cube_stride(total,swz);
     }
     const u32 _nfaces     = cube ? 6u : 1u;
     const u32 _off0 = off; u8* const _map0 = (u8*)mapped;
@@ -7458,7 +7464,7 @@ static int vp_upload_tex_slot_impl(u32 off, u32 w, u32 h, u32 fmt, int cube, u32
 
     off = _off0;   /* the face loop left it on the last cube face */
     t->off = off; t->key = key_off; t->w = w; t->h = h; t->fmt = fmt;
-    t->cube = cube; t->used = 1; t->stamp = s_tex_frame; t->upload_frame = s_tex_frame;
+    t->source_pitch = source_pitch; t->cube = cube; t->used = 1; t->stamp = s_tex_frame; t->upload_frame = s_tex_frame;
     t->nlev = nlev;
     /* Native UI replacement is independent of user texture packs. Keep the
      * guest texture and its key/dimensions intact; only its sampled resource
@@ -7558,12 +7564,24 @@ static void vp_record_cb(u32 slot, int vs_idx, const D3D12DrawRecord* dr)
                 }
         /* rsx_texaddr[u].z bit 8: an edge-to-edge Y16_X16 cube look-up table
          * (rsx_cube). RSX_CUBE_LUT_RAW=1 samples it at texel centres instead. */
-        { static int raw = -1; if (raw < 0) raw = getenv("RSX_CUBE_LUT_RAW") ? 1 : 0;
+        { static int raw = -1;
+          if (raw < 0) raw = getenv("RSX_CUBE_LUT_RAW") ? 1 : 0;
+          /* vp_record_cb runs on the producer: its snapshot is in s_fp_arena.
+           * s_rb.fp_arena belongs to the previous submitted render batch. */
+          const u32 shadow_code=dr?fp_snap_code_in(dr,s_fp_arena):0;
+          const int compensated_shadow=shadow_code==0x59540949u||shadow_code==0x0C121A16u||shadow_code==0x4D26314Du;
           if (dr && !raw)
               for (int _u = 0; _u < FP_TEX_UNITS; _u++)
                   if (dr->tex[_u].set && dr->tex[_u].cube && (dr->tex[_u].fmt & 0x9Fu) == 0x95u &&
-                      dr->tex[_u].w > 1 && dr->tex[_u].w <= 64 && dr->tex[_u].w == dr->tex[_u].h)
+                      dr->tex[_u].w > 1 && dr->tex[_u].w <= 64 && dr->tex[_u].w == dr->tex[_u].h) {
+                      /* With the RGB selector's actual pitch honoured, these
+                       * shaders already scale non-dominant direction lanes by
+                       * 63/64. That maps i/63 LUT values onto texel centres.
+                       * Applying bit-256 remapping again shifts the shadow by
+                       * up to 1.876 atlas texels. Keep other LUT users intact. */
+                      if(compensated_shadow&&_u==1&&dr->tex[_u].w==64)continue;
                       ts[_u*4+2] = (float)((u32)ts[_u*4+2] | 256u);
+                  }
         }
         /* TEX_NOGAMMA_FP=<code hex>:<unit>,...: drop the sRGB decode of those
          * units for the program with that code hash (an experiment: RPCS3
@@ -10447,7 +10465,7 @@ static void prepass_range(u32 from, u32 to)
                     int _cube = dr->tex[_u].cube && (dr_cube_mask(dr) & (1u << _u));
                     int ts = vp_upload_tex_slot(dr->tex[_u].off, dr->tex[_u].w,
                                                 dr->tex[_u].h, dr->tex[_u].fmt,
-                                                _cube, dr->tex[_u].mips);
+                                                _cube, dr->tex[_u].mips, dr->tex[_u].pitch);
                     if (perf_on()) { s_perf_tex += perf_now() - _tt; s_perf_ntex++;
                         s_perf_texbytes += (u64)dr->tex[_u].w * dr->tex[_u].h * 4u; }
                     /* Both forms of the offset are in hand here; the filters
@@ -11442,6 +11460,15 @@ static void render_frame_impl(void)
                 if (dr->is_clear) {
                     D3D12_CPU_DESCRIPTOR_HANDLE rh =
                         (cur_rt >= 0) ? off_rt_rtv(cur_rt) : rtv_handle;
+                    /* CLEAR_SURFACE obeys the guest
+                     * scissor. Each lighter face must preserve the other five.
+                     * Draw viewports do NOT constrain D3D12 Clear* calls. */
+                    RsxClearRect cr;
+                    const u32 cw=cur_rt>=0?s_d3d.off_rt[cur_rt].w:s_d3d.width;
+                    const u32 ch=cur_rt>=0?s_d3d.off_rt[cur_rt].h:s_d3d.height;
+                    if(!rsx_clear_rect(&cr,dr->vp_x,dr->vp_y,
+                        dr->vp_w,dr->vp_h,cw,ch,cur_sc))continue;
+                    const D3D12_RECT clear_rect={cr.left,cr.top,cr.right,cr.bottom};
                     /* Honour the CLEAR_SURFACE mask: a depth-only clear (0x3)
                      * must not wipe the colour target, and vice versa. A
                      * zero mask keeps the old colour-only behaviour. */
@@ -11450,7 +11477,7 @@ static void render_frame_impl(void)
                         if (dr->clr_flags & 1u) zf |= D3D12_CLEAR_FLAG_DEPTH;
                         if (dr->clr_flags & 2u) zf |= D3D12_CLEAR_FLAG_STENCIL;
                         s_d3d.cmd_list->lpVtbl->ClearDepthStencilView(s_d3d.cmd_list, dsv_handle,
-                            zf, dr->clr_depth, dr->clr_stencil, 0, NULL);
+                            zf, dr->clr_depth, dr->clr_stencil, 1, &clear_rect);
                         if (dr->zeta_off) cur_zeta = dr->zeta_off;
                     }
                     if (dr->clr_flags && !(dr->clr_flags & 0xF0u)) continue;
@@ -11465,13 +11492,13 @@ static void render_frame_impl(void)
                       if (cd < 0) { const char* e = getenv("RT_CLEARDBG"); cd = e ? atoi(e) : 0; }
                       if (cd && cur_rt >= 0) {
                           const float mag[4] = {1.0f, 0.0f, 1.0f, 1.0f};
-                          s_d3d.cmd_list->lpVtbl->ClearRenderTargetView(s_d3d.cmd_list, rh, mag, 0, NULL);
+                          s_d3d.cmd_list->lpVtbl->ClearRenderTargetView(s_d3d.cmd_list, rh, mag, 1, &clear_rect);
                       } else
-                          s_d3d.cmd_list->lpVtbl->ClearRenderTargetView(s_d3d.cmd_list, rh, dr->cc, 0, NULL); }
+                          s_d3d.cmd_list->lpVtbl->ClearRenderTargetView(s_d3d.cmd_list, rh, dr->cc, 1, &clear_rect); }
                     for (int _m = 0; _m < 3; _m++)
                         if (cur_m[_m] >= 0) {
                             D3D12_CPU_DESCRIPTOR_HANDLE rhm = off_rt_rtv(cur_m[_m]);
-                            s_d3d.cmd_list->lpVtbl->ClearRenderTargetView(s_d3d.cmd_list, rhm, dr->cc, 0, NULL);
+                            s_d3d.cmd_list->lpVtbl->ClearRenderTargetView(s_d3d.cmd_list, rhm, dr->cc, 1, &clear_rect);
                         }
                     continue;
                 }
@@ -12840,6 +12867,9 @@ static void d3d12_clear(void* ud, u32 flags, u32 color, float depth, u8 stencil)
             if (s_d3d.current_rsx_state) { dr->zeta_off = s_d3d.current_rsx_state->surface_zeta_offset; dr->dtest = s_d3d.current_rsx_state->depth_test_enable; dr->dfunc = s_d3d.current_rsx_state->depth_func; }
             memcpy(dr->cc, cc, sizeof(cc));
             dr->clr_flags = flags; dr->clr_depth = depth; dr->clr_stencil = stencil;
+            const rsx_state* st=s_d3d.current_rsx_state;
+            dr->vp_x=st?st->scissor_x:0;dr->vp_y=st?st->scissor_y:0;
+            dr->vp_w=st?st->scissor_w:rt_w;dr->vp_h=st?st->scissor_h:rt_h;
         }
         return;
     }
@@ -14116,7 +14146,7 @@ static void d3d12_draw_arrays_impl(void* ud, u32 primitive, u32 first, u32 count
                     dr->tex[_u].fmt = s_d3d.cur_texs[_u].fmt;
                     dr->tex[_u].ctrl1 = s_d3d.cur_texs[_u].ctrl1; dr->tex[_u].addr = s_d3d.cur_texs[_u].addr;
                     dr->tex[_u].cube  = s_d3d.cur_texs[_u].cube;
-                    dr->tex[_u].mips  = s_d3d.cur_texs[_u].mips;
+                    dr->tex[_u].mips  = s_d3d.cur_texs[_u].mips; dr->tex[_u].pitch=s_d3d.cur_texs[_u].pitch;
                     dr->tex[_u].set = s_d3d.cur_texs[_u].set;
                     dr->tex_rt[_u]  = -1;
                 }
@@ -14293,7 +14323,7 @@ static void d3d12_draw_arrays_impl(void* ud, u32 primitive, u32 first, u32 count
                 dr->tex[_u].fmt = s_d3d.cur_texs[_u].fmt;
                     dr->tex[_u].ctrl1 = s_d3d.cur_texs[_u].ctrl1; dr->tex[_u].addr = s_d3d.cur_texs[_u].addr;
                     dr->tex[_u].cube  = s_d3d.cur_texs[_u].cube;
-                    dr->tex[_u].mips  = s_d3d.cur_texs[_u].mips;
+                    dr->tex[_u].mips  = s_d3d.cur_texs[_u].mips; dr->tex[_u].pitch=s_d3d.cur_texs[_u].pitch;
                 dr->tex[_u].set = s_d3d.cur_texs[_u].set;
                 dr->tex_rt[_u]  = -1;
             }
@@ -14504,7 +14534,7 @@ static void d3d12_draw_indexed_impl(void* ud, u32 primitive, u32 first, u32 coun
             dr->tex[_u].fmt = s_d3d.cur_texs[_u].fmt;
                     dr->tex[_u].ctrl1 = s_d3d.cur_texs[_u].ctrl1; dr->tex[_u].addr = s_d3d.cur_texs[_u].addr;
                     dr->tex[_u].cube  = s_d3d.cur_texs[_u].cube;
-                    dr->tex[_u].mips  = s_d3d.cur_texs[_u].mips;
+                    dr->tex[_u].mips  = s_d3d.cur_texs[_u].mips; dr->tex[_u].pitch=s_d3d.cur_texs[_u].pitch;
             dr->tex[_u].set = s_d3d.cur_texs[_u].set;
             dr->tex_rt[_u]  = -1;
         }
@@ -14679,6 +14709,7 @@ static void d3d12_bind_texture(void* ud, u32 unit, const rsx_texture_state* tex)
         s_d3d.cur_texs[unit].addr  = tex->address;
         s_d3d.cur_texs[unit].cube  = (tex->format & 4) ? 1 : 0;
         s_d3d.cur_texs[unit].mips  = (tex->format >> 16) & 0xFFFFu;
+        s_d3d.cur_texs[unit].pitch = tex->control3 & 0xFFFFFu;
         if (getenv("TEXFMTDBG")) { static u32 seen[64]; static int ns=0;
             u32 k = (unit<<24) | (((tex->format>>8) & 0xFFu)<<16) | (width & 0xFFFFu);
             int f=0; for (int i=0;i<ns;i++) if (seen[i]==k) f=1;

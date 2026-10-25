@@ -1,3 +1,6 @@
+NEW IN v1.1
+Fixed missing or distorted lighter shadows and incorrect dark lighting blocks.
+
 PACKAGE LAYOUT
 
   Code Veronica.exe       Open this file to play.
@@ -13,7 +16,7 @@ To migrate from the old distribution, close the game and copy your personal
 files (cv_launcher.ini, saves, mods and caches) into bin, keeping the new EXEs
 and DLLs. Keep a backup of the old installation.
 
-RESIDENT EVIL CODE: VERONICA X - PC PORT v1.0
+RESIDENT EVIL CODE: VERONICA X - PC PORT v1.1
 
 An unofficial Windows port of the PS3 version, made by static
 recompilation. Made by Kastiel.
@@ -57,7 +60,7 @@ a) Choose ONE method to prepare your game folder:
 
    OPTION 1 - VERONICA PKG EXTRACTOR (separate, optional download)
    When published, the port Release will provide two downloads:
-     CodeVeronica-PC-v1.0.zip .............. the port for playing
+     Code.Veronica.Recomp.Release.v1.1.zip .............. the port for playing
      Veronica-PKG-Extractor-v1.0.zip ....... the PKG extraction tool
    Releases: https://github.com/kastiellcontato-design/Code-Veronica-Recomp/releases
    Unzip the tool and open VeronicaPKGExtractor.exe.

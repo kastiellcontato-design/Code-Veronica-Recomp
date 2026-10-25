@@ -38,7 +38,7 @@ def main():
             shutil.copy2(obj,dst);copied.append(dst.as_posix())
         (build/'reuse.cmake').write_text('set(CV_LIFTED_OBJECTS\n'+''.join(f' "{p}"\n' for p in copied)+')\n',encoding='utf-8')
         (build/'lift-provenance.json').write_text(json.dumps(provenance,indent=2),encoding='utf-8')
-        run(['cmake','-S',PORT/'distribution','-B',build,'-G','Ninja','-DCMAKE_BUILD_TYPE=Release',
+        run(['cmake','-S',PORT/'distribution','-B',build,'-G','Ninja','-DCMAKE_BUILD_TYPE=Release','-DPython3_EXECUTABLE='+sys.executable,
              '-DCMAKE_C_COMPILER=C:/Program Files/LLVM/bin/clang-cl.exe','-DCMAKE_CXX_COMPILER=C:/Program Files/LLVM/bin/clang-cl.exe',
              '-DCMAKE_LINKER=C:/Program Files/LLVM/bin/lld-link.exe','-DCMAKE_C_FLAGS_RELEASE=/O2 /Ob2',
              '-DCMAKE_CXX_FLAGS_RELEASE=/O2 /Ob2',f'-DCV_REGION={region}',f'-DRECOMP_DIR={(ROOT/("src/recomp"+suffix)).as_posix()}',
@@ -49,6 +49,6 @@ def main():
         print(f'DONE {region}: {exe}',flush=True)
     results['Code Veronica.exe']=sha(OUT/'bin/Code Veronica.exe')
     if kept!={n:sha(PORT/'build-release/bin'/n) for n in names}:raise RuntimeError('Local normal files changed')
-    (OUT/'build-result.json').write_text(json.dumps(dict(distribution=True,version='v1.0',executables=results,normal_preserved=kept),indent=2),encoding='utf-8')
+    (OUT/'build-result.json').write_text(json.dumps(dict(distribution=True,version='v1.1',executables=results,normal_preserved=kept),indent=2),encoding='utf-8')
     print('PASS: all three GUI distribution builds completed; normal local files unchanged',flush=True)
 if __name__=='__main__':main()

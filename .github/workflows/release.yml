@@ -22,6 +22,9 @@ permissions:
 
 jobs:
   package:
+    # This game-port fork publishes its verified player ZIPs separately.
+    # SDK tag bundles belong to upstream; manual dry runs remain available.
+    if: github.event_name == 'workflow_dispatch' || github.repository == 'sp00nznet/ps3recomp'
     name: ${{ matrix.platform }}
     runs-on: ${{ matrix.runs-on }}
     strategy:
@@ -152,7 +155,7 @@ jobs:
   publish:
     name: Attach to release
     needs: package
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') && github.repository == 'sp00nznet/ps3recomp'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4

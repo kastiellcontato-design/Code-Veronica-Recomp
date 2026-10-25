@@ -232,3 +232,13 @@ face (RSX_CUBE_SEAMLESS=1 reverte), filtro 16-bit sem requantizar
 (rsx_packed16_filter.h, RSX_S2D_OFF=1 reverte), captura F12 detalhada e o
 diagnostico F10 (CV_LIGHTER_PROBE, desligado sem a variavel). Sem push.
 Codigo de 60 FPS continua fora do commit.
+
+
+## v1.1: atlas preservado, pitch dos cubos e projecao (25/10/2026)
+
+A correção validada pelo usuário em várias áreas inclui três partes:
+- CLEAR_SURFACE respeita o scissor: limpar uma face do atlas não apaga as outras cinco. O retângulo é limitado ao alvo e escalado para a resolução de renderização.
+- Cubos lineares respeitam TEXTURE_CONTROL3 e não recebem o alinhamento de 128 bytes dos cubos swizzled. As tabelas 1x1 do isqueiro têm pitch de 16 bytes, não 4 nem 128.
+- Os shaders 59540949, 0C121A16 e 4D26314D já compensam a grade 64x64 (63/64). A unidade 1 não recebe novamente a compensação bit 256 descrita na investigação anterior. Outros usos mantêm seu comportamento. A identidade do programa vem da arena atual do produtor durante vp_record_cb.
+
+Testes de regressão com recursos sintéticos: test_shadow_clear.cpp confirma seis faces preservadas em escalas 1 e 3, limites do retângulo e ausência de erros D3D12; test_shadow_cube_stride.cpp verifica as seis faces lineares com pitch 16 e preservação do alinhamento swizzled. Não usam arquivos do jogo. A validação visual foi feita pelo usuário; não houve benchmark de desempenho. Capturas e dumps usados na investigação não fazem parte da distribuição.
