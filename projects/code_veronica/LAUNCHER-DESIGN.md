@@ -65,6 +65,49 @@ youtube=https://www.youtube.com/@kastieloficial
 
 Para distribuir outros links como padrão, alterar `k_social_defaults` em `launcher.cpp`; para a instalação atual, editar apenas a seção acima. Não houve mudança na lógica do jogo.
 
+## Caminho do cache e alinhamento do overlay — 22/10/2026
+
+O launcher resolve a raiz do port pelo executável, sem depender da pasta herdada do editor/atalho. Nos builds de desenvolvimento em build-release[-jp/-us]/bin, reconhece a raiz usada pelo iniciador normal; na distribuição, usa a pasta do executável. A opção Arquivos aponta para shader_cache nessa raiz. Ao iniciar a partida, o launcher usa essa mesma pasta de trabalho para o backend existente, sem alterar o compilador de shaders ou sua estrutura de cache. Nenhum shader existente é movido ou apagado pela correção.
+
+A contagem e o botão de limpeza consideram os arquivos de cache nas subpastas de compilador (.cso, pipelines.bin/list e temporários), ignorando junctions/links e arquivos de outros tipos. A limpeza não foi executada no cache real durante a validação.
+
+Os campos Posição/Tamanho e Disposição/Fundo agora compartilham a largura dos rótulos em cada coluna. As bordas esquerdas e direitas dos dropdowns coincidem entre as duas linhas, com medidas adaptadas ao idioma. Não muda valores salvos ou funcionamento do overlay.
+
+## Reversão da otimização de fluidez — 22/10/2026
+
+A pedido do usuário, removida integralmente a última otimização de verificação/fluidez após relato de lentidão e stutters. Restaurados launcher.cpp, helper de cache, testes e os três executáveis exatamente do estado anterior a essa otimização. Mantidos o caminho do cache, a contagem recursiva, o alinhamento Tamanho/Fundo e o atualizador. Nenhum cache real, save ou configuração foi apagado. O processo de jogo já aberto deve ser reiniciado pelo usuário para carregar os executáveis restaurados. Não houve teste de gameplay nem confirmação da causa da lentidão nesta reversão.
+
+## Avançado sem varredura automática — 22/10/2026
+
+Depois da reversão da otimização anterior, foi aplicada uma correção limitada ao desenho da aba Avançado: removida a contagem automática de arquivos/tamanho do cache. Exibe shader_cache, o caminho existente e os botões Abrir pasta/Limpar. Não cria threads nem tarefas de verificação. A enumeração do cache só acontece na ação explícita de limpeza, que permanece desabilitada durante a partida.
+
+O bloco de log também deixa de consultar o tamanho/forçar flush de stdout e stderr a cada pintura. Mostra o caminho do log; ver, copiar e salvar continuam como ações explícitas. Nenhuma mudança em start_game, pasta de trabalho, validação das versões, configurações salvas, FPS, FSR, renderizador ou runtime. O cache real não foi movido, apagado ou recontado durante esta correção.
+
+## SRT: posição livre e inventário independente — 22/10/2026
+
+A aba SRT ganhou as opções **Mover livremente** e **Separar inventário**. Separar ativa o modo livre e a exibição do inventário. Na prévia do launcher, cada painel pode ser arrastado para uma posição diferente; vida/nome/tempo/estatísticas/inimigos continuam no painel principal. O inventário tem seu próprio controle de tamanho de 50 a 200%, sem alterar o tamanho do painel principal. Restaurar posições retorna vida ao canto superior esquerdo e inventário ao superior direito. Os campos antigos de canto e posição ao lado/embaixo ficam desabilitados enquanto são substituídos pelo modo livre.
+
+As opções vêm desligadas. Desligar Mover livremente também desliga a separação e restaura o comportamento anterior, preservando as coordenadas e o tamanho independente para uso posterior. O teste de regressão compara os quads do layout padrão byte a byte após desligar o modo livre.
+
+Persistência no mesmo cv_launcher.ini, seção [srt]: mover_livremente, separar_inventario, tamanho_inventario, painel_x, painel_y, inventario_x, inventario_y. As coordenadas vão de 0 a 1000 sobre o espaço disponível: a posição se adapta à resolução e ao tamanho do próprio painel, sem sair da área do jogo. O tamanho principal continua usando a chave tamanho existente. Novos textos em launcher_srt_layout_i18n.h cobrem os 13 idiomas do launcher.
+
+No modo Em janela separada, cada painel separado usa uma janela própria, arrastável sem ativar a janela ou tirar o foco da partida. A prévia também define a posição inicial sobre a área do jogo. Arrastar diretamente uma janela guarda uma posição de desktop em janela_x/janela_y (painel principal) ou janela_inventario_x/janela_inventario_y (inventário). Um novo arrasto na prévia ou Restaurar posições limpa essas posições manuais, aplicando as coordenadas da prévia. Cada janela preserva seu tamanho e a alternância entre modos esconde as janelas que deixaram de ser usadas.
+
+cv_srt.cpp rasteriza cada painel em sua própria resolução final, preservando a nitidez dos textos. A cache de layout continua sendo reconstruída somente quando há mudanças no estado/tamanho/configuração. Não foi alterado código de gameplay, interpolação de 60 FPS, FSR, compilação/cache de shaders, inventário real ou saves.
+
+Validação: testes SRT passaram em JP/US/EU, incluindo escalas independentes, coordenadas fora da faixa, limites de tela em 480p/720p/4K e restauração exata do layout padrão. Teste de integração de janelas, executado em pasta isolada com memória sintética e viewport oculta, validou duas janelas, tamanhos independentes, aplicação/reset das posições da prévia e alternância entre separado/junto/sobre o jogo/desligado. Inspeção visual real da aba SRT confirmou ativação, arrasto do inventário sem mover a vida, ajuste independente de tamanho e gravação das preferências em perfil isolado. Nenhuma partida ou save real foi aberto. Logs, backups e prévias em work/srt-free-layout no workspace do Codex.
+
+## SRT: arrasto direto sobre a tela do jogo — 22/10/2026
+
+Com Mover livremente ativo e o SRT exibido sobre o jogo, agora é possível clicar e segurar o botão esquerdo em qualquer parte de um painel para arrastá-lo diretamente. Com Separar inventário ativo, cada painel é movido de forma independente; em sobreposição, o inventário, que é desenhado por último, recebe o clique. Sem separação, o bloco inteiro é movido. Desligar o modo livre mantém o posicionamento antigo por cantos.
+
+A leitura do mouse ocorre apenas no caminho do SRT em modo livre e com a janela do jogo em primeiro plano. As coordenadas do cliente são convertidas para os pixels do back buffer. O arrasto fica limitado à área disponível; perder o foco encerra o movimento sem pular para a posição do mouse em outro aplicativo. Painéis ocultos/desligados não recebem arrasto. Quando o modo sem bordas esconde o cursor do Windows, o próprio SRT desenha uma pequena seta enquanto a movimentação livre está ativa.
+
+O movimento apenas translada os quads/imagens/efeitos já armazenados, incluindo o ECG: não rasteriza textos nem grava arquivos a cada movimento. Ao soltar o botão, o SRT atualiza as coordenadas normalizadas, notifica a thread do launcher e esta salva as quatro chaves de posição existentes no cv_launcher.ini. A prévia passa a refletir a posição utilizada no jogo. As instruções foram atualizadas nos 13 idiomas.
+
+Arquivos desta continuação: cv_srt.cpp, cv_srt.h, launcher.cpp, launcher_srt_layout_i18n.h e tests/test_srt.cpp. Nenhuma alteração no backend D3D12, FPS/interpolação, FSR, shaders, gameplay ou saves. Testes de mouse por entrada sintética e regressões gerais passaram em JP/US/EU: arrasto independente, notificação ao soltar, preservação das posições, perda de foco, sobreposição, fundos totalmente transparentes, limites de tela, todos os painéis desligados e modos normal/janela separada. Os três executáveis normais foram recompilados. Não foi aberta partida real nem movido o mouse real para testar o jogo. Backups, diff e logs desta continuação: work/srt-game-drag no workspace do Codex.
+
+
 ### RECOMP SETTINGS: áudio e Battle Game (23/10/2026)
 
 - Abas Gráficos, Áudio e Jogabilidade no menu OPTION → RECOMP SETTINGS. A aba Gráficos preserva a aparência/preview e todos os controles existentes.

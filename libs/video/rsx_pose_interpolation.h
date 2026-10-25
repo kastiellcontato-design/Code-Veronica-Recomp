@@ -139,6 +139,7 @@ typedef struct {
     uint64_t* weld_hashes; /* initialized once per upload during each weld */
     uint32_t validated_vertices,reused_validations;
     int vertex_validation_cache_disabled;
+    int shift_check_disabled,partial_weld_veto_disabled; /* comparison switches; 0 = protections on */
     int have_cur,have_prev,reason;
     double last_at; float alpha;
     uint32_t matched,moving,ambiguous,capped,coherent,coherence_conflicts,seams,seam_conflicts,seam_components,seam_veto_vertices;
@@ -674,6 +675,22 @@ static inline int rsx_pose_history_compare(RsxPoseHistory* h,uint32_t current,ui
     return h->position_compare_scalar?rsx_pose_compare_scalar(xyz,old,count,changed):
         rsx_pose_compare_vectors(xyz,old,count,changed);
 }
+/* A small part cannot travel many times its own size in one 30 Hz step.
+ * Dozens of identical parts can share a key; one that just entered view has
+ * no real predecessor, and the nearest unused twin may be far away. Matching
+ * it put the part halfway between the two, and the weld then dragged its
+ * neighbours into a long sliver (JP, Claire's close-up: a 0.1-unit part
+ * matched 4.2 units away). Large parts and plausible moves are unchanged. */
+static inline int rsx_pose_implausible_shift(const float* xyz,const float* old,uint32_t count) {
+    float lo[3]={xyz[0],xyz[1],xyz[2]},hi[3]={xyz[0],xyz[1],xyz[2]};double shift=0,diag=0;
+    for(uint32_t k=0;k<count;k++)for(int a=0;a<3;a++) {
+        float x=xyz[(size_t)k*3+a],d=x-old[(size_t)k*3+a];
+        if(x<lo[a])lo[a]=x;if(x>hi[a])hi[a]=x;shift+=(double)d*d;
+    }
+    for(int a=0;a<3;a++)diag+=(double)(hi[a]-lo[a])*(hi[a]-lo[a]);
+    shift/=count;
+    return shift>1.0&&shift>64.0*diag;
+}
 static inline int rsx_pose_prepare(RsxPoseHistory* h,const RsxPoseFrame* f,double now) {
     RsxPoseSearchProfile* profile=h->search_profile;
     double profile_mark=profile?profile->clock():0;
@@ -767,6 +784,7 @@ static inline int rsx_pose_prepare(RsxPoseHistory* h,const RsxPoseFrame* f,doubl
         const float *prevxyz=s->xyz+(size_t)a->first*3,*prevcam=s->cameras+(size_t)best*32;
         int changed=memcmp(cam,prevcam,32*sizeof(float))!=0,jump=0;
         jump=rsx_pose_history_compare(h,out->sample_ids[j],s->sample_ids[best],xyz,prevxyz,b->count,&changed);
+        if(!jump&&changed&&!h->shift_check_disabled)jump=rsx_pose_implausible_shift(xyz,prevxyz,b->count);
         if(jump) {
             memcpy(old,xyz,(size_t)b->count*3*sizeof(float));memcpy(oldcam,cam,32*sizeof(float));
             rsx_pose_profile_section(profile,RSX_POSE_P_RESOLVE,&profile_mark);
@@ -1125,6 +1143,30 @@ static inline int rsx_pose_weld_recipe(RsxPoseHistory* h,const RsxPoseFrame* f,f
         if(unchanged)continue;
         if(!*state){memcpy(output+(size_t)root*3,output+(size_t)v*3,3*sizeof(float));if(recipes)recipes[root]=recipes[v];*state=1;}
         else if(!rsx_pose_floats_equal(output+(size_t)root*3,output+(size_t)v*3,3)){*state=3;h->seam_conflicts++;}
+    }
+    /* A draw without its own interpolation (source -1) that the weld would
+     * pull at only SOME of its points, farther than its own size, tears into
+     * a sliver: treat those points as a disagreement, so the spread below
+     * keeps the whole connected surface current. Small seam pulls remain. */
+    if(!h->partial_weld_veto_disabled)for(uint32_t i=0;i<f->nd;i++) {
+        if(h->vertex_sources[i]!=-1)continue;
+        const RsxPoseDraw* d=f->draws+i;if(d->count<3)continue;
+        float lo[3],hi[3],pull=0;uint32_t pulled=0,still=0;
+        memcpy(lo,f->vertices[d->first].xyz,12);memcpy(hi,lo,12);
+        for(uint32_t k=0;k<d->count;k++) {
+            uint32_t v=d->first+k,owner=h->vertex_owners[v];const float* x=f->vertices[v].xyz;
+            for(int a=0;a<3;a++){if(x[a]<lo[a])lo[a]=x[a];if(x[a]>hi[a])hi[a]=x[a];}
+            const float* to=owner?output+(size_t)(owner-1)*3:x;
+            if(!owner||h->vertex_next[owner-1]!=1||rsx_pose_floats_equal(to,x,3)){still++;continue;}
+            float dist=0;for(int a=0;a<3;a++)dist+=(to[a]-x[a])*(to[a]-x[a]);
+            if(dist>pull)pull=dist;pulled++;
+        }
+        float size=0;for(int a=0;a<3;a++)size+=(hi[a]-lo[a])*(hi[a]-lo[a]);
+        if(!pulled||!still||pull<=size)continue;
+        for(uint32_t k=0;k<d->count;k++) {
+            uint32_t owner=h->vertex_owners[d->first+k];
+            if(owner&&h->vertex_next[owner-1]==1){h->vertex_next[owner-1]=3;h->seam_conflicts++;}
+        }
     }
     /* A point-only snap mixes current and intermediate vertices within one
      * triangle. Replay of JP F9 frame_033 stretched an edge 24.4x this way.

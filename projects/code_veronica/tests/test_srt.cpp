@@ -7,6 +7,8 @@
 #include "../cv_srt_enemy_hold.h"
 #include "../cv_version.h"
 #include "../cv_srt_text.h"
+#include "../cv_srt_layout.h"
+#include "../launcher_srt_layout_i18n.h"
 #include "../cv_srt_icons.h"
 #include "../cv_srt_i18n.h"
 #include <filesystem>
@@ -146,7 +148,54 @@ static void test_item_wrapping() {
     }
     GdiplusShutdown(token);
 }
+
+// Run from an isolated executable folder: only this process's SRT windows
+// are inspected. Uses synthetic guest memory, never starts the game.
+static int test_split_windows() {
+    game();
+    WNDCLASSW wc{};wc.lpfnWndProc=DefWindowProcW;wc.hInstance=GetModuleHandleW(nullptr);wc.lpszClassName=L"ps3recomp_d3d12";
+    RegisterClassW(&wc);HWND game_area=CreateWindowW(wc.lpszClassName,L"Synthetic SRT viewport",WS_POPUP,100,100,1600,900,nullptr,nullptr,wc.hInstance,nullptr);
+    assert(game_area); // hidden, supplies only client-area coordinates
+    _putenv_s("SRT_MAIN_X","0");_putenv_s("SRT_MAIN_Y","0");_putenv_s("SRT_INV_X","1000");_putenv_s("SRT_INV_Y","1000");
+    _putenv_s("SRT_RESET_WINDOWS","1");
+    _putenv_s("SRT","1");_putenv_s("SRT_WINDOW","1");_putenv_s("SRT_FREE","1");_putenv_s("SRT_SEPARATE","1");
+    _putenv_s("SRT_INVENTORY","1");_putenv_s("SRT_SCALE","85");_putenv_s("SRT_INVENTORY_SCALE","100");
+    _putenv_s("SRT_BOSS_BAR","panel");cv_srt_configure_env();
+    auto settle=[](){for(int i=0;i<10;i++){uint32_t n;cv_srt_quads(1600,900,&n);Sleep(40);}};
+    auto windows=[](){
+        std::vector<HWND> out;
+        EnumWindows([](HWND h,LPARAM p)->BOOL {
+            DWORD pid;GetWindowThreadProcessId(h,&pid);wchar_t cls[64];GetClassNameW(h,cls,64);
+            if(pid==GetCurrentProcessId()&&!wcscmp(cls,L"cv_srt_window")&&IsWindowVisible(h))reinterpret_cast<std::vector<HWND>*>(p)->push_back(h);
+            return TRUE;
+        },reinterpret_cast<LPARAM>(&out));return out;
+    };
+    settle();auto shown=windows();assert(shown.size()==2);
+    HWND main=nullptr,inventory=nullptr;
+    for(auto w:shown){wchar_t title[100];GetWindowTextW(w,title,100);if(wcsstr(title,L"Inventory"))inventory=w;else main=w;}
+    assert(main&&inventory);RECT m1,i1,m2,i2;GetWindowRect(main,&m1);GetWindowRect(inventory,&i1);
+    assert(m1.left==100&&m1.top==100&&i1.right==1700&&i1.bottom==1000);
+    _putenv_s("SRT_RESET_WINDOWS","");
+    _putenv_s("SRT_INVENTORY_SCALE","150");cv_srt_configure_env();settle();
+    assert(windows().size()==2);GetWindowRect(main,&m2);GetWindowRect(inventory,&i2);
+    assert(m1.right-m1.left==m2.right-m2.left&&m1.bottom-m1.top==m2.bottom-m2.top);
+    assert(i2.right-i2.left>i1.right-i1.left&&i2.bottom-i2.top>i1.bottom-i1.top);
+    _putenv_s("SRT_MAIN_X","1000");_putenv_s("SRT_MAIN_Y","1000");_putenv_s("SRT_INV_X","0");_putenv_s("SRT_INV_Y","0");
+    _putenv_s("SRT_RESET_WINDOWS","1");cv_srt_configure_env();_putenv_s("SRT_RESET_WINDOWS","");settle();
+    GetWindowRect(main,&m2);GetWindowRect(inventory,&i2);
+    assert(m2.right==1700&&m2.bottom==1000&&i2.left==100&&i2.top==100);
+    _putenv_s("SRT_SEPARATE","0");cv_srt_configure_env();settle();assert(windows().size()==1);
+    _putenv_s("SRT_SEPARATE","1");cv_srt_configure_env();settle();assert(windows().size()==2);
+    _putenv_s("SRT_WINDOW","0");cv_srt_configure_env();settle();assert(windows().empty());
+    _putenv_s("SRT_WINDOW","1");cv_srt_configure_env();settle();assert(windows().size()==2);
+    _putenv_s("SRT","0");cv_srt_configure_env();settle();assert(windows().empty());
+    DestroyWindow(game_area);
+    FILE* passed=std::fopen("srt-window-smoke.passed","w");assert(passed);std::fputs("PASS: independent windows, size, launcher positions and reset, all display modes\n",passed);std::fclose(passed);
+    std::printf("[SRT-WINDOWS %s] PASS: two independent windows, separate sizes, toggling combined/split/overlay/off, synthetic memory only\n",CV_TITLE_ID);
+    return 0;
+}
 int main(int argc,char** argv) {
+    if(argc>1&&!strcmp(argv[1],"--window-smoke"))return test_split_windows();
     test_enemy_absence();
     test_item_wrapping();
     namespace loc=cv_srt_i18n;
@@ -512,6 +561,118 @@ int main(int argc,char** argv) {
         state.equipped=2;
     }
     state=preview_saved;_putenv_s("SRT_LANGUAGE","pt-BR");_putenv_s("SRT_TEXT",pt_labels.c_str());cv_srt_configure_env();
+
+    // Free positions use available space, so changing resolution or the size
+    // of one panel cannot push it off screen or resize the other panel.
+    {
+        assert(cv_srt_layout::position(1600,304,0)==0);
+        assert(cv_srt_layout::position(1600,304,1000)==1296);
+        assert(cv_srt_layout::normalized(648,1600,304)==500);
+        assert(cv_srt_layout::normalized(-100,1600,304)==0);
+        assert(cv_srt_layout::normalized(2000,1600,304)==1000);
+        assert(cv_srt_layout::normalized(20,100,200)==0);
+        const auto saved=state;state.condition=SRT_DEAD;state.hp=0;
+        _putenv_s("SRT_FREE","0");_putenv_s("SRT_SEPARATE","0");cv_srt_configure_env();
+        auto q=cv_srt_design(&state,1600,900,&count);
+        const std::vector<rsx_ui_quad> legacy(q,q+count);
+        _putenv_s("SRT_FREE","1");_putenv_s("SRT_SEPARATE","1");_putenv_s("SRT_INVENTORY","1");
+        _putenv_s("SRT_MAIN_X","0");_putenv_s("SRT_MAIN_Y","0");
+        _putenv_s("SRT_INV_X","1000");_putenv_s("SRT_INV_Y","1000");
+        _putenv_s("SRT_SCALE","75");_putenv_s("SRT_INVENTORY_SCALE","135");cv_srt_configure_env();
+        struct Bounds {float l=1e9f,t=1e9f,r=0,b=0;};
+        auto bounds=[&](bool inventory) {
+            Bounds b;const auto* out=cv_srt_design(&state,1600,900,&count);
+            for(uint32_t i=0;i<count;i++)if((out[i].x>=800)==inventory){
+                b.l=std::min(b.l,out[i].x);b.t=std::min(b.t,out[i].y);
+                b.r=std::max(b.r,out[i].x+out[i].w);b.b=std::max(b.b,out[i].y+out[i].h);
+            }
+            assert(b.l<b.r&&b.t<b.b);return b;
+        };
+        const auto m1=bounds(false),i1=bounds(true);
+        assert(m1.l==0&&m1.t==0&&i1.r==1600&&i1.b==900);
+        _putenv_s("SRT_INVENTORY_SCALE","80");cv_srt_configure_env();
+        const auto m2=bounds(false),i2=bounds(true);
+        assert(m1.l==m2.l&&m1.r==m2.r&&m1.t==m2.t&&m1.b==m2.b);
+        assert(i2.r-i2.l<i1.r-i1.l&&i2.b-i2.t<i1.b-i1.t);
+        _putenv_s("SRT_SCALE","125");cv_srt_configure_env();
+        const auto m3=bounds(false),i3=bounds(true);
+        assert(m3.r-m3.l>m2.r-m2.l&&i2.l==i3.l&&i2.t==i3.t&&i2.r==i3.r&&i2.b==i3.b);
+        if(argc>1){char file[1024];std::snprintf(file,sizeof file,"%s/srt-%s-free-split.png",argv[1],CV_TITLE_ID);q=cv_srt_design(&state,1600,900,&count);export_png(file,q,count,1600,900);}
+        _putenv_s("SRT_SCALE","200");_putenv_s("SRT_INVENTORY_SCALE","200");
+        for(const char* pos:{"0","500","1000","-999","9999"}) {
+            _putenv_s("SRT_MAIN_X",pos);_putenv_s("SRT_MAIN_Y",pos);_putenv_s("SRT_INV_X",pos);_putenv_s("SRT_INV_Y",pos);cv_srt_configure_env();
+            for(auto size:std::vector<std::pair<uint32_t,uint32_t>>{{640,480},{1280,720},{3840,2160}}) {
+                q=cv_srt_design(&state,size.first,size.second,&count);assert(q&&count<131072);peak=std::max(peak,count);
+                for(uint32_t i=0;i<count;i++)assert(q[i].x>=0&&q[i].y>=0&&q[i].x+q[i].w<=size.first&&q[i].y+q[i].h<=size.second);
+            }
+        }
+        // Disabling the option restores the original quads exactly, even if
+        // the saved separate-layout preferences are still present.
+        _putenv_s("SRT_FREE","0");_putenv_s("SRT_SCALE","100");cv_srt_configure_env();
+        q=cv_srt_design(&state,1600,900,&count);
+        assert(count==legacy.size()&&!std::memcmp(q,legacy.data(),count*sizeof(*q)));
+        _putenv_s("SRT_SEPARATE","0");_putenv_s("SRT_INVENTORY_SCALE","100");
+        state=saved;cv_srt_configure_env();
+        std::printf("[SRT-LAYOUT %s] PASS: independent sizes, free positions, bounds at 480p/720p/4K, exact legacy restore, 13 launcher translations\n",CV_TITLE_ID);
+    }
+
+    // Direct in-game mouse input, exercised without touching the real mouse,
+    // game window or guest memory. The production polling path calls this API.
+    {
+        const auto saved=state;state.condition=SRT_DEAD;state.hp=0;
+        _putenv_s("SRT_FREE","1");_putenv_s("SRT_SEPARATE","1");_putenv_s("SRT_WINDOW","0");_putenv_s("SRT_INVENTORY","1");
+        _putenv_s("SRT_MAIN_X","0");_putenv_s("SRT_MAIN_Y","0");_putenv_s("SRT_INV_X","1000");_putenv_s("SRT_INV_Y","0");
+        _putenv_s("SRT_SCALE","100");_putenv_s("SRT_INVENTORY_SCALE","100");cv_srt_configure_env();
+        static int notified=0;notified=0;cv_srt_set_position_notify([](){notified++;});
+        auto q=cv_srt_design(&state,1600,900,&count);
+        auto main_quads=[&](){
+            std::vector<rsx_ui_quad> out;const auto* q=cv_srt_design(&state,1600,900,&count);
+            for(uint32_t i=0;i<count;i++)if(q[i].x<500)out.push_back(q[i]);return out;
+        };
+        const auto main_before=main_quads();int mx,my,ix,iy;
+        assert(!cv_srt_take_positions(&mx,&my,&ix,&iy));
+        cv_srt_pointer(1500,40,1,1);cv_srt_pointer(1250,400,1,1);
+        assert(notified==0&&!cv_srt_take_positions(&mx,&my,&ix,&iy));
+        const auto main_after=main_quads();assert(main_before.size()==main_after.size()&&!std::memcmp(main_before.data(),main_after.data(),main_before.size()*sizeof(rsx_ui_quad)));
+        cv_srt_pointer(1250,400,0,1);assert(notified==1);
+        assert(cv_srt_take_positions(&mx,&my,&ix,&iy)&&mx==0&&my==0&&ix>0&&ix<1000&&iy>0);
+        assert(std::atoi(std::getenv("SRT_INV_X"))==ix&&std::atoi(std::getenv("SRT_INV_Y"))==iy);
+        assert(!cv_srt_take_positions(&mx,&my,&ix,&iy));
+        // Dragging health updates only health's saved coordinates. Losing
+        // focus ends the drag without jumping to the pointer in another app.
+        const int inventory_x=ix,inventory_y=iy;
+        cv_srt_pointer(20,20,1,1);cv_srt_pointer(170,240,1,1);cv_srt_pointer(-999,-999,1,0);
+        assert(notified==2&&cv_srt_take_positions(&mx,&my,&ix,&iy));
+        assert(mx>0&&my>0&&ix==inventory_x&&iy==inventory_y);cv_srt_pointer(0,0,0,0);
+        // Inventory wins the click when the panels overlap, including fully
+        // transparent backgrounds without borders: hit bounds are the full panel.
+        _putenv_s("SRT_MAIN_X","0");_putenv_s("SRT_MAIN_Y","0");_putenv_s("SRT_INV_X","0");_putenv_s("SRT_INV_Y","0");
+        _putenv_s("SRT_OPACITY","0");_putenv_s("SRT_BORDER","0");cv_srt_configure_env();cv_srt_design(&state,1600,900,&count);
+        cv_srt_pointer(2,2,1,1);cv_srt_pointer(1500,850,1,1);cv_srt_pointer(1500,850,0,1);
+        assert(notified==3&&cv_srt_take_positions(&mx,&my,&ix,&iy)&&mx==0&&my==0&&ix==1000&&iy==1000);
+        state.seconds++;q=cv_srt_design(&state,1600,900,&count); // snapshot rebuild keeps the dragged positions
+        for(uint32_t i=0;i<count;i++)assert(q[i].x>=0&&q[i].y>=0&&q[i].x+q[i].w<=1600&&q[i].y+q[i].h<=900);
+        if(argc>1){char file[1024];std::snprintf(file,sizeof file,"%s/srt-%s-dragged-in-game.png",argv[1],CV_TITLE_ID);export_png(file,q,count,1600,900);}
+        // Clicking empty space and moving over a panel cannot pick it up.
+        cv_srt_pointer(700,100,1,1);cv_srt_pointer(50,50,1,1);cv_srt_pointer(50,50,0,1);
+        assert(notified==3&&!cv_srt_take_positions(&mx,&my,&ix,&iy));
+        // With every panel part off, the pointer path must not reuse the
+        // previous frame's quads or allow dragging an invisible old panel.
+        const char* masks[]={"SRT_NAME","SRT_HEALTH","SRT_TIME","SRT_STATS","SRT_INVENTORY","SRT_ENEMIES"};
+        std::vector<std::string> values;
+        for(auto key:masks){const char* value=std::getenv(key);values.push_back(value?value:"");_putenv_s(key,"0");}
+        cv_srt_configure_env();assert(!cv_srt_quads(1600,900,&count)&&count==0);
+        cv_srt_pointer(20,20,1,1);cv_srt_pointer(170,240,0,1);assert(notified==3&&!cv_srt_take_positions(&mx,&my,&ix,&iy));
+        for(size_t i=0;i<values.size();i++)_putenv_s(masks[i],values[i].c_str());
+        _putenv_s("SRT_FREE","0");cv_srt_configure_env();cv_srt_design(&state,1600,900,&count);
+        cv_srt_pointer(20,20,1,1);cv_srt_pointer(170,240,0,1);assert(notified==3&&!cv_srt_take_positions(&mx,&my,&ix,&iy));
+        _putenv_s("SRT_FREE","1");_putenv_s("SRT_WINDOW","1");cv_srt_configure_env();cv_srt_design(&state,1600,900,&count);
+        cv_srt_pointer(20,20,1,1);cv_srt_pointer(170,240,0,1);assert(notified==3&&!cv_srt_take_positions(&mx,&my,&ix,&iy));
+        cv_srt_set_position_notify(nullptr);cv_srt_pointer(0,0,0,0);
+        _putenv_s("SRT_FREE","0");_putenv_s("SRT_SEPARATE","0");_putenv_s("SRT_WINDOW","0");_putenv_s("SRT_OPACITY","70");_putenv_s("SRT_BORDER","1");
+        state=saved;cv_srt_configure_env();
+        std::printf("[SRT-MOUSE %s] PASS: independent drag, release notification, positions, focus loss, overlap priority, transparent bounds, clamping, normal/window modes unchanged\n",CV_TITLE_ID);
+    }
     const auto* animated=cv_srt_design(&state,1280,720,&count);
     const auto initial=std::vector<rsx_ui_quad>(animated,animated+count);const uint32_t original_count=count;
     Sleep(65);animated=cv_srt_design(&state,1280,720,&count);

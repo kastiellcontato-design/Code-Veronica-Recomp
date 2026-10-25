@@ -18,6 +18,11 @@ typedef struct {
 /* No writes to guest memory. Called by the render/frame-clock thread only. */
 int cv_srt_sample(cv_srt_state* state);
 void cv_srt_configure_env(void);
+/* Pointer coordinates are back-buffer pixels. Render thread only; a release
+ * notifies the launcher thread, which takes and saves the normalized positions. */
+void cv_srt_pointer(float x,float y,int left_down,int active);
+void cv_srt_set_position_notify(void (*notify)(void));
+int cv_srt_take_positions(int* main_x,int* main_y,int* inventory_x,int* inventory_y);
 const rsx_ui_quad* cv_srt_quads(uint32_t width,uint32_t height,uint32_t* count);
 /* Native layout, also used by the isolated design/regression test. */
 const rsx_ui_quad* cv_srt_design(const cv_srt_state* state,uint32_t width,uint32_t height,uint32_t* count);

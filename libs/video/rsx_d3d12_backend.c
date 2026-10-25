@@ -61,6 +61,8 @@ static u32 s_fsr_depth_at=0xFFFFFFFFu,s_fsr_depth_w,s_fsr_depth_h;
 
 #include "rsx_getenv_cache.h"   /* getenv() per call site, cached: per-draw paths */
 static int s_vsync = 0, s_tearing = 0;   /* present mode, see the swap chain setup */
+static int s_fg_chain;                   /* AMD frame-generation swapchain: it paces itself, VSync ignored */
+static volatile LONG s_vsync_live = -1;  /* rsx_d3d12_set_vsync, -1 = keep VSYNC */
 #include "../../runtime/platform/host_thread_name.h"
 
 /* Link libraries */
@@ -1128,6 +1130,10 @@ static void pose_init_recording(void) {
     {const char* cap=getenv("CV_POSE_CAP_PRECHECK");s_pose_history.cap_precheck_disabled=cap&&!strcmp(cap,"0");}
     {const char* e=getenv("CV_POSE_CONFLICT_FOLLOW");s_pose_conflict_follow=!(e&&!strcmp(e,"0"));
      fprintf(stderr,"[POSE-CONFLICT] v4 follow=%s; a conflicted draw half pulled by a seam moves whole\n",s_pose_conflict_follow?"on":"off (CV_POSE_CONFLICT_FOLLOW=0)");}
+    {const char* shift=getenv("CV_POSE_SHIFT_CHECK"),*veto=getenv("CV_POSE_PARTIAL_WELD_VETO");
+     s_pose_history.shift_check_disabled=shift&&!strcmp(shift,"0");s_pose_history.partial_weld_veto_disabled=veto&&!strcmp(veto,"0");
+     fprintf(stderr,"[POSE-SLIVER] v1 shift_check=%s partial_weld_veto=%s; a tiny part matched far away no longer tears its neighbours\n",
+        s_pose_history.shift_check_disabled?"off":"on",s_pose_history.partial_weld_veto_disabled?"off":"on");}
     {const char* off=getenv("CV_POSE_REPEAT_WORK");s_pose_history.repeat_work_disabled=off&&!strcmp(off,"0");}
     {const char* scalar=getenv("CV_POSE_COMPARE_SCALAR");s_pose_history.position_compare_scalar=scalar&&!strcmp(scalar,"1");}
     {const char* stream=getenv("CV_POSE_STREAM_VECTORS");s_pose_history.stream_vectors=!stream||strcmp(stream,"0");}
@@ -1746,6 +1752,24 @@ static HWND create_window(u32 width, u32 height, const char* title)
 }
 
 /* Live options for a title's launcher; safe from any thread. */
+/* VSync: each present waits for the next refresh (VSYNC=1 at start, or
+ * rsx_d3d12_set_vsync live). The launcher offers it in 60 FPS mode only and
+ * never with frame generation, whose swapchain paces itself. Always every
+ * refresh: on a 120 Hz display, syncing every 2nd refresh blocked presents
+ * and split the 60 FPS cadence into ~10/30 ms pairs (JP cutscene, p90 29 ms
+ * against 20 ms every refresh and 22 ms unsynced). VSYNC_INTERVAL=n forces
+ * an interval for such comparisons. */
+void rsx_d3d12_set_vsync(int on) { InterlockedExchange(&s_vsync_live, on ? 1 : 0); }
+static UINT present_interval(void)
+{
+    static int forced = -1;
+    if (forced < 0) { const char* e = getenv("VSYNC_INTERVAL"); forced = e ? atoi(e) : 0; if (forced < 0 || forced > 4) forced = 0; }
+    if (s_fg_chain) return 0;
+    if (forced) return (UINT)forced;
+    const LONG live = s_vsync_live;
+    return (live >= 0 ? live : s_vsync) ? 1u : 0u;
+}
+
 void rsx_d3d12_set_window_mode(int mode)
 {
     if (s_d3d.hwnd) PostMessageA(s_d3d.hwnd, WM_RSX_SET_MODE, (WPARAM)mode, 0);
@@ -1893,7 +1917,9 @@ static int init_d3d12(u32 width, u32 height)
      * system supports it). */
     { const char* e = getenv("VSYNC");
       s_vsync = (e && *e && *e != '0') ? 1 : 0; }
-    if (!s_vsync) {
+    /* Allow tearing even with VSync on, so the launcher can switch VSync
+     * off live; a synced present (interval 1+) never tears anyway. */
+    {
         IDXGIFactory5* f5 = NULL; BOOL tear = FALSE;
         if (SUCCEEDED(factory->lpVtbl->QueryInterface(factory, &IID_IDXGIFactory5, (void**)&f5))) {
             if (FAILED(f5->lpVtbl->CheckFeatureSupport(f5, DXGI_FEATURE_PRESENT_ALLOW_TEARING,
@@ -1904,10 +1930,10 @@ static int init_d3d12(u32 width, u32 height)
         if (s_tearing) sc_desc.Flags |= DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING;
     }
     printf("[D3D12] present: vsync %s%s%c", s_vsync ? "ON (VSYNC=1)" : "OFF",
-           (!s_vsync && s_tearing) ? ", tearing allowed" : "", 10);
+           s_tearing ? ", tearing allowed when off" : "", 10);
 
     IDXGISwapChain1* swap_chain1 = NULL;
-    if(rsx_fsr31_swapchain(s_d3d.device,s_d3d.cmd_queue,factory,s_d3d.hwnd,&sc_desc,(void**)&swap_chain1))hr=S_OK;
+    if(rsx_fsr31_swapchain(s_d3d.device,s_d3d.cmd_queue,factory,s_d3d.hwnd,&sc_desc,(void**)&swap_chain1)){hr=S_OK;s_fg_chain=1;}
     else hr = factory->lpVtbl->CreateSwapChainForHwnd(
         factory, (IUnknown*)s_d3d.cmd_queue,
         s_d3d.hwnd, &sc_desc, NULL, NULL, &swap_chain1);
@@ -3175,6 +3201,7 @@ static void shot_finish(void)
 }
 
 
+#ifndef CV_DISTRIBUTION
 #include "rsx_motion_capture.h"
 /* A versioned little-endian diagnostic snapshot, copied only during F9.
  * Source positions and the actual CPU/VF recipe result share each vertex ID.
@@ -3273,12 +3300,17 @@ static void motion_capture_record(ID3D12Resource* image,u32 w,u32 h)
     if(!mc_record(s_d3d.device,s_d3d.cmd_list,image,w,h,json,blob,blob?bytes:0))free(blob);
 }
 
+#else
+static void mc_request(void) {}
+static void mc_submit(ID3D12CommandQueue* queue) {(void)queue;}
+static void mc_shutdown(void) {}
+static void motion_capture_record(ID3D12Resource* image,u32 w,u32 h) {(void)image;(void)w;(void)h;}
+#endif
 /* Optional, bounded GPU instrumentation for the image investigation. */
 static ID3D12QueryHeap* s_cv_query_heap;
 static ID3D12Resource* s_cv_query_readback;
 static unsigned char s_cv_query_valid[MAX_DRAWS];
 static int s_cv_query_active;
-
 /* rsxcap step snapshots: on the frame being captured, a copy of each
  * offscreen target at the moment the draw list leaves it. The end-of-frame
  * dump shows only what survived; these show where an image was lost. */
@@ -3296,6 +3328,7 @@ static void cap_steps_free(void)
     s_cap_nsteps = 0;
 }
 
+#ifndef CV_DISTRIBUTION
 static void rsx_capture_frame(u32 fi, u32 ndraws, u32 capidx)
 {
     if(pose_compute_mode()&&s_pose_compute_capture_ready&&s_pose_compute.capture){
@@ -3621,6 +3654,7 @@ static void rsx_capture_frame(u32 fi, u32 ndraws, u32 capidx)
 
 }
 
+#endif
 /* On-disk shader cache. FXC takes tens of milliseconds per translated
  * program, and every new area brings dozens -- the stutter when walking into
  * a room. Bytecode is stored under shader_cache/ keyed by a 64-bit hash of
@@ -10012,6 +10046,9 @@ static void frame_detail_end_record(void) {
 }
 
 static int frame_profile_on(void) {
+#ifdef CV_DISTRIBUTION
+    return 0;
+#else
     static int on=-1;
     if(on<0) {
         const char *e=getenv("CV_FRAME_PROFILE"),*fps=getenv("CV_FPS_TEST_60"),*interp=getenv("CV_RENDER_INTERPOLATION");
@@ -10019,11 +10056,16 @@ static int frame_profile_on(void) {
         if(on)fprintf(stderr,"[FRAME-PROFILE] v38 sampled GPU timestamps (1/30 presents), optional classified ranges; no extra waits\n");
     }
     return on;
+#endif
 }
 static int producer_profile_on(void) {
+#ifdef CV_DISTRIBUTION
+    return 0;
+#else
     static int on=-1;
     if(on<0){const char* e=getenv("CV_PRODUCER_PROFILE");on=e&&!strcmp(e,"1");}
     return on;
+#endif
 }
 static u64 frame_cpu_ticks(int process) {
     FILETIME created,exited,kernel,user;BOOL ok=process?GetProcessTimes(GetCurrentProcess(),&created,&exited,&kernel,&user):GetThreadTimes(GetCurrentThread(),&created,&exited,&kernel,&user);
@@ -12072,7 +12114,6 @@ skip_dump_consider: ;
     mc_submit(s_d3d.cmd_queue);
     shot_finish();
     frame_profile_mark(FP_SUBMIT);
-
     /* D3D12_IQ=1: drain the debug layer's message queue after submitting the
      * frame. The legacy (is_vp=0) DrawInstanced path silently produced ZERO
      * pixels in flOw's render injection while ClearRenderTargetView worked, and
@@ -12205,6 +12246,7 @@ skip_dump_consider: ;
     /* F12 in the game window: capture the next frame that drew anything, to
      * rsxcap/frame_9N (RSX_CAP_DIR overrides the base). Lets a capture land
      * on a scene reached by hand, where a frame number cannot be predicted. */
+#ifndef CV_DISTRIBUTION
     { static u32 s_key_caps = 0;
       /* CV_AUTOCAP=<draws>: also capture once, by itself, after 30
        * consecutive frames of at least that many draws (a 3D scene). */
@@ -12249,13 +12291,15 @@ skip_dump_consider: ;
         }
       } }
 
+#endif
     if (cv_diag) cv_present_start = perf_now();
     frame_profile_mark(FP_READBACK);
     /* Present */
     if (s_rb.present)
         { extern void ps3_ft(char); ps3_ft('R');
-          HRESULT _ph = s_vsync
-              ? s_d3d.swap_chain->lpVtbl->Present(s_d3d.swap_chain, 1, 0)
+          const UINT _iv = present_interval();
+          HRESULT _ph = _iv
+              ? s_d3d.swap_chain->lpVtbl->Present(s_d3d.swap_chain, _iv, 0)
               : s_d3d.swap_chain->lpVtbl->Present(s_d3d.swap_chain, 0,
                                                  s_tearing ? DXGI_PRESENT_ALLOW_TEARING : 0);
           if (_ph == DXGI_ERROR_DEVICE_REMOVED || _ph == DXGI_ERROR_DEVICE_RESET) dred_report("Present");
@@ -12604,7 +12648,9 @@ static void render_frame(void)
     /* F9 copies the drawn batch's pose history on the render thread. While
      * it records, let that batch finish before this pose replaces the
      * history, so the capture's old/current positions belong to it. */
+#ifndef CV_DISTRIBUTION
     if (s_rt_async && (mc.request || mc.remaining)) render_wait_cpu_idle();
+#endif
     if (s_rt_async && s_present_this_frame && s_pose_on && rsx_d3d12_pose_replay_enabled()) {
         vf_flush();
         RenderBatch next;

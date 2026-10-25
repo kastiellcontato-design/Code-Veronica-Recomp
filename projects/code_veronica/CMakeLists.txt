@@ -759,3 +759,10 @@ if(WIN32)
     target_compile_options(code_veronica_texture_dds_tests PRIVATE /UNDEBUG)
     target_link_libraries(code_veronica_texture_dds_tests PRIVATE d3d12 dxgi dxguid d3dcompiler)
 endif()
+
+# Launcher cache path and recursive operations, exercised only on temporary fixtures.
+if(WIN32)
+    add_executable(code_veronica_launcher_cache_tests EXCLUDE_FROM_ALL tests/test_launcher_cache.cpp)
+    target_include_directories(code_veronica_launcher_cache_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+    target_compile_options(code_veronica_launcher_cache_tests PRIVATE /UNDEBUG)
+endif()

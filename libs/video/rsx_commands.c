@@ -340,6 +340,7 @@ unsigned char g_rsx_method_seen[0x800];
 
 int rsx_process_method(rsx_state* state, u32 method, u32 data)
 {
+#ifndef CV_DISTRIBUTION
     if (method < 0x2000) { g_rsx_method_val[method >> 2] = data; g_rsx_method_seen[method >> 2] = 1; }
     /* Diagnostic: while an F12 rsxcap is pending, log every method from each
      * BEGIN to its END (up to 300 blocks per capture), so the way a draw is
@@ -363,6 +364,7 @@ int rsx_process_method(rsx_state* state, u32 method, u32 data)
               }
           }
       } }
+#endif
     /* NV4097_SET_SHADER_PACKER: sRGB-encode colour writes (RPCS3
      * framebuffer_srgb_enabled). Code Veronica writes its scene this way and
      * decodes it in the grade pass; ignored, the scene came out ~10x darker. */

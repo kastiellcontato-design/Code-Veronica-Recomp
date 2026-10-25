@@ -155,9 +155,28 @@ projects/code_veronica/tools/__pycache__/
 # Official redistributable AMD runtime, pinned with license and SHA256.
 !third_party/amd_fsr31/bin/amd_fidelityfx_framegeneration_dx12.dll
 
+# Local finite work-profiler captures and reports (host diagnostics).
+/work-profile/
+projects/*/work-profile/
+
 # Locally derived character textures and executable rollback copies.
 projects/*/appearance-assets/*.arc
 projects/*/appearance-backups/
 projects/*/appearance-assets/humanoids/
 
 /projects/*/save-library-backups/
+
+# Optional official Tracy checkout/tools and local captures.
+/third_party/tracy/
+/tools/tracy-v*/
+*.tracy
+
+# Local MFC A/B performance logs, CSV samples and previous runs.
+projects/code_veronica/run-log-mfc-*
+
+# Runtime character resources derived from the player's own game.
+appearance_cache/
+
+# Local preserved research and source-cleanup verification.
+/archives/
+/source-verification/
