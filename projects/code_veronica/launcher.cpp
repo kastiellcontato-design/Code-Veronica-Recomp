@@ -1111,7 +1111,7 @@ void section(Graphics& gr, const std::wstring& t, float x, float y, float w, con
 
 
 /* Release shown under the sidebar, beside the credit. Bump it per release. */
-const wchar_t* const k_launcher_version = L"v1.1";
+const wchar_t* const k_launcher_version = L"v1.1.1";
 
 /* ---------------------------------------------------------------- updates
  * cv_updater.h does the network and file work on threads of its own, which

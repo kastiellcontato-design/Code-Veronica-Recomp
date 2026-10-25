@@ -18,15 +18,15 @@ Replay the PS3 version on PC. Practice routes with a native SRT, room selection 
 > [!IMPORTANT]
 > **No game files are included.** This repository and its releases contain only the port: no game data, no game executable and no code generated from it. You need your **own original copy** of the PS3 game (PSN release). *Resident Evil*, *Code: Veronica* and all related names, characters and images are trademarks and copyrights of **Capcom**. This is a fan project. It is **not affiliated with, authorized or endorsed by Capcom or Sony Interactive Entertainment**.
 
-## Downloads — v1.1
+## Downloads — v1.1.1
 
-Fixed missing/distorted lighter shadows and incorrect dark lighting blocks. Update through the launcher or download below. [Previous releases](https://github.com/kastieloficial/RE-Code-Veronica-Recomp/releases) remain available.
+Fixed missing audio on some Windows output devices. Includes the v1.1 fixes for lighter shadows and incorrect dark lighting blocks. Update through the launcher or download below. [Previous releases](https://github.com/kastieloficial/RE-Code-Veronica-Recomp/releases) remain available.
 
-[**Code Veronica Recomp Release v1.1**](https://github.com/kastieloficial/RE-Code-Veronica-Recomp/releases/tag/v1.1)
+[**Code Veronica Recomp Release v1.1.1**](https://github.com/kastieloficial/RE-Code-Veronica-Recomp/releases/tag/v1.1.1)
 
 | Download | Contents |
 |---|---|
-| [Code.Veronica.Recomp.Release.v1.1.zip](https://github.com/kastieloficial/RE-Code-Veronica-Recomp/releases/download/v1.1/Code.Veronica.Recomp.Release.v1.1.zip) | Windows port with launcher and EU/JP/US support. Extract everything and open **Code Veronica.exe**. |
+| [Code.Veronica.Recomp.Release.v1.1.1.zip](https://github.com/kastieloficial/RE-Code-Veronica-Recomp/releases/download/v1.1.1/Code.Veronica.Recomp.Release.v1.1.1.zip) | Windows port with launcher and EU/JP/US support. Extract everything and open **Code Veronica.exe**. |
 | [Veronica-PKG-Extractor-v1.0.zip](https://github.com/kastiellcontato-design/Code-Veronica-Recomp/releases/download/v1.0/Veronica-PKG-Extractor-v1.0.zip) | Optional tool to prepare your own PKG. RPCS3 is also supported for extraction. |
 | [CodeVeronica-LiveSplit-Speedrun-v1.0.zip](https://github.com/kastiellcontato-design/Code-Veronica-Recomp/releases/download/v1.0/CodeVeronica-LiveSplit-Speedrun-v1.0.zip) | Any%/S-Rank split lists with icons and official LiveSplit catalog setup instructions. |
 
