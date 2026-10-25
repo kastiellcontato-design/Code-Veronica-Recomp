@@ -1,3 +1,6 @@
+NEW IN v1.1.2
+Improved graphics compatibility: fixed texture-upload alignment associated with lighter-related black screens on affected installations. Includes previous audio and shadow fixes.
+
 NEW IN v1.1.1
 Fixed missing audio on some output devices. Includes the v1.1 shadow fixes.
 
@@ -63,7 +66,7 @@ a) Choose ONE method to prepare your game folder:
 
    OPTION 1 - VERONICA PKG EXTRACTOR (separate, optional download)
    When published, the port Release will provide two downloads:
-     Code.Veronica.Recomp.Release.v1.1.1.zip .............. the port for playing
+     Code.Veronica.Recomp.Release.v1.1.2.zip .............. the port for playing
      Veronica-PKG-Extractor-v1.0.zip ....... the PKG extraction tool
    Releases: https://github.com/kastiellcontato-design/Code-Veronica-Recomp/releases
    Unzip the tool and open VeronicaPKGExtractor.exe.

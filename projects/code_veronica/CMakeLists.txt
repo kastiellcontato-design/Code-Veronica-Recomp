@@ -778,3 +778,11 @@ if(WIN32)
     target_compile_options(code_veronica_shadow_cube_tests PRIVATE /UNDEBUG)
     target_link_libraries(code_veronica_shadow_cube_tests PRIVATE d3d11 d3dcompiler dxguid)
 endif()
+
+# Portable D3D12 placement, tested on WARP and hardware without game assets.
+if(WIN32)
+    add_executable(code_veronica_texture_alignment_tests EXCLUDE_FROM_ALL tests/test_texture_upload_alignment.cpp)
+    target_include_directories(code_veronica_texture_alignment_tests PRIVATE "${PS3RECOMP_DIR}/libs/video")
+    target_compile_options(code_veronica_texture_alignment_tests PRIVATE /UNDEBUG)
+    target_link_libraries(code_veronica_texture_alignment_tests PRIVATE d3d12 dxgi dxguid)
+endif()

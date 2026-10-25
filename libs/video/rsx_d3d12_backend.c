@@ -21,6 +21,7 @@
 #include "rsx_primitives.h"
 #include "rsx_clear_rect.h"
 #include "rsx_cube_stride.h"
+#include "rsx_texture_upload_layout.h"
 #include "rsx_vertex_fetch.h"
 #include "rsx_pose_interpolation.h"
 #include "rsx_pose_gpu.h"
@@ -6961,6 +6962,13 @@ static int vp_upload_tex_slot_impl(u32 off, u32 w, u32 h, u32 fmt, int cube, u32
      * dst_row_bytes -- w * bpp is the source row, which is narrower for any
      * format rsx_texture_decode unpacks. */
     u32 pitch = (tl.dst_row_bytes + 255) & ~255u;
+    /* Row-pitch alignment is not subresource placement alignment. The
+     * lighter's 1x1 lookup cubes have one 256-byte host row per face; faces
+     * 1/3/5 previously started at offsets 256/768/1280, invalid on devices
+     * without OPTIONS13 unrestricted copies. Pad the HOST faces only: the
+     * RSX source pitch/stride and decoded texels remain unchanged. */
+    const u64 upload_face_stride = rsx_texture_upload_face_stride(
+        pitch, dxt ? blkrows : h, cube);
     int fresh = 0;
 
     /* Also recreate when the CUBE-ness changes: a slot holding a 2D texture of
@@ -7018,7 +7026,7 @@ static int vp_upload_tex_slot_impl(u32 off, u32 w, u32 h, u32 fmt, int cube, u32
         D3D12_HEAP_PROPERTIES hu = {0}; hu.Type = D3D12_HEAP_TYPE_UPLOAD;
         D3D12_RESOURCE_DESC bd = {0};
         bd.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-        bd.Width = (u64)pitch * (dxt ? blkrows : h) * (cube ? 6 : 1);
+        bd.Width = upload_face_stride * (cube ? 6u : 1u);
         if (nlev > 1 && mip_total > bd.Width) bd.Width = mip_total;
         bd.Height = 1; bd.DepthOrArraySize = 1;
         bd.MipLevels = 1; bd.SampleDesc.Count = 1; bd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
@@ -7091,7 +7099,7 @@ static int vp_upload_tex_slot_impl(u32 off, u32 w, u32 h, u32 fmt, int cube, u32
         for (u32 _i = 0; _i < _face_bytes; _i += 97) _s = _s*131 + _p[_i];
         fprintf(stderr, "[CUBEFACE] f=%u off=0x%X bytes=%u bpp=%u swz=%d csum=%08X%c",
                 _f, off, _face_bytes, bpp, swz, _s, 10); }
-    mapped = _map0 + (u64)_f * pitch * _face_rows;
+    mapped = _map0 + (u64)_f * upload_face_stride;
     /* Pixel conversion -- deswizzle, channel order, block copy -- is RSX
      * semantics and lives in rsx_texture_layout.c, so a second backend gets
      * it by calling this rather than porting the loops again. */
@@ -7246,7 +7254,7 @@ static int vp_upload_tex_slot_impl(u32 off, u32 w, u32 h, u32 fmt, int cube, u32
                 hd[26]=1; hd[28]=24;
                 fwrite(hd, 1, 54, f);
                 for (int y = (int)h - 1; y >= 0; y--) {
-                    const u8* srow = _map0 + (u64)_face * pitch * _face_rows
+                    const u8* srow = _map0 + (u64)_face * upload_face_stride
                                      + (u64)y * pitch;
                     for (u32 x = 0; x < w; x++) {
                         u8 px[3];
@@ -7380,7 +7388,7 @@ static int vp_upload_tex_slot_impl(u32 off, u32 w, u32 h, u32 fmt, int cube, u32
       if (e && nu < 2 && (off & 0x0FFFFFFFu) == ((u32)strtoul(e, NULL, 16) & 0x0FFFFFFFu)) {
         char fn[96]; snprintf(fn, sizeof fn, "texdump_%08X_up%d.bin", off, nu++);
         FILE* f = fopen(fn, "wb");
-        if (f) { fwrite(_map0, 1, (size_t)pitch * _face_rows * _nfaces, f); fclose(f); }
+        if (f) { fwrite(_map0, 1, (size_t)upload_face_stride * _nfaces, f); fclose(f); }
         fprintf(stderr, "[TEXDUMP] %s pitch=%u rows=%u faces=%u dxfmt=%d slot=%d%c", fn, pitch, _face_rows,
                 _nfaces, (int)dxfmt, slot, 10);
       } }
@@ -7411,7 +7419,7 @@ static int vp_upload_tex_slot_impl(u32 off, u32 w, u32 h, u32 fmt, int cube, u32
     src.PlacedFootprint.Footprint.RowPitch = pitch;
     for (u32 _f = 0; _f < _nfaces; _f++) {
         dst.SubresourceIndex        = _f;      /* cube face = array slice */
-        src.PlacedFootprint.Offset  = (u64)_f * pitch * _face_rows;
+        src.PlacedFootprint.Offset  = (u64)_f * upload_face_stride;
         s_d3d.cmd_list->lpVtbl->CopyTextureRegion(s_d3d.cmd_list, &dst, 0, 0, 0, &src, NULL);
     }
     for (int l = 1; l < nlev; l++) {

@@ -1,3 +1,6 @@
+NOVIDADES DA v1.1.2
+Melhorada a compatibilidade grafica: alinhamento de texturas corrigido para evitar a tela preta ao usar o isqueiro em instalacoes afetadas. Inclui as correcoes anteriores de audio e sombras.
+
 NOVIDADES DA v1.1.1
 Corrigida a falta de audio em alguns dispositivos de som. Mantem as correcoes de sombras da v1.1.
 
@@ -63,7 +66,7 @@ a) Escolha UMA das opções para preparar a pasta do jogo:
 
    OPÇÃO 1 - VERONICA PKG EXTRACTOR (separado e opcional)
    Na mesma Release do port, quando publicada, haverá dois downloads:
-     Code.Veronica.Recomp.Release.v1.1.1.zip .............. o port para jogar
+     Code.Veronica.Recomp.Release.v1.1.2.zip .............. o port para jogar
      Veronica-PKG-Extractor-v1.0.zip ....... ferramenta para extrair o PKG
    Página: https://github.com/kastiellcontato-design/Code-Veronica-Recomp/releases
    Extraia o ZIP da ferramenta e abra VeronicaPKGExtractor.exe.
