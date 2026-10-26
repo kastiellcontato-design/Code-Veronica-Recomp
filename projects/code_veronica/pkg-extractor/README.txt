@@ -1,4 +1,8 @@
-VERONICA PKG EXTRACTOR v1.0
+﻿VERONICA PKG EXTRACTOR v1.0.1
+
+CHANGES IN v1.0.1
+Correct UTF-8 accents and punctuation; explicit Portuguese/English selection;
+localized file/folder dialog titles and package errors. Extraction is unchanged.
 
 Standalone extractor for Resident Evil Code: Veronica X (PS3 PSN).
 
@@ -42,4 +46,4 @@ Extraction of a real Code Veronica PKG still needs user testing. The tool checks
 headers, tables, bounds and PARAM.SFO; it does not authenticate every payload byte.
 
 Developed by Kastiel. Format reference: the project's tools/pkg_extract.py reader.
-Source code and MIT license: https://github.com/kastiellcontato-design/re-cvx-ps3recomp
+Source code and MIT license: https://github.com/kastieloficial/RE-Code-Veronica-Recomp

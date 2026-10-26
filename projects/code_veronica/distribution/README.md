@@ -53,8 +53,8 @@ system do jogo e uma pasta temporária gravável. Não executa o jogo.
 
 ## Downloads separados em cada release estavel
 
-Anexar `Veronica-PKG-Extractor-v1.0.zip` como asset independente em toda nova release estavel, mesmo que o extrator nao tenha mudado de versao. Ele deve aparecer ao lado do ZIP principal nos Assets do GitHub; nunca dentro do ZIP do launcher. Reutilizar o pacote oficial ja publicado em v1.0 e conferir seu SHA-256 antes de anexar.
+Anexar `Veronica-PKG-Extractor-v1.0.1.zip` como asset independente em toda nova release estavel, mesmo que o extrator nao tenha mudado de versao. Ele deve aparecer ao lado do ZIP principal nos Assets do GitHub; nunca dentro do ZIP do launcher. Reutilizar o pacote oficial 1.0.1 validado e conferir seu SHA-256 antes de anexar.
 
-Pacote oficial atual: SHA-256 `376922e267402094c00950a972e32339d6839cea480f5f15bd909fae615f5812`.
+Pacote oficial atual: SHA-256 `a88ddfea2b0a9079922c680abab9c6871e98f4e94f9ea252e6a928b8d44e1cc2`.
 
 Antes de concluir a publicacao, verificar que a release contem somente os ZIPs necessarios: o ZIP principal e o ZIP separado do Veronica Extractor. Manter o arquivo .sha256 apenas na verificacao local, sem anexa-lo aos Assets publicos, conforme preferencia do mantenedor. Se o extrator ganhar uma nova versao, atualizar esta referencia para o novo pacote validado.

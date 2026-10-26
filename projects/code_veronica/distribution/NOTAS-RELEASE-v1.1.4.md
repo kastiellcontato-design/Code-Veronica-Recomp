@@ -31,6 +31,12 @@ Original PS3 game files are not included.
 ### Downloads
 
 - **Port / launcher:** `CodeVeronica-PC-v1.1.4.zip`
-- **Veronica Extractor — download separado / separate download:** [Veronica-PKG-Extractor-v1.0.zip](https://github.com/kastieloficial/RE-Code-Veronica-Recomp/releases/download/v1.1.4/Veronica-PKG-Extractor-v1.0.zip)
+- **Veronica Extractor — download separado / separate download:** [Veronica-PKG-Extractor-v1.0.1.zip](https://github.com/kastieloficial/RE-Code-Veronica-Recomp/releases/download/v1.1.4/Veronica-PKG-Extractor-v1.0.1.zip)
 
-O extrator continua na versao 1.0 e nao fica dentro do ZIP do launcher. / The extractor remains at version 1.0 and is not included inside the launcher ZIP.
+O extrator foi atualizado para 1.0.1 e continua separado do ZIP do launcher. / The extractor has been updated to 1.0.1 and remains separate from the launcher ZIP.
+
+### Veronica PKG Extractor 1.0.1
+
+Corrige acentos, til, reticências e separadores corrompidos na interface. Português e English agora têm botões próprios, com o idioma selecionado destacado. Títulos dos diálogos e todas as 47 mensagens de falha previstas pelo extrator foram revisados em português. O ZIP inclui instruções nos dois idiomas.
+
+Fixes corrupted accents, ellipses and separators by compiling all C++ sources explicitly as UTF-8 (`/utf-8`). Separate Português/English buttons highlight the active language. File/folder dialog titles and all 47 expected extraction failures have Portuguese translations; English uses the original English error messages. Compiled regression tests verify Unicode code points, language selection and locking during extraction, translation coverage, and rendered PT/EN layouts. The PKG extraction algorithm and game binaries are unchanged.
