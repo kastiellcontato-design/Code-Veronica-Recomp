@@ -242,6 +242,7 @@ add_executable(${PROJECT_NAME}
     patch_files.cpp
     log_viewer.cpp
     cv_updater.cpp
+    $<$<PLATFORM_ID:Windows>:cv_trophies.cpp>
     stubs.cpp
     ${PS3RECOMP_SCAFFOLD}
     ${HLE_NID_TABLE}
@@ -817,4 +818,31 @@ if(WIN32)
  target_compile_options(code_veronica_support_log_tests PRIVATE /UNDEBUG)
  add_executable(code_veronica_support_gpu_tests EXCLUDE_FROM_ALL tests/test_support_gpu.c)
  target_link_libraries(code_veronica_support_gpu_tests PRIVATE d3d12 dxgi dxguid)
+endif()
+
+if(WIN32)
+ target_link_libraries(MyGameRecomp PRIVATE xmllite)
+endif()
+
+if(WIN32)
+ add_executable(code_veronica_trophy_tests EXCLUDE_FROM_ALL tests/test_trophies.cpp tests/test_trophy_guest.c)
+ target_include_directories(code_veronica_trophy_tests PRIVATE "${PS3RECOMP_DIR}/include")
+ target_compile_options(code_veronica_trophy_tests PRIVATE /UNDEBUG)
+ target_link_libraries(code_veronica_trophy_tests PRIVATE xmllite ole32)
+endif()
+
+if(WIN32)
+ configure_file(cv_trophy_sound.rc.in "${CMAKE_CURRENT_BINARY_DIR}/cv_trophy_sound.rc" @ONLY)
+ target_sources(MyGameRecomp PRIVATE cv_trophy_popup.cpp "${CMAKE_CURRENT_BINARY_DIR}/cv_trophy_sound.rc")
+ set_source_files_properties("${CMAKE_CURRENT_BINARY_DIR}/cv_trophy_sound.rc" PROPERTIES OBJECT_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/assets/trophy/Trofeu.wav")
+endif()
+
+if(WIN32)
+ add_executable(code_veronica_trophy_popup_tests EXCLUDE_FROM_ALL tests/test_trophy_popup.cpp tests/test_trophy_guest.c "${CMAKE_CURRENT_BINARY_DIR}/cv_trophy_sound.rc")
+ target_include_directories(code_veronica_trophy_popup_tests PRIVATE "${PS3RECOMP_DIR}/include")
+ target_compile_options(code_veronica_trophy_popup_tests PRIVATE /UNDEBUG)
+ target_link_libraries(code_veronica_trophy_popup_tests PRIVATE xmllite ole32 gdiplus winmm)
+ add_executable(code_veronica_trophy_popup_gpu_tests EXCLUDE_FROM_ALL tests/test_trophy_popup_gpu.c)
+ target_compile_options(code_veronica_trophy_popup_gpu_tests PRIVATE /UNDEBUG)
+ target_link_libraries(code_veronica_trophy_popup_gpu_tests PRIVATE d3d12 dxgi dxguid)
 endif()

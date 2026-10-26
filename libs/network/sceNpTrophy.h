@@ -18,22 +18,22 @@ extern "C" {
 /* ---------------------------------------------------------------------------
  * Error codes
  * -----------------------------------------------------------------------*/
-#define SCE_NP_TROPHY_ERROR_NOT_INITIALIZED         0x80551601
-#define SCE_NP_TROPHY_ERROR_ALREADY_INITIALIZED     0x80551602
-#define SCE_NP_TROPHY_ERROR_INVALID_ARGUMENT        0x80551603
-#define SCE_NP_TROPHY_ERROR_OUT_OF_MEMORY           0x80551604
-#define SCE_NP_TROPHY_ERROR_INVALID_CONTEXT         0x80551605
-#define SCE_NP_TROPHY_ERROR_INVALID_HANDLE          0x80551606
-#define SCE_NP_TROPHY_ERROR_CONTEXT_NOT_REGISTERED  0x80551607
-#define SCE_NP_TROPHY_ERROR_ALREADY_EXISTS          0x80551608
-#define SCE_NP_TROPHY_ERROR_NOT_FOUND               0x80551609
-#define SCE_NP_TROPHY_ERROR_ALREADY_UNLOCKED        0x8055160A
-#define SCE_NP_TROPHY_ERROR_PLATINUM_CANNOT_UNLOCK  0x8055160B
-#define SCE_NP_TROPHY_ERROR_CONTEXT_ALREADY_REG     0x8055160C
-#define SCE_NP_TROPHY_ERROR_INSUFFICIENT_SPACE      0x8055160D
-#define SCE_NP_TROPHY_ERROR_PROCESSING              0x8055160E
-#define SCE_NP_TROPHY_ERROR_ABORT                   0x8055160F
-#define SCE_NP_TROPHY_ERROR_UNKNOWN                 0x805516FF
+#define SCE_NP_TROPHY_ERROR_NOT_INITIALIZED         0x80022902
+#define SCE_NP_TROPHY_ERROR_ALREADY_INITIALIZED     0x80022901
+#define SCE_NP_TROPHY_ERROR_INVALID_ARGUMENT        0x80022906
+#define SCE_NP_TROPHY_ERROR_OUT_OF_MEMORY           0x80022905
+#define SCE_NP_TROPHY_ERROR_INVALID_CONTEXT         0x8002290E
+#define SCE_NP_TROPHY_ERROR_INVALID_HANDLE          0x80022917
+#define SCE_NP_TROPHY_ERROR_CONTEXT_NOT_REGISTERED  0x80022904
+#define SCE_NP_TROPHY_ERROR_ALREADY_EXISTS          0x80022907
+#define SCE_NP_TROPHY_ERROR_NOT_FOUND               0x80022920
+#define SCE_NP_TROPHY_ERROR_ALREADY_UNLOCKED        0x80022915
+#define SCE_NP_TROPHY_ERROR_PLATINUM_CANNOT_UNLOCK  0x80022914
+#define SCE_NP_TROPHY_ERROR_CONTEXT_ALREADY_REG     0x8002291D
+#define SCE_NP_TROPHY_ERROR_INSUFFICIENT_SPACE      0x80022928
+#define SCE_NP_TROPHY_ERROR_PROCESSING              0x80022909
+#define SCE_NP_TROPHY_ERROR_ABORT                   0x80022910
+#define SCE_NP_TROPHY_ERROR_UNKNOWN                 0x800229FF
 
 /* ---------------------------------------------------------------------------
  * Constants
@@ -44,7 +44,7 @@ extern "C" {
 
 #define SCE_NP_TROPHY_MAX_NUM_TROPHIES      128
 #define SCE_NP_TROPHY_NAME_MAX_SIZE         128
-#define SCE_NP_TROPHY_DESC_MAX_SIZE         256
+#define SCE_NP_TROPHY_DESC_MAX_SIZE         1024
 #define SCE_NP_TROPHY_GAME_TITLE_MAX_SIZE   128
 #define SCE_NP_TROPHY_GAME_DESC_MAX_SIZE    1024
 
@@ -75,7 +75,7 @@ typedef struct SceNpTrophyDetails {
 } SceNpTrophyDetails;
 
 typedef struct SceNpTrophyData {
-    u64  timestamp;     /* UNIX timestamp when unlocked, 0 if locked */
+    u64  timestamp;     /* Big-endian CellRtcTick (microseconds since year 1), 0 if locked */
     u32  trophyId;
     u8   unlocked;
     u8   padding[3];
@@ -89,6 +89,7 @@ typedef struct SceNpTrophyGameDetails {
     u32  numBronze;
     char title[SCE_NP_TROPHY_GAME_TITLE_MAX_SIZE];
     char description[SCE_NP_TROPHY_GAME_DESC_MAX_SIZE];
+    u8 reserved[4];
 } SceNpTrophyGameDetails;
 
 typedef struct SceNpTrophyGameData {

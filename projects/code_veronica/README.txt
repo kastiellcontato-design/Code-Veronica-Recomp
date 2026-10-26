@@ -224,3 +224,7 @@ folder and THIRD-PARTY-NOTICES.md.
 This package contains no game, PKG, RAP license, firmware, saves or developer
 personal settings. Do not add those files when redistributing the port ZIP.
 The code is provided under the included licenses, without warranty.
+
+TROPHIES: the Trophies page records local achievements, lists all 12 trophies, filters progress and configures notifications. Default position: top right. Reset keeps a backup and does not modify saves. Local only, without PSN synchronization.
+MAPS AND SAVES: see the launcher shortcuts; F7 opens the menu during gameplay.
+UPDATES: release notes are scrollable; the updater preserves personal trophies and saves.

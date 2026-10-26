@@ -31,6 +31,7 @@
 #include <vector>
 #include <filesystem>
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include "pad_phys.h"
@@ -38,6 +39,11 @@
 #include "pad_map.h"
 #include "launcher_i18n.h"
 #include "launcher_design_i18n.h"
+#include "launcher_maps_i18n.h"
+#include "cv_trophies.h"
+#include "cv_trophy_popup.h"
+#include "cv_trophy_i18n.h"
+#include <map>
 #include "patch_files.h"
 #include "cv_version.h"
 #include "cv_srt.h"
@@ -211,7 +217,7 @@ const wchar_t* family(bool serif, int lang)
     for (int i = 0; list[i]; i++) { FontFamily f(list[i]); if (f.IsAvailable()) return list[i]; }
     return L"Segoe UI";
 }
-const int W = 1280, H = 820, SIDE = 224;
+const int W = 1280, H = 880, SIDE = 224;
 
 /* ---------------------------------------------------------------- settings */
 struct Settings {
@@ -242,6 +248,8 @@ struct Settings {
     int music_volume=100,sfx_volume=100;
     bool battle_unlocked=false;
     bool film_filter=true;
+    bool trophies=true,trophy_notifications=true;
+    int trophy_corner=1;
     bool focus_pause=true; // pause while the game window is out of focus (cv_focus_pause.cpp)
     bool items_menu=false; // F6 item menu in the game (cv_item_menu.cpp), off by default
     bool check_updates=true; // look for a newer GitHub release when the launcher opens (cv_updater.h)
@@ -500,6 +508,9 @@ Settings load_settings()
     s.items_menu=_wtoi(ini_get(L"inventario",L"menu_itens",L"0").c_str())!=0;
     s.music_volume=std::clamp(_wtoi(ini_get(L"audio",L"musica",L"100").c_str()),0,100);
     s.sfx_volume=std::clamp(_wtoi(ini_get(L"audio",L"efeitos",L"100").c_str()),0,100);
+    s.trophy_corner=std::clamp(_wtoi(ini_get(L"trofeus",L"posicao",L"1").c_str()),0,3);
+    s.trophies=_wtoi(ini_get(L"trofeus",L"registrar",L"1").c_str())!=0;
+    s.trophy_notifications=_wtoi(ini_get(L"trofeus",L"notificacoes",L"1").c_str())!=0;
     s.film_filter=_wtoi(ini_get(L"tela",L"filtro_filme",L"1").c_str())!=0;
     s.battle_unlocked=_wtoi(ini_get(L"extras",L"battle_game",L"0").c_str())!=0;
     s.focus_pause=_wtoi(ini_get(L"jogo",L"pausar_sem_foco",L"1").c_str())!=0;
@@ -585,6 +596,9 @@ void save_settings(const Settings& s)
     ini_set(L"audio",L"efeitos",std::to_wstring(s.sfx_volume));
     ini_set(L"extras",L"battle_game",s.battle_unlocked?L"1":L"0");
     ini_set(L"tela",L"filtro_filme",s.film_filter?L"1":L"0");
+    ini_set(L"trofeus",L"posicao",std::to_wstring(s.trophy_corner));
+    ini_set(L"trofeus",L"registrar",s.trophies?L"1":L"0");
+    ini_set(L"trofeus",L"notificacoes",s.trophy_notifications?L"1":L"0");
     ini_set(L"jogo",L"pausar_sem_foco",s.focus_pause?L"1":L"0");
     ini_set(L"launcher",L"procurar_atualizacoes",s.check_updates?L"1":L"0");
     ini_set(L"srt", L"mostrar",s.srt?L"1":L"0");
@@ -758,11 +772,11 @@ Bitmap* load_png(const char* name)
 }
 
 /* ---------------------------------------------------------------- UI state */
-enum Page { P_INICIO, P_JOGO, P_SAVES, P_CONTROLES, P_ATALHOS, P_PATCHES, P_MODS, P_SRT, P_INVENTARIO, P_DESEMPENHO, P_AVANCADO, P_COUNT };
+enum Page { P_INICIO, P_JOGO, P_SAVES, P_CONTROLES, P_ATALHOS, P_PATCHES, P_MODS, P_SRT, P_INVENTARIO, P_DESEMPENHO, P_AVANCADO, P_TROPHIES, P_COUNT };
 /* Each page's name in the side bar. */
-const int k_nav[P_COUNT] = { S_NAV_HOME, S_NAV_GAME, S_NAV_GAME /* Saves: named by design::SAVES */, S_NAV_CONTROLS, S_NAV_SHORTCUTS, S_NAV_PATCHES, S_NAV_MODS, S_NAV_SRT, S_NAV_ITEMS, S_NAV_PERF, S_NAV_ADVANCED };
+const int k_nav[P_COUNT] = { S_NAV_HOME, S_NAV_GAME, S_NAV_GAME /* Saves: named by design::SAVES */, S_NAV_CONTROLS, S_NAV_SHORTCUTS, S_NAV_PATCHES, S_NAV_MODS, S_NAV_SRT, S_NAV_ITEMS, S_NAV_PERF, S_NAV_ADVANCED, S_NAV_GAME };
 /* Side bar order: the game library first. */
-const int k_nav_order[P_COUNT] = { P_JOGO, P_INICIO, P_SAVES, P_CONTROLES, P_ATALHOS, P_PATCHES, P_MODS, P_SRT, P_INVENTARIO, P_DESEMPENHO, P_AVANCADO };
+const int k_nav_order[P_COUNT] = { P_JOGO, P_INICIO, P_SAVES, P_CONTROLES, P_ATALHOS, P_PATCHES, P_MODS, P_SRT, P_INVENTARIO, P_TROPHIES, P_DESEMPENHO, P_AVANCADO };
 enum Capture { CAP_NONE, CAP_KEY, CAP_BTN };
 
 struct Hit { RectF r; int id; };
@@ -830,7 +844,8 @@ enum {
     ID_DD_OV_CORNER = 2450, ID_DD_OV_LAYOUT, ID_DD_SRT_INVPOS, ID_DD_SRT_WINDOW, ID_DD_SRT_BOSSBAR, ID_DD_OV_SIZE, ID_DD_OV_BG,
     ID_TEX_BROWSE = 2300, ID_TEX_OPEN, ID_TEX_REPLACE, ID_TEX_DUMP, ID_TEX_DUMP_BROWSE, ID_TEX_DUMP_OPEN, ID_TEX_ALL, ID_TEX_ALL_RUN, ID_TEX_FORMAT_PNG, ID_TEX_FORMAT_DDS,
     ID_SOCIAL_GITHUB=2580, ID_SOCIAL_YOUTUBE,
-    ID_UPD_TOGGLE=2590, ID_UPD_CHECK, ID_UPD_INSTALL, ID_UPD_LATER, ID_UPD_CANCEL, ID_UPD_CLOSE,
+    ID_UPD_TOGGLE=2590, ID_UPD_CHECK, ID_UPD_INSTALL, ID_UPD_LATER, ID_UPD_CANCEL, ID_UPD_CLOSE, ID_UPD_NOTES_THUMB, ID_UPD_NOTES_TRACK,
+    ID_TROPHY_ENABLE=2800,ID_TROPHY_NOTIFY,ID_TROPHY_RESET,ID_TROPHY_REFRESH,ID_DD_TROPHY_FILTER,ID_DD_TROPHY_CORNER,
     ID_PAGE_THUMB = 2600, ID_PAGE_TRACK,
 };
 
@@ -1114,7 +1129,7 @@ void section(Graphics& gr, const std::wstring& t, float x, float y, float w, con
 
 
 /* Release shown under the sidebar, beside the credit. Bump it per release. */
-const wchar_t* const k_launcher_version = L"v1.1.5";
+const wchar_t* const k_launcher_version = L"v1.1.6";
 
 /* ---------------------------------------------------------------- updates
  * cv_updater.h does the network and file work on threads of its own, which
@@ -1131,6 +1146,10 @@ struct UpdState {
     bool manual = false;            /* "Procurar agora": also report "up to date" and errors */
     cv_update::Release rel;
     std::wstring notes;             /* rel.notes made readable */
+    float notes_scroll=0,notes_max=0,notes_height=0,notes_grab=0,notes_width=0;
+    bool notes_drag=false;int notes_lang=-1;
+    std::wstring measured_notes;
+    RectF notes_box,notes_view,notes_track,notes_thumb;
     cv_update::Progress prog;
     cv_update::Error err = cv_update::OK;
     std::wstring status;            /* the line beside "Procurar agora" */
@@ -1278,7 +1297,51 @@ void draw_update_card(Graphics& gr, const Font& body, const Font& fsm)
     if (!installing) button(gr, RectF(px, y + 96, pw, 30), ux(upd_text::CANCEL), ID_UPD_CANCEL, body);
 }
 
-/* The dialog, over everything; while it is up only its buttons answer. */
+/* Release notes scroll independently of the page behind this modal. The
+ * complete wrapped text is measured, then drawn under a viewport clip. */
+void upd_notes_scroll_to(float offset)
+{
+    const float value=std::clamp(offset,0.f,g_upd.notes_max);
+    if(value!=g_upd.notes_scroll){g_upd.notes_scroll=value;InvalidateRect(g.hwnd,nullptr,FALSE);}
+}
+void upd_notes_drag_to(float y)
+{
+    const float travel=g_upd.notes_track.Height-g_upd.notes_thumb.Height;
+    if(travel>0)upd_notes_scroll_to((y-g_upd.notes_grab-g_upd.notes_track.Y)/travel*g_upd.notes_max);
+}
+void draw_update_notes(Graphics& gr,RectF box,const Font& font)
+{
+    g_upd.notes_box=box;g_upd.notes_view=RectF(box.X+12,box.Y+10,box.Width-42,box.Height-20);
+    const RectF view=g_upd.notes_view;
+    const std::wstring value=g_upd.notes.empty()?ux(upd_text::NO_NOTES):g_upd.notes;
+    StringFormat wrap;wrap.SetTrimming(StringTrimmingNone);
+    if(g_lang==LANG_AR)wrap.SetFormatFlags(StringFormatFlagsDirectionRightToLeft);
+    if(g_upd.measured_notes!=value||g_upd.notes_width!=view.Width||g_upd.notes_lang!=g_lang){
+        RectF measured;gr.MeasureString(value.c_str(),-1,&font,RectF(0,0,view.Width,1000000.f),&wrap,&measured);
+        g_upd.notes_height=std::ceil(measured.Height)+2.f;
+        g_upd.measured_notes=value;g_upd.notes_width=view.Width;g_upd.notes_lang=g_lang;
+    }
+    g_upd.notes_max=std::max(0.f,g_upd.notes_height-view.Height);
+    g_upd.notes_scroll=std::clamp(g_upd.notes_scroll,0.f,g_upd.notes_max);
+    SolidBrush bg(C_FIELD);gr.FillRectangle(&bg,box);Pen border(C_FIELD_BD,1);gr.DrawRectangle(&border,box);
+    GraphicsState saved=gr.Save();gr.SetClip(view,CombineModeIntersect);
+    SolidBrush ink(g_upd.notes.empty()?C_DIM:C_TEXT);
+    gr.DrawString(value.c_str(),-1,&font,RectF(view.X,view.Y-g_upd.notes_scroll,view.Width,std::max(view.Height,g_upd.notes_height)),&wrap,&ink);
+    gr.Restore(saved);
+    g_upd.notes_track=g_upd.notes_thumb=RectF();
+    if(g_upd.notes_max>0){
+        RectF track(box.GetRight()-17,box.Y+8,10,box.Height-16);
+        const float size=std::max(24.f,track.Height*view.Height/g_upd.notes_height);
+        RectF thumb(track.X,track.Y+(track.Height-size)*g_upd.notes_scroll/g_upd.notes_max,track.Width,size);
+        g_upd.notes_track=track;g_upd.notes_thumb=thumb;
+        SolidBrush tb(Color(255,45,37,39));gr.FillRectangle(&tb,track);
+        SolidBrush sb(g_upd.notes_drag||g.hover==ID_UPD_NOTES_THUMB?C_RED_HI:C_RED);GraphicsPath* shape=round_rect(thumb,4);gr.FillPath(&sb,shape);delete shape;
+        hit(track.X-3,track.Y,track.Width+6,track.Height,ID_UPD_NOTES_TRACK);
+        hit(thumb.X-3,thumb.Y,thumb.Width+6,thumb.Height,ID_UPD_NOTES_THUMB);
+    }
+}
+
+/* The dialog, over everything; while it is up only its controls answer. */
 void draw_update_dialog(Graphics& gr, const Font& title, const Font& body, const Font& fsm)
 {
     if (!upd_modal()) return;
@@ -1304,12 +1367,7 @@ void draw_update_dialog(Graphics& gr, const Font& title, const Font& body, const
     } else {
         text(gr, ux(upd_text::NOTES), px, cy, body, C_RED_HI, StringAlignmentNear, pw, 22);
         cy += 28;
-        RectF notes(px, cy, pw, 178);
-        SolidBrush nb(C_FIELD); gr.FillRectangle(&nb, notes);
-        Pen nbd(C_FIELD_BD, 1); gr.DrawRectangle(&nbd, notes);
-        SolidBrush ink(g_upd.notes.empty() ? C_DIM : C_TEXT);
-        gr.DrawString(g_upd.notes.empty() ? ux(upd_text::NO_NOTES) : g_upd.notes.c_str(), -1, &fsm,
-                      RectF(px + 12, cy + 10, pw - 24, 178 - 20), &wrap, &ink);
+        draw_update_notes(gr,RectF(px,cy,pw,178),fsm);
         cy += 190;
         text(gr, ux(upd_text::KEEP_NOTE), px, cy, fsm, C_DIM, StringAlignmentNear, pw, 20);
     }
@@ -1336,6 +1394,7 @@ void upd_message(WPARAM wp, LPARAM lp)
             g_upd.status = manual ? upd_fill(ux(upd_text::LATEST), k_launcher_version) : L"";
         } else if (!g.running) {   /* never over the running game's menu */
             g_upd.rel = r->rel; g_upd.notes = upd_plain_notes(r->rel.notes);
+            g_upd.notes_scroll=0;g_upd.notes_drag=false;g_upd.notes_lang=-1;
             g_upd.step = UPD_OFFER; g.open_dd = -1; g.hover = -1;
         }
     } else if (wp == UPD_MSG_INSTALLING) {
@@ -1404,6 +1463,19 @@ void library_art(){
 void nav_icon(Graphics& gr,int page,float x,float y,Color color){
  Pen p(color,1.5f);p.SetLineJoin(LineJoinRound);p.SetStartCap(LineCapRound);p.SetEndCap(LineCapRound);
  if(page==P_INICIO){gr.DrawRectangle(&p,x,y,23.f,15.f);gr.DrawLine(&p,x+11,y+16,x+11,y+21);gr.DrawLine(&p,x+5,y+21,x+18,y+21);}
+ else if(page==P_TROPHIES){
+  // Original compact cup silhouette: rolled rim, curved handles, fluted bowl,
+  // narrow stem and stepped pedestal. Drawn as vectors at the sidebar scale.
+  GraphicsState saved=gr.Save();gr.TranslateTransform(x,y);gr.ScaleTransform(1.f,1.f);
+  Pen outline(color,1.15f);outline.SetLineJoin(LineJoinRound);outline.SetStartCap(LineCapRound);outline.SetEndCap(LineCapRound);
+  GraphicsPath cup;cup.StartFigure();cup.AddBezier(5.f,3.f,5.5f,12.5f,7.4f,15.f,12.f,15.8f);cup.AddBezier(12.f,15.8f,16.6f,15.f,18.5f,12.5f,19.f,3.f);gr.DrawPath(&outline,&cup);
+  gr.DrawEllipse(&outline,4.f,0.7f,16.f,3.f);gr.DrawLine(&outline,5.f,4.f,19.f,4.f);
+  GraphicsPath left;left.AddBezier(4.6f,4.7f,-1.f,2.f,-1.f,13.f,8.f,15.f);left.StartFigure();left.AddBezier(4.7f,6.5f,1.3f,5.f,2.f,11.f,6.5f,12.7f);gr.DrawPath(&outline,&left);
+  GraphicsPath right;right.AddBezier(19.4f,4.7f,25.f,2.f,25.f,13.f,16.f,15.f);right.StartFigure();right.AddBezier(19.3f,6.5f,22.7f,5.f,22.f,11.f,17.5f,12.7f);gr.DrawPath(&outline,&right);
+  gr.DrawLine(&outline,8.f,5.5f,9.f,11.8f);gr.DrawLine(&outline,11.f,5.7f,11.4f,13.7f);
+  gr.DrawEllipse(&outline,10.f,16.f,4.f,1.8f);gr.DrawLine(&outline,11.f,18.f,10.f,20.f);gr.DrawLine(&outline,13.f,18.f,14.f,20.f);
+  gr.DrawRectangle(&outline,8.f,20.f,8.f,2.f);gr.DrawRectangle(&outline,6.f,22.f,12.f,2.f);gr.DrawLine(&outline,4.f,25.f,20.f,25.f);gr.Restore(saved);
+ }
  else if(page==P_JOGO){gr.DrawEllipse(&p,x+1,y,22.f,22.f);gr.DrawEllipse(&p,x+9,y+8,6.f,6.f);gr.DrawArc(&p,x+5,y+4,14.f,14.f,200.f,70.f);}
  else if(page==P_PATCHES){GraphicsState s=gr.Save();gr.TranslateTransform(x+12,y+11);gr.RotateTransform(-45.f);GraphicsPath band;band.AddArc(-14.f,-5.f,10.f,10.f,90.f,180.f);band.AddArc(4.f,-5.f,10.f,10.f,270.f,180.f);band.CloseFigure();gr.DrawPath(&p,&band);gr.DrawLine(&p,-5.f,-5.f,-5.f,5.f);gr.DrawLine(&p,5.f,-5.f,5.f,5.f);for(int a=0;a<2;a++)for(int b=0;b<2;b++)gr.DrawLine(&p,-2.f+b*4,-2.f+a*4,-1.5f+b*4,-2.f+a*4);gr.Restore(s);}
  else if(page==P_SRT){gr.DrawEllipse(&p,x+2,y+3,20.f,20.f);gr.DrawLine(&p,x+9,y,x+15,y);gr.DrawLine(&p,x+12,y,x+12,y+3);gr.DrawLine(&p,x+20,y+4,x+22,y+6);gr.DrawLine(&p,x+12,y+13,x+12,y+8);gr.DrawLine(&p,x+12,y+13,x+16,y+15);}
@@ -1481,7 +1553,7 @@ void draw_social_links(Graphics& gr,const Font& font)
 }
 void draw_sidebar(Graphics& gr,const Font&,const Font&,const Font& nav,const Font& footer_font){
  SolidBrush side(C_SIDE);gr.FillRectangle(&side,0,0,SIDE,H);Pen line(C_FIELD_BD);gr.DrawLine(&line,float(SIDE-1),0.f,float(SIDE-1),float(H));brand(gr,20,22,SIDE-38.f);
- for(int slot=0;slot<P_COUNT;slot++){const int i=k_nav_order[slot];float y=128.f+slot*49;bool active=g.page==i,hot=g.hover==ID_NAV+i;if(active||hot){LinearGradientBrush b(PointF(0,y),PointF(float(SIDE),y),active?Color(255,68,20,28):C_HOVER,C_SIDE);gr.FillRectangle(&b,0.f,y,float(SIDE),45.f);}if(active){SolidBrush b(C_RED);gr.FillRectangle(&b,0.f,y,3.f,45.f);}nav_icon(gr,i,22,y+10,active?C_TEXT:C_DIM);text(gr,i==P_INICIO?lx(design::GRAPHICS):i==P_JOGO?lx(design::GAMES):i==P_SAVES?lx(design::SAVES):T(k_nav[i]),62,y,nav,active?C_TEXT:C_DIM,StringAlignmentNear,SIDE-72.f,45);hit(0,y,SIDE,45,ID_NAV+i);}
+ for(int slot=0;slot<P_COUNT;slot++){const int i=k_nav_order[slot];float y=128.f+slot*49;bool active=g.page==i,hot=g.hover==ID_NAV+i;if(active||hot){LinearGradientBrush b(PointF(0,y),PointF(float(SIDE),y),active?Color(255,68,20,28):C_HOVER,C_SIDE);gr.FillRectangle(&b,0.f,y,float(SIDE),45.f);}if(active){SolidBrush b(C_RED);gr.FillRectangle(&b,0.f,y,3.f,45.f);}nav_icon(gr,i,22,y+10,active?C_TEXT:C_DIM);text(gr,i==P_INICIO?lx(design::GRAPHICS):i==P_JOGO?lx(design::GAMES):i==P_SAVES?lx(design::SAVES):i==P_TROPHIES?cv_trophy_text::get(g_lang,cv_trophy_text::Title):T(k_nav[i]),62,y,nav,active?C_TEXT:C_DIM,StringAlignmentNear,SIDE-72.f,45);hit(0,y,SIDE,45,ID_NAV+i);}
  if(upd_busy())return;   /* the update card takes the foot of the sidebar */
  draw_social_links(gr,footer_font);
  text(gr,T(S_CREDIT_KASTIEL),22,H-62.f,footer_font,C_DIM,StringAlignmentNear,SIDE-38.f,22);text(gr,k_launcher_version,22,H-38.f,footer_font,C_DIM);
@@ -2269,6 +2341,8 @@ void option_card(Graphics& gr, float x, float y, float w, float h, bool on, int 
     hit(x, y, w, h, id);
 }
 
+#include "launcher_trophies.inc"
+
 std::wstring srt_enemy_value(int n) {return n==0?T(S_AA_OFF):n==99?T(S_SRT_ALL):std::to_wstring(n);}
 std::wstring srt_language_value() {return g.s.srt_language?k_lang_name[cv_srt_i18n::selection(g.s.srt_language,g_lang)]:T(S_SRT_FOLLOW);}
 /* Where draw_srt last put its sliders and the panel preview, in page coordinates. */
@@ -2395,15 +2469,53 @@ void draw_srt(Graphics& gr,const Font& head,const Font& body,const Font& fsm)
     g_page_end=std::max(g_page_end,y);
 }
 
+/* Keep map selection at the top of Cheats, visible before any scrolling.
+ * Toggle, destination action and keyboard/controller hints have separate roles. */
+float draw_map_selection(Graphics& gr,const Font& head,const Font& body,const Font& fsm)
+{
+    namespace mt=cv_launcher_maps;
+    auto tr=[](mt::Id id){return mt::get(g_lang,id);};
+    const float x=SIDE+32.f,w=W-SIDE-64.f,y=104,h=252;
+    std::wstring title=tr(mt::Title);CharUpperBuffW(title.data(),DWORD(title.size()));
+    section(gr,title,x,34,w,head);
+    text(gr,tr(mt::Intro),x,70,fsm,C_DIM,StringAlignmentNear,w,24);
+    RectF card(x,y,w,h);GraphicsPath* cp=round_rect(card,6);
+    SolidBrush fill(C_PANEL);gr.FillPath(&fill,cp);Pen border(C_FIELD_BD,1);gr.DrawPath(&border,cp);delete cp;
+    const float rowY=y+16,rowW=w-36;
+    RectF row(x+18,rowY,rowW,58);GraphicsPath* rp=round_rect(row,4);
+    SolidBrush rb(g.hover==ID_TEST_ENABLE?C_HOVER:C_FIELD);gr.FillPath(&rb,rp);gr.DrawPath(&border,rp);delete rp;
+    text(gr,tr(mt::Enable),row.X+16,row.Y,body,C_TEXT,StringAlignmentNear,rowW-230,58);
+    text(gr,tr(g.s.test_tools?mt::On:mt::Off),row.X+rowW-196,row.Y,fsm,C_DIM,StringAlignmentFar,110,58);
+    RectF sw(row.X+rowW-66,row.Y+16,48,26);GraphicsPath* sp=round_rect(sw,13);
+    SolidBrush sb(g.s.test_tools?C_RED:Color(255,60,52,52));gr.FillPath(&sb,sp);delete sp;
+    SolidBrush knob(C_TEXT);gr.FillEllipse(&knob,g.s.test_tools?sw.X+25:sw.X+3,sw.Y+3,20.f,20.f);
+    hit(row.X,row.Y,row.Width,row.Height,ID_TEST_ENABLE);
+    text(gr,tr(g.running?mt::RunningHint:mt::StartHint),x+18,y+90,fsm,C_DIM,StringAlignmentNear,w-36,38);
+    gr.DrawLine(&border,x+18,y+148,x+w-18,y+148);
+    text(gr,tr(mt::Shortcuts),x+18,y+158,fsm,C_DIM,StringAlignmentNear,w-36,22);
+    const float col=(w-36)/4;
+    const wchar_t* labels[]={T(S_SC_COL_KEY),L"PlayStation",L"Xbox",L"Switch"};
+    const wchar_t* keys[]={L"F7",L"R1 + R2 + L1 + L2 + ○",L"RB + RT + LB + LT + B",L"R + ZR + L + ZL + A"};
+    for(int i=0;i<4;i++){
+        const float cx=x+18+i*col;
+        text(gr,labels[i],cx,y+186,fsm,C_DIM,StringAlignmentNear,col-16,20);
+        if(!i)key_glyph(gr,VK_F7,cx,y+208,28);
+        else text(gr,keys[i],cx,y+208,fsm,C_TEXT,StringAlignmentNear,col-16,28);
+        if(i)gr.DrawLine(&border,cx-10,y+190,cx-10,y+236);
+    }
+    return y+h;
+}
+
 /* The F6 item menu: the switch and how to use it (cv_item_menu.cpp). */
 void draw_inventario(Graphics& gr,const Font& head,const Font& body,const Font& fsm)
 {
     const float x=SIDE+32.f,w=W-SIDE-64.f;
-    section(gr,T(S_ITEMS_TITLE),x,34,w,head);
-    text(gr,T(S_ITEMS_INTRO),x,70,fsm,C_DIM,StringAlignmentNear,w,24);
-    option_card(gr,x,104,w,84,g.s.items_menu,ID_ITEMS_ENABLE,T(S_ITEMS_ENABLE_T),T(S_ITEMS_ENABLE_D),body,fsm);
+    const float top=draw_map_selection(gr,head,body,fsm)+28;
+    section(gr,T(S_ITEMS_TITLE),x,top,w,head);
+    text(gr,T(S_ITEMS_INTRO),x,top+36,fsm,C_DIM,StringAlignmentNear,w,24);
+    option_card(gr,x,top+70,w,84,g.s.items_menu,ID_ITEMS_ENABLE,T(S_ITEMS_ENABLE_T),T(S_ITEMS_ENABLE_D),body,fsm);
     /* How to use it: one row per action, keyboard / PlayStation / Xbox / Switch side by side. */
-    const float y=210;
+    const float y=top+176;
     RectF card(x,y,w,236);GraphicsPath* cp=round_rect(card,6);
     SolidBrush cb(C_PANEL);gr.FillPath(&cb,cp);Pen cbd(C_FIELD_BD,1);gr.DrawPath(&cbd,cp);delete cp;
     text(gr,T(S_ITEMS_HOW_T),x+20,y+12,head,C_RED_HI,StringAlignmentNear,w-40,26);
@@ -2457,18 +2569,6 @@ void draw_inventario(Graphics& gr,const Font& head,const Font& body,const Font& 
                 cv_enhanced_text::get(g_lang,cv_enhanced_text::Battle),
                 cv_enhanced_text::get(g_lang,cv_enhanced_text::BattleHelp),body,fsm);
     cy+=106;
-    /* Test maps (F7): here with the other play aids, easier to find than on Advanced. */
-    cy+=10;
-    {   /* upper case like this page's other section titles */
-        std::wstring maps = lx(design::MAPS_TITLE); CharUpperBuffW(maps.data(), (DWORD)maps.size());
-        section(gr, maps, x, cy, w, head);
-    }
-    cy+=46;
-    button(gr,RectF(x,cy,390,32),T(g.s.test_tools?S_TEST_ENABLED:S_TEST_ENABLE),ID_TEST_ENABLE,body);
-    button(gr,RectF(x+404,cy,260,32),T(S_TEST_OPEN),ID_TEST_OPEN,body,false,g.s.test_tools&&g.running);
-    text(gr,shortcut_text(L"F7",L"R1+R2+L1+L2+○",L"RB+RT+LB+LT+B",L"R+ZR+L+ZL+A"),
-         x,cy+40,fsm,C_DIM,StringAlignmentNear,w,20);
-    cy+=76;
     g_page_end=std::max(g_page_end,cy);
 }
 
@@ -2698,6 +2798,7 @@ void paint(HDC hdc)
     else if (g.page == P_PATCHES) draw_patches(gr, fHead, fBody, fSmall);
     else if (g.page == P_DESEMPENHO) draw_desempenho(gr, fHead, fBody, fSmall);
     else if (g.page == P_MODS) draw_mods(gr, fHead, fBody, fSmall);
+    else if (g.page == P_TROPHIES) draw_trophies(gr,fHead,fBody,fSmall);
     else if (g.page == P_SRT) draw_srt(gr, fHead, fBody, fSmall);
     else if (g.page == P_INVENTARIO) draw_inventario(gr, fHead, fBody, fSmall);
     else draw_avancado(gr, fHead, fBody, fSmall);
@@ -2714,6 +2815,8 @@ void paint(HDC hdc)
         std::vector<std::wstring> items; std::vector<int> item_lang; int sel = 0;
         const float x=g_dd_anchor.X,bw=g_dd_anchor.Width;float y=g_dd_anchor.Y+g_dd_anchor.Height;
         if (g.open_dd == ID_DD_MODE) { for (int i = 0; i < 3; i++) items.push_back(mode_name(i)); sel = g.s.mode; }
+        else if(g.open_dd==ID_DD_TROPHY_CORNER){for(int i=0;i<4;i++)items.push_back(T(S_SRT_TL+i));sel=g.s.trophy_corner;}
+        else if(g.open_dd==ID_DD_TROPHY_FILTER){items={trophy_text(tt::All),trophy_text(tt::Unlocked),trophy_text(tt::Locked)};sel=trophy_filter;}
         else if (g.open_dd == ID_DD_RES) { for (int i = 0; i < 5; i++) items.push_back(res_name(i)); sel = g.s.res; }
         else if (g.open_dd == ID_DD_AA) { for (int i = 0; i < 3; i++) items.push_back(aa_name(i)); sel = g.s.aa; }
         else if(g.open_dd==ID_DD_POSE_DEVICE){for(int i=0;i<2;i++)items.push_back(pose_device_name(i));sel=g.s.pose_device;}
@@ -2882,6 +2985,8 @@ void rumble_test()
 void apply_live(bool restore_menu = true)
 {
     set_rumble_env();
+    cv_trophies::options(g.s.trophies,g.s.trophy_notifications,g_lang);
+    cv_trophy_popup::corner(g.s.trophy_corner);
     cv_test_tools_enable(g.s.test_tools);
     cv_item_menu_enable(g.s.items_menu);
     cv_cheats_set(g.s.patch[2],g.s.patch[3]);
@@ -3048,12 +3153,25 @@ void click(int id)
         changed();return;
     }
 
+    if(id==ID_TROPHY_ENABLE){g.s.trophies=!g.s.trophies;changed();return;}
+    if(id==ID_TROPHY_NOTIFY){g.s.trophy_notifications=!g.s.trophy_notifications;changed();return;}
+    if(id==ID_TROPHY_REFRESH){trophy_view(true);InvalidateRect(g.hwnd,nullptr,FALSE);return;}
+    if(id==ID_TROPHY_RESET){
+        auto snapshot=trophy_view(true);if(g.running||!snapshot.catalog||!snapshot.error.empty())return;
+        if(!cv_trophies::has_unlocked())MessageBoxW(g.hwnd,trophy_text(tt::ResetNone),trophy_text(tt::Title),MB_OK|MB_ICONINFORMATION);
+        else if(MessageBoxW(g.hwnd,trophy_text(tt::ResetConfirm),trophy_text(tt::Title),MB_YESNO|MB_DEFBUTTON2|MB_ICONWARNING)==IDYES){
+            if(!cv_trophies::reset())MessageBoxW(g.hwnd,trophy_text(tt::Error),trophy_text(tt::Title),MB_OK|MB_ICONERROR);
+        }
+        InvalidateRect(g.hwnd,nullptr,FALSE);return;
+    }
     if (g.open_dd >= 0) {
         if (id == ID_DD_UP || id == ID_DD_DOWN) { g.dd_scroll += id == ID_DD_UP ? -1 : 1; InvalidateRect(g.hwnd, NULL, FALSE); return; }
         if (id == ID_DD_LIST) return;
         if (id >= ID_DD_ITEM && id < ID_DD_ITEM + 64) {
             int i = id - ID_DD_ITEM;
             if (g.open_dd == ID_DD_MODE) g.s.mode = i;
+            else if(g.open_dd==ID_DD_TROPHY_CORNER)g.s.trophy_corner=i;
+            else if(g.open_dd==ID_DD_TROPHY_FILTER)trophy_filter=i;
             else if (g.open_dd == ID_DD_RES) g.s.res = i;
             else if (g.open_dd == ID_DD_AA) g.s.aa = i;
             else if (g.open_dd == ID_DD_FPS && !opt30_comparison()) g.s.fps = i;
@@ -3086,7 +3204,7 @@ void click(int id)
         if (g.page == P_MODS) g.tex_rep = -1;        /* count the textures again */
     }
     else if (id >= ID_PATCH && id < ID_PATCH + NPATCHES) { g.s.patch[id - ID_PATCH] ^= true; changed(); }
-    else if (id == ID_DD_FILM || id == ID_DD_MODE || id == ID_DD_RES || id == ID_DD_AA || id == ID_DD_FPS || id == ID_DD_POSE_DEVICE || id == ID_DD_FRAME_GEN || id == ID_DD_VSYNC || id == ID_DD_ANISO || id == ID_DD_SHARP || id == ID_DD_LANG || id==ID_DD_SRT_ENEMIES || id==ID_DD_SRT_CORNER || id==ID_DD_SRT_LANGUAGE || id == ID_DD_OV_CORNER || id == ID_DD_OV_LAYOUT || id == ID_DD_OV_SIZE || id == ID_DD_OV_BG || id == ID_DD_SRT_INVPOS || id == ID_DD_SRT_WINDOW || id == ID_DD_SRT_BOSSBAR) {
+    else if (id == ID_DD_TROPHY_CORNER || id == ID_DD_TROPHY_FILTER || id == ID_DD_FILM || id == ID_DD_MODE || id == ID_DD_RES || id == ID_DD_AA || id == ID_DD_FPS || id == ID_DD_POSE_DEVICE || id == ID_DD_FRAME_GEN || id == ID_DD_VSYNC || id == ID_DD_ANISO || id == ID_DD_SHARP || id == ID_DD_LANG || id==ID_DD_SRT_ENEMIES || id==ID_DD_SRT_CORNER || id==ID_DD_SRT_LANGUAGE || id == ID_DD_OV_CORNER || id == ID_DD_OV_LAYOUT || id == ID_DD_OV_SIZE || id == ID_DD_OV_BG || id == ID_DD_SRT_INVPOS || id == ID_DD_SRT_WINDOW || id == ID_DD_SRT_BOSSBAR) {
         g.open_dd = id; g.dd_scroll = 0;
         if (id == ID_DD_LANG && g_lang_pick >= 0)   /* open with the chosen language in view */
             for (int i = 0; i < LANG_COUNT; i++)
@@ -3096,7 +3214,7 @@ void click(int id)
     else if (id == ID_CACHE_CLEAR && !g.running) g.cache_msg = Tf(S_CACHE_CLEARED_FMT, cache_clear());
     else if (id == ID_CACHE_OPEN) { std::error_code ec; fs::create_directories(cache_dir(), ec); open_in_explorer(cache_dir().wstring()); }
     else if(id==ID_TEST_ENABLE){g.s.test_tools=!g.s.test_tools;cv_test_tools_enable(g.s.test_tools);changed();}
-    else if(id==ID_TEST_OPEN&&g.running)cv_test_tools_show(g.hwnd,g.s.game,g_lang,PAD_INPUT_KEYBOARD);
+    else if(id==ID_TEST_OPEN&&g.running&&g.s.test_tools)cv_test_tools_show(g.hwnd,g.s.game,g_lang,PAD_INPUT_KEYBOARD);
     else if(id==ID_BATTLE){g.s.battle_unlocked=!g.s.battle_unlocked;changed();}
     else if(id==ID_FOCUS_PAUSE){g.s.focus_pause=!g.s.focus_pause;changed();}
     else if(id==ID_UPD_TOGGLE){g.s.check_updates=!g.s.check_updates;changed();}
@@ -3296,6 +3414,7 @@ LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp)
     case WM_ERASEBKGND: return 1;
     case WM_PAINT: { PAINTSTRUCT ps; HDC dc = BeginPaint(h, &ps); paint(dc); EndPaint(h, &ps); return 0; }
     case WM_MOUSEMOVE: {
+        if(g_upd.notes_drag){upd_notes_drag_to(float(logical_y(GET_Y_LPARAM(lp))));return 0;}
         if(g.srt_layout_drag>=0){move_srt_preview(logical_x(GET_X_LPARAM(lp)),logical_y(GET_Y_LPARAM(lp)));return 0;}
         if(g.srt_drag>=0) {update_srt_slider(g.srt_drag,logical_x(GET_X_LPARAM(lp)));SetCursor(LoadCursor(NULL,IDC_HAND));return 0;}
         if (g.page_drag) { page_drag_to(logical_y(GET_Y_LPARAM(lp))); return 0; }
@@ -3305,7 +3424,12 @@ LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp)
         TRACKMOUSEEVENT t = { sizeof t, TME_LEAVE, h, 0 }; TrackMouseEvent(&t);
         return 0; }
     case WM_MOUSEWHEEL:
-        if (upd_modal()) return 0;
+        if (upd_modal()) {
+            POINT point={GET_X_LPARAM(lp),GET_Y_LPARAM(lp)};ScreenToClient(h,&point);
+            if(g_upd.step==UPD_OFFER&&g_upd.notes_box.Contains(float(logical_x(point.x)),float(logical_y(point.y))))
+                upd_notes_scroll_to(g_upd.notes_scroll-float(GET_WHEEL_DELTA_WPARAM(wp))*48.f/WHEEL_DELTA);
+            return 0;
+        }
         if(g.page==P_CONTROLES && g.open_dd<0) {
             POINT p={GET_X_LPARAM(lp),GET_Y_LPARAM(lp)};ScreenToClient(h,&p);
             if(hit_at(logical_x(p.x),logical_y(p.y))==ID_RUMBLE) {
@@ -3337,6 +3461,11 @@ LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp)
     case WM_SETCURSOR: if (LOWORD(lp) == HTCLIENT) return TRUE; break;
     case WM_LBUTTONDOWN: {
         const int id=hit_at(logical_x(GET_X_LPARAM(lp)),logical_y(GET_Y_LPARAM(lp)));
+        if(upd_modal()){
+            if(id==ID_UPD_NOTES_THUMB){g_upd.notes_drag=true;g_upd.notes_grab=logical_y(GET_Y_LPARAM(lp))-g_upd.notes_thumb.Y;SetCapture(h);return 0;}
+            if(id==ID_UPD_NOTES_TRACK){upd_notes_scroll_to(g_upd.notes_scroll+(logical_y(GET_Y_LPARAM(lp))<g_upd.notes_thumb.Y?-1.f:1.f)*g_upd.notes_view.Height);return 0;}
+            click(id);return 0;
+        }
         if(g.page==P_SRT&&g.open_dd<0&&(id==ID_SRT_MAIN_MOVE||id==ID_SRT_INV_MOVE)){
             g.srt_layout_drag=id==ID_SRT_INV_MOVE?1:0;const auto panel=srt_layout_panel(g.srt_layout_drag);
             g.srt_grab_x=logical_x(GET_X_LPARAM(lp))-panel.X;g.srt_grab_y=logical_y(GET_Y_LPARAM(lp))+g.page_scroll[P_SRT]-panel.Y;
@@ -3358,12 +3487,19 @@ LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp)
         click(id);return 0;
     }
     case WM_LBUTTONUP:
+        if(g_upd.notes_drag){g_upd.notes_drag=false;ReleaseCapture();InvalidateRect(h,nullptr,FALSE);return 0;}
         if(g.srt_layout_drag>=0){finish_srt_drag();return 0;}
         if (g.page_drag) { g.page_drag = false; ReleaseCapture(); InvalidateRect(h, NULL, FALSE); return 0; }
         if(g.srt_drag>=0) {update_srt_slider(g.srt_drag,logical_x(GET_X_LPARAM(lp)));finish_srt_drag();return 0;}break;
-    case WM_CAPTURECHANGED: case WM_CANCELMODE: g.page_drag = false; finish_srt_drag();return 0;
+    case WM_CAPTURECHANGED: case WM_CANCELMODE: g_upd.notes_drag=false;g.page_drag = false; finish_srt_drag();return 0;
     case WM_KEYDOWN: case WM_SYSKEYDOWN:
         if (upd_modal() && m == WM_KEYDOWN) {   /* Esc: Agora nao / Fechar; Enter: Instalar */
+            if(g_upd.step==UPD_OFFER){
+                if(wp==VK_HOME){upd_notes_scroll_to(0);return 0;}
+                if(wp==VK_END){upd_notes_scroll_to(g_upd.notes_max);return 0;}
+                if(wp==VK_NEXT||wp==VK_PRIOR){upd_notes_scroll_to(g_upd.notes_scroll+(wp==VK_NEXT?1.f:-1.f)*(g_upd.notes_view.Height-20));return 0;}
+                if(wp==VK_DOWN||wp==VK_UP){upd_notes_scroll_to(g_upd.notes_scroll+(wp==VK_DOWN?24.f:-24.f));return 0;}
+            }
             if (wp == VK_ESCAPE) click(g_upd.step == UPD_OFFER ? ID_UPD_LATER : ID_UPD_CLOSE);
             else if (wp == VK_RETURN && g_upd.step == UPD_OFFER) click(ID_UPD_INSTALL);
             return 0;
@@ -3696,6 +3832,11 @@ void start_game()
     // editor, shortcut, or Explorer with a different working directory.
     SetCurrentDirectoryW(port_directory().c_str());
     set_env("PS3_VFS_ROOT", narrow(s.game));
+    set_env("CV_TROPHIES",s.trophies?"1":"0");
+    set_env("CV_TROPHY_NOTIFICATIONS",s.trophy_notifications?"1":"0");
+    set_env("CV_TROPHY_CORNER",std::to_string(s.trophy_corner));
+    cv_trophy_popup::corner(s.trophy_corner);
+    set_env("CV_TROPHY_LANGUAGE",std::to_string(g_lang));
     set_env("PS3_SAVE_ROOT", s.saves.empty() ? "" : save_utf8(save_folder()));
     const auto rap = rap_for_game(s, GAME_CODE);
     if (!rap.empty()) set_env("PS3_RAP_DIR", narrow(fs::path(rap).parent_path().wstring()));

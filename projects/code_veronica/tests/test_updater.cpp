@@ -12,6 +12,7 @@
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <vector>
 
 namespace fs = std::filesystem;
 using namespace cv_update;
@@ -118,6 +119,11 @@ int main()
     put(port / L"avcodec-61.dll", "old dll");
     put(port / L"cv_launcher.ini", "settings");
     put(port / L"gamedata/dev_hdd0/save.bin", "my save");
+    const std::vector<fs::path> personal_files={L"gamedata/trophies/NPWR01871_00.json",L"bin/gamedata/trophies/NPWR01871_00.json",
+        L"bin/gamedata/dev_hdd0/home/00000001/savedata/CodeVeronicaLibrary/NPEB00553/a.cvsav",L"cv_f7_saves.txt",L"bin/cv_f7_saves.txt",
+        L"trophies/local.json",L"bin/trophies/local.json",L"CodeVeronicaLibrary/a.cvsav",L"custom/place/a.cvsav"};
+    for(const auto& file:personal_files){assert(is_protected(file));put(port/file,"personal progress must survive");put(pkg/file,"must never replace personal data");}
+
     put(port / L"shader_cache/a.cso", "cache");
     put(pkg / L"CodeVeronicaPort.exe", "new exe");
     put(pkg / L"avcodec-61.dll", "new dll");
@@ -154,6 +160,7 @@ int main()
     assert(get(port / L"cv_launcher.ini") == "settings");
     assert(get(port / L"gamedata/dev_hdd0/save.bin") == "my save");
     assert(get(port / L"shader_cache/a.cso") == "cache");
+    for(const auto& file:personal_files)assert(get(port/file)=="personal progress must survive");
     assert(get(port / L"CodeVeronicaPort.exe.cvupd-old") == "old exe");
 
     /* a locked file (as the running exe's DLLs would be, without delete

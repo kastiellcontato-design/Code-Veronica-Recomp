@@ -9,6 +9,8 @@
  */
 
 #include "sceNpTrophy.h"
+#include "sceNpTrophyHost.h"
+const SceNpTrophyHostBackend* g_sce_np_trophy_host = 0;
 #include "../system/cellSysutil.h"
 #include "ps3emu/guest_call.h"
 #include <stdio.h>
@@ -59,6 +61,28 @@ typedef struct {
 static TrophyContext s_contexts[SCE_NP_TROPHY_MAX_CONTEXTS + 1];
 static TrophyHandle  s_handles[SCE_NP_TROPHY_MAX_HANDLES + 1];
 
+/* Host callbacks never expose guest pointers. The runner binds one catalog
+ * before starting guest threads. Generic toolkit users retain the old store. */
+static void trophy_commid(const TrophyContext* ctx,char out[32]) {
+    snprintf(out,32,"%.*s_%02u",SCE_NP_COMMUNICATION_ID_MAX_LENGTH,ctx->commId.data,ctx->commId.num);
+}
+static int trophy_host_info(TrophyContext* ctx,int id,SceNpTrophyHostGame* game,SceNpTrophyHostItem* item) {
+    if(!g_sce_np_trophy_host)return 0;
+    char commid[32];trophy_commid(ctx,commid);
+    return g_sce_np_trophy_host->query(commid,id,game,item);
+}
+static void trophy_host_sync(TrophyContext* ctx) {
+    SceNpTrophyHostGame game;
+    if(!trophy_host_info(ctx,-1,&game,NULL))return;
+    ctx->total_trophies=game.count<=128?game.count:128;
+    for(u32 i=0;i<ctx->total_trophies;i++) {
+        SceNpTrophyHostItem item;
+        if(trophy_host_info(ctx,(int)i,NULL,&item)) {
+            ctx->unlock_time[i]=item.timestamp;ctx->unlocked[i]=item.timestamp!=0;
+        }
+    }
+}
+
 /* ---------------------------------------------------------------------------
  * Persistent storage helpers
  * -----------------------------------------------------------------------*/
@@ -90,6 +114,7 @@ static void trophy_get_filepath(const SceNpCommunicationId* commId,
 
 static void trophy_save(TrophyContext* ctx)
 {
+    if(g_sce_np_trophy_host)return; /* committed atomically by the host backend */
     char filepath[1024];
     FILE* fp;
     int first = 1;
@@ -119,6 +144,7 @@ static void trophy_save(TrophyContext* ctx)
 
 static void trophy_load(TrophyContext* ctx)
 {
+    if(g_sce_np_trophy_host){trophy_host_sync(ctx);return;}
     char filepath[1024];
     FILE* fp;
     char line[256];
@@ -391,28 +417,28 @@ s32 sceNpTrophyGetGameInfo(SceNpTrophyContext context,
     details = GUEST_PTR(details, SceNpTrophyGameDetails*);
     data = GUEST_PTR(data, SceNpTrophyGameData*);
 
+    TrophyContext* ctx=&s_contexts[context];trophy_host_sync(ctx);
+    SceNpTrophyHostGame info={0};int hosted=trophy_host_info(ctx,-1,&info,NULL);
+    if(!details&&!data)return SCE_NP_TROPHY_ERROR_INVALID_ARGUMENT;
     if (details) {
-        memset(details, 0, sizeof(SceNpTrophyGameDetails));
-        details->numTrophies = 32; /* default trophy set */
-        details->numPlatinum = 1;
-        details->numGold     = 2;
-        details->numSilver   = 8;
-        details->numBronze   = 21;
-        strncpy(details->title, "PS3 Game",
-                SCE_NP_TROPHY_GAME_TITLE_MAX_SIZE - 1);
-        strncpy(details->description, "Trophy set",
-                SCE_NP_TROPHY_GAME_DESC_MAX_SIZE - 1);
+        memset(details,0,sizeof(*details));
+        details->numTrophies=ps3_bswap32(hosted?info.count:ctx->total_trophies);
+        details->numPlatinum=ps3_bswap32(hosted?info.grades[1]:0);
+        details->numGold=ps3_bswap32(hosted?info.grades[2]:0);
+        details->numSilver=ps3_bswap32(hosted?info.grades[3]:0);
+        details->numBronze=ps3_bswap32(hosted?info.grades[4]:ctx->total_trophies);
+        snprintf(details->title,sizeof details->title,"%s",hosted?info.title:"PS3 Game");
+        snprintf(details->description,sizeof details->description,"%s",hosted?info.description:"Trophy set");
     }
-
-    if (data) {
-        memset(data, 0, sizeof(SceNpTrophyGameData));
-        data->unlockedTrophies = trophy_count_unlocked(&s_contexts[context]);
-        /* Count by grade would require per-trophy grade data;
-         * return conservative estimates */
-        data->unlockedPlatinum = 0;
-        data->unlockedGold     = 0;
-        data->unlockedSilver   = 0;
-        data->unlockedBronze   = data->unlockedTrophies;
+    if(data) {
+        u32 grades[5]={0};memset(data,0,sizeof(*data));
+        for(u32 i=0;i<ctx->total_trophies;i++)if(ctx->unlocked[i]){
+            SceNpTrophyHostItem item={0};u32 grade=trophy_host_info(ctx,(int)i,NULL,&item)?item.grade:4;
+            if(grade>=1&&grade<=4)grades[grade]++;
+        }
+        data->unlockedTrophies=ps3_bswap32(trophy_count_unlocked(ctx));
+        data->unlockedPlatinum=ps3_bswap32(grades[1]);data->unlockedGold=ps3_bswap32(grades[2]);
+        data->unlockedSilver=ps3_bswap32(grades[3]);data->unlockedBronze=ps3_bswap32(grades[4]);
     }
 
     printf("[sceNpTrophy] GetGameInfo(ctx=%d)\n", context);
@@ -442,22 +468,20 @@ s32 sceNpTrophyGetTrophyInfo(SceNpTrophyContext context,
     details = GUEST_PTR(details, SceNpTrophyDetails*);
     data = GUEST_PTR(data, SceNpTrophyData*);
 
-    if (details) {
-        memset(details, 0, sizeof(SceNpTrophyDetails));
-        details->trophyId = (u32)trophyId;
-        details->trophyGrade = SCE_NP_TROPHY_GRADE_BRONZE;
-        snprintf(details->name, SCE_NP_TROPHY_NAME_MAX_SIZE,
-                 "Trophy %d", trophyId);
-        snprintf(details->description, SCE_NP_TROPHY_DESC_MAX_SIZE,
-                 "Trophy #%d description", trophyId);
-        details->hidden = 0;
+    TrophyContext* ctx=&s_contexts[context];trophy_host_sync(ctx);
+    SceNpTrophyHostItem item={0};int hosted=trophy_host_info(ctx,trophyId,NULL,&item);
+    if(g_sce_np_trophy_host&&!hosted)return SCE_NP_TROPHY_ERROR_NOT_FOUND;
+    if(!details&&!data)return SCE_NP_TROPHY_ERROR_INVALID_ARGUMENT;
+    if(details){
+        memset(details,0,sizeof(*details));details->trophyId=ps3_bswap32((u32)trophyId);
+        details->trophyGrade=ps3_bswap32(hosted?item.grade:SCE_NP_TROPHY_GRADE_BRONZE);
+        if(hosted){snprintf(details->name,sizeof details->name,"%s",item.name);snprintf(details->description,sizeof details->description,"%s",item.description);details->hidden=item.hidden;}
+        else{snprintf(details->name,sizeof details->name,"Trophy %d",trophyId);snprintf(details->description,sizeof details->description,"Trophy #%d description",trophyId);}
     }
-
-    if (data) {
-        memset(data, 0, sizeof(SceNpTrophyData));
-        data->trophyId = (u32)trophyId;
-        data->unlocked = s_contexts[context].unlocked[trophyId];
-        data->timestamp = s_contexts[context].unlock_time[trophyId];
+    if(data){
+        memset(data,0,sizeof(*data));data->trophyId=ps3_bswap32((u32)trophyId);
+        data->unlocked=ctx->unlocked[trophyId];
+        data->timestamp=ps3_bswap64(ctx->unlocked[trophyId]?(ctx->unlock_time[trophyId]+62135596800ULL)*1000000ULL:0);
     }
 
     return CELL_OK;
@@ -483,6 +507,16 @@ s32 sceNpTrophyUnlockTrophy(SceNpTrophyContext context,
     if (trophyId < 0 || (u32)trophyId >= s_contexts[context].total_trophies)
         return SCE_NP_TROPHY_ERROR_INVALID_ARGUMENT;
 
+    if(g_sce_np_trophy_host){
+        TrophyContext* ctx=&s_contexts[context];char commid[32];trophy_commid(ctx,commid);
+        uint64_t timestamp=0;int result=g_sce_np_trophy_host->unlock(commid,trophyId,&timestamp);
+        if(platinumId)vm_write32(GUEST_EA(platinumId),(u32)-1);
+        if(result==2)return CELL_OK; /* recording explicitly disabled */
+        if(result==3)return SCE_NP_TROPHY_ERROR_NOT_FOUND;
+        if(result==4)return SCE_NP_TROPHY_ERROR_UNKNOWN;
+        ctx->unlocked[trophyId]=1;ctx->unlock_time[trophyId]=timestamp;
+        return result==1?SCE_NP_TROPHY_ERROR_ALREADY_UNLOCKED:CELL_OK;
+    }
     if (s_contexts[context].unlocked[trophyId])
         return SCE_NP_TROPHY_ERROR_ALREADY_UNLOCKED;
 
@@ -529,6 +563,7 @@ s32 sceNpTrophyGetTrophyUnlockState(SceNpTrophyContext context,
     if (!flags || !count)
         return SCE_NP_TROPHY_ERROR_INVALID_ARGUMENT;
 
+    trophy_host_sync(&s_contexts[context]);
     u32 flags_ea = (u32)(uintptr_t)flags;
     for (u32 o = 0; o < sizeof(SceNpTrophyFlagArray); o += 4)
         vm_write32(flags_ea + o, 0);
@@ -564,6 +599,7 @@ s32 sceNpTrophyGetGameProgress(SceNpTrophyContext context,
     if (!percentage)
         return SCE_NP_TROPHY_ERROR_INVALID_ARGUMENT;
 
+    trophy_host_sync(&s_contexts[context]);
     u32 total = s_contexts[context].total_trophies;
     u32 unlocked = trophy_count_unlocked(&s_contexts[context]);
 

@@ -369,7 +369,7 @@ int compare_versions(const std::wstring& a, const std::wstring& b)
 bool is_protected(const fs::path& relative)
 {
     static const wchar_t* const dirs[] = { L"gamedata", L"dev_hdd0", L"dev_flash", L"saves", L"shader_cache",
-        L"eboot_cache", L"appearance_cache", L"screenshots", L"mods", L"textures", L"jogo", L"save-library-backups" };
+        L"eboot_cache", L"appearance_cache", L"screenshots", L"mods", L"textures", L"jogo", L"save-library-backups", L"trophies", L"codeveronicalibrary" };
     if (!safe_path(relative)) return true;
     for (const auto& part : relative) if (part == L".." || part == L".") return true;
     // Organized packages put both runtimes and personal data below bin/.
@@ -381,7 +381,7 @@ bool is_protected(const fs::path& relative)
     const std::wstring first = lower(relative.begin()->wstring());
     for (const wchar_t* d : dirs) if (first == d) return true;
     const std::wstring name = lower(relative.filename().wstring()), ext = lower(relative.extension().wstring());
-    if (ext == L".ini" || ext == L".log" || ext == L".cvupd-old") return true;
+    if (ext == L".cvsav" || ext == L".ini" || ext == L".log" || ext == L".cvupd-old") return true;
     if (name.rfind(L"run-log", 0) == 0 || name == L"cv_f7_saves.txt" || name == k_cleanup_list) return true;
     return false;
 }

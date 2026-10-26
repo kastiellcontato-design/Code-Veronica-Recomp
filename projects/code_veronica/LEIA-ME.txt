@@ -223,3 +223,7 @@ THIRD-PARTY-NOTICES.md.
 Este pacote não inclui jogo, PKG, licença RAP, firmware, saves ou configurações
 pessoais do desenvolvedor. Não distribua esses arquivos junto com o ZIP do port.
 O código é fornecido nos termos das licenças incluídas, sem garantia.
+
+TROFÉUS: a aba Troféus permite registrar conquistas locais, consultar os 12 troféus, filtrar o progresso e configurar as notificações. O canto padrão é o superior direito. Redefinir guarda backup e não altera os saves. Troféus são locais, sem sincronização com a PSN.
+MAPAS E SAVES: consulte os atalhos no launcher; F7 abre o menu durante a partida.
+ATUALIZAÇÕES: as notas têm rolagem; o atualizador preserva os troféus e os saves pessoais.

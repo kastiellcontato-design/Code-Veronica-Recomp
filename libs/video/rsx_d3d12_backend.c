@@ -810,6 +810,9 @@ static void quad_batch_draw(u32 fi, const rsx_ui_quad* quads, u32 count, const f
  * the flat UI one that samples it. */
 static void wait_for_gpu(void);
 static void srv_write(u32 heap_slot, ID3D12Resource* res, DXGI_FORMAT fmt, UINT mapping);
+#include "rsx_trophy_texture.h"
+static rsx_trophy_texture s_trophy_textures[FRAME_COUNT];
+static QuadVb s_trophy_vbs;
 static ID3D12PipelineState* s_spr_pso;
 static ID3D12Resource *s_spr_tex, *s_spr_up;
 static u64 s_spr_gen;
@@ -941,6 +944,26 @@ static void srt_layers_draw(u32 fi, const rsx_ui_quad* q, u32 nq, const rsx_ui_s
     if(nq>done)quad_vb_draw(fi,&s_srt_vbs,done,nq-done,mvp,s_d3d.pipeline_state_ui);
 }
 
+
+/* Compact trophy card: one cached texture and six animated vertices. Each
+ * backbuffer has its own upload, descriptor and VB; the normal frame-slot
+ * fence already protects their reuse. Nothing is allocated when idle. */
+const rsx_ui_sprite* (*g_rsx_trophy_hook)(uint32_t,uint32_t,const uint32_t**,uint32_t*,uint32_t*,uint64_t*);
+static void trophy_popup_draw(u32 fi,u32 w,u32 h,const float mvp[16]) {
+ if(!g_rsx_trophy_hook)return;
+ const uint32_t* rgba=NULL;u32 aw=0,ah=0;u64 generation=0;
+ const rsx_ui_sprite* card=g_rsx_trophy_hook(w,h,&rgba,&aw,&ah,&generation);
+ if(!card||!(card->argb>>24)||!sprite_pso()||!rsx_trophy_texture_upload(&s_trophy_textures[fi],s_d3d.device,s_d3d.cmd_list,rgba,aw,ah,generation))return;
+ if(!quad_vb_reserve(fi,1,&s_trophy_vbs))return;
+ UiVertex* vertices=(UiVertex*)s_trophy_vbs.mapped[fi];static const unsigned order[6]={0,1,2,2,1,3};
+ for(unsigned k=0;k<6;k++){unsigned corner=order[k];UiVertex v={card->x+((corner&2)?card->w:0),card->y+((corner&1)?card->h:0),0,1,1,1,(card->argb>>24)/255.f,(corner&2)?1.f:0.f,(corner&1)?1.f:0.f};vertices[k]=v;}
+ const u32 slot=SPRITE_SRV+1+fi;
+ srv_write(slot,s_trophy_textures[fi].texture,DXGI_FORMAT_R8G8B8A8_UNORM,D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING);
+ ID3D12GraphicsCommandList* cl=s_d3d.cmd_list;D3D12_GPU_DESCRIPTOR_HANDLE handle;s_d3d.srv_heap->lpVtbl->GetGPUDescriptorHandleForHeapStart(s_d3d.srv_heap,&handle);handle.ptr+=(u64)slot*s_d3d.srv_inc;
+ cl->lpVtbl->SetDescriptorHeaps(cl,1,&s_d3d.srv_heap);cl->lpVtbl->SetGraphicsRootSignature(cl,s_d3d.root_signature);cl->lpVtbl->SetGraphicsRootDescriptorTable(cl,1,handle);
+ quad_vb_draw(fi,&s_trophy_vbs,0,1,mvp,s_spr_pso);
+}
+
 /* The game's UI batch: logical 640x480, centred at 4:3. */
 static void ui_batch_draw(u32 fi)
 {
@@ -983,6 +1006,7 @@ static void perf_overlay_draw(u32 fi)
     }
     const rsx_ui_quad* quads=perf_overlay_quads(w,h,&count);
     if(count)quad_batch_draw(fi,quads,count,mvp,&s_ov_vbs);
+    trophy_popup_draw(fi,w,h,mvp);
 }
 
 static float rs_for(u32 w, u32 h) { return (s_rs != 1.0f && (u64)w * h > 16384u) ? s_rs : 1.0f; }
@@ -14904,6 +14928,7 @@ int rsx_d3d12_backend_init(u32 width, u32 height, const char* title)
 
     rsx_set_backend(&s_d3d12_backend);
 
+    if(g_rsx_trophy_hook)sprite_pso(); /* warm up outside achievement gameplay */
     s_d3d.initialized = 1;
     s_d3d.last_fps_time = GetTickCount64();
 
@@ -14937,6 +14962,8 @@ void rsx_d3d12_backend_shutdown(void)
         if(s_ov_vbs.vb[i])s_ov_vbs.vb[i]->lpVtbl->Release(s_ov_vbs.vb[i]);
         if(s_srt_vbs.vb[i])s_srt_vbs.vb[i]->lpVtbl->Release(s_srt_vbs.vb[i]);
         if(s_spr_vbs.vb[i])s_spr_vbs.vb[i]->lpVtbl->Release(s_spr_vbs.vb[i]);
+        if(s_trophy_vbs.vb[i])s_trophy_vbs.vb[i]->lpVtbl->Release(s_trophy_vbs.vb[i]);
+        rsx_trophy_texture_release(&s_trophy_textures[i]);
     }
     if (s_d3d.depth_buffer) s_d3d.depth_buffer->lpVtbl->Release(s_d3d.depth_buffer);
     if (s_d3d.dsv_heap)     s_d3d.dsv_heap->lpVtbl->Release(s_d3d.dsv_heap);

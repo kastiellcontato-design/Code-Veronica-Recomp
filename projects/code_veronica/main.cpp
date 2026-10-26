@@ -60,6 +60,8 @@
 #include <timeapi.h>
 #include <io.h>        /* _dup2: the log redirect of a double-clicked start */
 #include "cv_support_log.h"
+#include "cv_trophies.h"
+#include "cv_trophy_popup.h"
 #endif
 
 #ifdef _WIN32
@@ -569,6 +571,16 @@ int main(int argc, char** argv)
 #pragma comment(lib, "winmm.lib")
     cv_enhanced_set(11,cv_pc_settings_film_read());
     cv_enhanced_apply_startup();
+    derive_vfs_root(eboot_path.c_str());
+    const char* trophy_root=ppu_vfs_root;
+    const char* trophy_lang=getenv("CV_TROPHY_LANGUAGE");
+    const char* trophy_on=getenv("CV_TROPHIES");
+    const char* trophy_notice=getenv("CV_TROPHY_NOTIFICATIONS");
+    cv_trophies::start(trophy_root&&*trophy_root?std::filesystem::u8path(trophy_root):std::filesystem::u8path("."),
+        trophy_lang?atoi(trophy_lang):1,!(trophy_on&&trophy_on[0]=='0'),!(trophy_notice&&trophy_notice[0]=='0'));
+
+    const char* trophy_corner=getenv("CV_TROPHY_CORNER");
+    cv_trophy_popup::corner(trophy_corner?atoi(trophy_corner):1);
     cv_support::settings();
     fprintf(stderr,"[film-filter] %s (boot-latched, original assets preserved)\n",cv_enhanced_get(11)?"on":"off");
     /* 1 ms timer resolution. The default granularity is about 15.6 ms, which
