@@ -1,3 +1,6 @@
+NEW IN v1.1.5
+Refined FSR Frame Generation handling of bright moving edges. Added lightweight startup/hardware/settings and terminal-failure support logs. No heavy profiler or new presentation waits.
+
 NEW IN v1.1.4
 Added optional Film grain in launcher graphics and in-game Recomp Config. Enabled by default; restart the game to apply. Original game files remain untouched.
 

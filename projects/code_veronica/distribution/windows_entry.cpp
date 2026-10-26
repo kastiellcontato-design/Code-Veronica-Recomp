@@ -69,8 +69,9 @@ int WINAPI wWinMain(HINSTANCE,HINSTANCE,PWSTR,int) {
     // Buffered informational output avoids flushing every startup/progress line.
     // Error output stays immediately visible in the session log.
     setvbuf(stdout,nullptr,_IOFBF,65536);setvbuf(stderr,nullptr,_IONBF,0);
-    fprintf(stderr,"[distribution] Code Veronica PC v1.1.4; GUI executable; developer captures disabled\n");
+    fprintf(stderr,"[distribution] Code Veronica PC v1.1.5; GUI executable; developer captures disabled\n");
     cv_support::startup(CV_TITLE_ID);
+    fprintf(stderr,"[SUPPORT-BUILD] v1.1.5; lightweight startup/crash report; no frame sampling\n");
     const int result=main(__argc,__argv);
     fflush(stdout);fflush(stderr);
     if(result)MessageBoxW(nullptr,L"O jogo nao iniciou corretamente. Consulte run-log.txt.\nThe game did not start correctly. See run-log.txt.",L"Code Veronica",MB_OK|MB_ICONERROR);

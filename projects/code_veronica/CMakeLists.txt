@@ -717,6 +717,11 @@ if(WIN32)
     target_include_directories(code_veronica_fsr31_tests PRIVATE "${PS3RECOMP_DIR}/libs/video")
     target_compile_options(code_veronica_fsr31_tests PRIVATE /UNDEBUG)
     target_link_libraries(code_veronica_fsr31_tests PRIVATE d3d12 dxgi dxguid d3dcompiler user32)
+    add_executable(code_veronica_fsr_guard_tests EXCLUDE_FROM_ALL tests/test_fsr_guard.cpp
+        "${PS3RECOMP_DIR}/libs/video/rsx_dxc.cpp")
+    target_include_directories(code_veronica_fsr_guard_tests PRIVATE "${PS3RECOMP_DIR}/libs/video")
+    target_compile_options(code_veronica_fsr_guard_tests PRIVATE /UNDEBUG)
+    target_link_libraries(code_veronica_fsr_guard_tests PRIVATE d3d12 dxgi dxguid d3dcompiler user32)
     if(EXISTS "${CV_FSR31_DIR}/bin/amd_fidelityfx_framegeneration_dx12.dll")
         add_custom_command(TARGET code_veronica_fsr31_tests POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy_if_different

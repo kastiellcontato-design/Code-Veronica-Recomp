@@ -1,3 +1,6 @@
+NOVIDADES DA v1.1.5
+Refinada a protecao de bordas claras em movimento com FSR Frame Generation. Relatorio leve de hardware/configuracoes e falhas no run-log.txt. Sem coletor pesado ou novas esperas de apresentacao.
+
 NOVIDADES DA v1.1.4
 Nova opcao Granulado de filme nos graficos do launcher e Film grain no Recomp Config. Ligado por padrao; reinicie o jogo para aplicar. Arquivos originais preservados.
 
