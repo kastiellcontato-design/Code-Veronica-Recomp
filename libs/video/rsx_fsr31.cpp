@@ -131,6 +131,7 @@ Texture2D<float> rawDepth:register(t2);Texture2D<float> current:register(t3);
 Texture2D<float4> candidates:register(t4);Texture2D<float4> previousColor:register(t5);
 Texture2D<float> sceneDepth:register(t6);
 Texture2D<float4> presentColor:register(t7);
+Texture2D<float2> edgeVectors:register(t8);
 RWTexture2D<float> luma:register(u0);RWTexture2D<float2> motion:register(u1);
 RWTexture2D<float> depth:register(u2);RWTexture2D<float4> proposals:register(u3);
 RWTexture2D<float4> generated:register(u4);
@@ -201,7 +202,17 @@ float light(float3 c){return dot(c,float3(.2126,.7152,.0722));}
  }
  // Crisp white/green message glyphs must not become optical-flow patches.
  // Conservatively retain a real high-contrast stroke and its immediate edge.
- bool textEdge=brightStroke&&high-low>.25;
+ // A bright scene silhouette is not necessarily text. Only enforce the
+ // text-shaped fallback unless a non-zero estimated motion reprojects this
+ // pixel to matching previous-frame scene content. Newly appearing text
+ // cannot bypass protection merely because its current color changed.
+ float2 edgeMotion=edgeVectors.Load(int3(p,0));
+ float3 reprojected=previousColor.SampleLevel(linearClamp,
+     (float2(p)+.5+edgeMotion)/float2(size),0).rgb;
+ float3 delta=abs(reprojected-a.rgb);
+ bool movingScene=all(isfinite(edgeMotion))&&dot(edgeMotion,edgeMotion)>.25
+     &&change>=.025&&max(max(delta.r,delta.g),delta.b)<.03;
+ bool textEdge=brightStroke&&high-low>.25&&!movingScene;
 
  // Fail closed for static structures/text and unsupported disocclusions.
  // This can repeat a real pixel rather than hallucinating a broken edge.
@@ -210,7 +221,7 @@ float light(float3 c){return dot(c,float3(.2126,.7152,.0722));}
 }
 )";
 bool pipelines(){
- D3D12_DESCRIPTOR_RANGE ranges[2]{};ranges[0]={D3D12_DESCRIPTOR_RANGE_TYPE_SRV,8,0,0,0};ranges[1]={D3D12_DESCRIPTOR_RANGE_TYPE_UAV,5,0,0,0};
+ D3D12_DESCRIPTOR_RANGE ranges[2]{};ranges[0]={D3D12_DESCRIPTOR_RANGE_TYPE_SRV,9,0,0,0};ranges[1]={D3D12_DESCRIPTOR_RANGE_TYPE_UAV,5,0,0,0};
  D3D12_ROOT_PARAMETER rp[3]{};rp[0].ParameterType=D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;rp[0].Constants={0,0,5};
  for(int i=0;i<2;i++){rp[i+1].ParameterType=D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;rp[i+1].DescriptorTable={1,ranges+i};}
  D3D12_ROOT_SIGNATURE_DESC rd{};rd.NumParameters=3;rd.pParameters=rp;D3D12_STATIC_SAMPLER_DESC linear{};linear.Filter=D3D12_FILTER_MIN_MAG_MIP_LINEAR;linear.AddressU=linear.AddressV=linear.AddressW=D3D12_TEXTURE_ADDRESS_MODE_CLAMP;linear.MaxLOD=D3D12_FLOAT32_MAX;linear.ComparisonFunc=D3D12_COMPARISON_FUNC_ALWAYS;linear.ShaderVisibility=D3D12_SHADER_VISIBILITY_ALL;rd.NumStaticSamplers=1;rd.pStaticSamplers=&linear;ComPtr<ID3DBlob> blob,error;
@@ -222,12 +233,12 @@ bool pipelines(){
   if(rc){fprintf(stderr,"[FSR-FG] input shader: %.500s\n",errors?errors:"");free(dxil);free(errors);return false;}
   D3D12_COMPUTE_PIPELINE_STATE_DESC pd{};pd.pRootSignature=s.root.Get();pd.CS={dxil,bytes};auto hr=s.device->CreateComputePipelineState(&pd,IID_PPV_ARGS(&s.shaders[i]));free(dxil);free(errors);if(FAILED(hr))return false;
  }
- D3D12_DESCRIPTOR_HEAP_DESC hd{};hd.Type=D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;hd.NumDescriptors=13;hd.Flags=D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+ D3D12_DESCRIPTOR_HEAP_DESC hd{};hd.Type=D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;hd.NumDescriptors=14;hd.Flags=D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
  s.inc=s.device->GetDescriptorHandleIncrementSize(hd.Type);return SUCCEEDED(s.device->CreateDescriptorHeap(&hd,IID_PPV_ARGS(&s.heap)));
 }
 void compute(ID3D12GraphicsCommandList* cl,unsigned phase,unsigned sw,unsigned sh){
  ID3D12DescriptorHeap* heap=s.heap.Get();cl->SetDescriptorHeaps(1,&heap);cl->SetComputeRootSignature(s.root.Get());cl->SetPipelineState(s.shaders[phase].Get());
- unsigned w=phase<2?s.lw:s.qw,h=phase<2?s.lh:s.qh;unsigned k[]={w,h,sw,sh,s.reset?1u:0u};cl->SetComputeRoot32BitConstants(0,5,k,0);cl->SetComputeRootDescriptorTable(1,gpu(0));cl->SetComputeRootDescriptorTable(2,gpu(8));cl->Dispatch((w+7)/8,(h+7)/8,1);
+ unsigned w=phase<2?s.lw:s.qw,h=phase<2?s.lh:s.qh;unsigned k[]={w,h,sw,sh,s.reset?1u:0u};cl->SetComputeRoot32BitConstants(0,5,k,0);cl->SetComputeRootDescriptorTable(1,gpu(0));cl->SetComputeRootDescriptorTable(2,gpu(9));cl->Dispatch((w+7)/8,(h+7)/8,1);
 }
 ffxReturnCode_t generate(ffxDispatchDescFrameGeneration* params,void*){
  auto profiled=(ID3D12GraphicsCommandList*)params->commandList;
@@ -239,7 +250,7 @@ ffxReturnCode_t generate(ffxDispatchDescFrameGeneration* params,void*){
   auto cl=(ID3D12GraphicsCommandList*)params->commandList;
   auto out=(ID3D12Resource*)params->outputs[0].resource;
   if(guard_on()&&out&&out->GetDesc().Format==DXGI_FORMAT_R8G8B8A8_UNORM){
-   uav(12,out,DXGI_FORMAT_R8G8B8A8_UNORM);
+   uav(13,out,DXGI_FORMAT_R8G8B8A8_UNORM);
    // FSR output is restored by dispatch to the API resource state supplied
    // by its swapchain; transition around our final conservative guard.
    auto from=api_state(params->outputs[0].state);
@@ -321,8 +332,9 @@ extern "C" int rsx_fsr31_begin(void* dev,unsigned w,unsigned h,unsigned scene,in
  srv(0,s.hudless.Get(),DXGI_FORMAT_R8G8B8A8_UNORM);srv(1,s.previous.Get(),DXGI_FORMAT_R16_FLOAT);srv(3,s.luma.Get(),DXGI_FORMAT_R16_FLOAT);
  srv(4,s.candidates.Get(),DXGI_FORMAT_R16G16B16A16_FLOAT);srv(5,s.previous_color.Get(),DXGI_FORMAT_R8G8B8A8_UNORM);srv(6,s.depth.Get(),DXGI_FORMAT_R32_FLOAT);
  srv(7,s.present_color.Get(),DXGI_FORMAT_R8G8B8A8_UNORM);
- uav(8,s.luma.Get(),DXGI_FORMAT_R16_FLOAT);uav(9,s.motion.Get(),DXGI_FORMAT_R16G16_FLOAT);uav(10,s.depth.Get(),DXGI_FORMAT_R32_FLOAT);uav(11,s.candidates.Get(),DXGI_FORMAT_R16G16B16A16_FLOAT);
- s.ready=true;fprintf(stderr,"[FSR-FG] v2 3.1.6 ready %ux%u; full-resolution motion/depth %ux%u; subpixel filtering and static-edge protection enabled\n",w,h,s.qw,s.qh);return 1;
+ srv(8,s.motion.Get(),DXGI_FORMAT_R16G16_FLOAT);
+ uav(9,s.luma.Get(),DXGI_FORMAT_R16_FLOAT);uav(10,s.motion.Get(),DXGI_FORMAT_R16G16_FLOAT);uav(11,s.depth.Get(),DXGI_FORMAT_R32_FLOAT);uav(12,s.candidates.Get(),DXGI_FORMAT_R16G16B16A16_FLOAT);
+ s.ready=true;fprintf(stderr,"[FSR-FG] edge-test1 3.1.6 ready %ux%u; full-resolution motion/depth %ux%u; subpixel filtering and static-edge protection enabled\n",w,h,s.qw,s.qh);return 1;
 fail:
  fprintf(stderr,"[FSR-FG] initialization failed (%u); frame generation disabled\n",rc);destroy_frame();s.failed=true;return 0;
 }
