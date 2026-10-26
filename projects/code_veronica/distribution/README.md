@@ -57,4 +57,4 @@ Anexar `Veronica-PKG-Extractor-v1.0.zip` como asset independente em toda nova re
 
 Pacote oficial atual: SHA-256 `376922e267402094c00950a972e32339d6839cea480f5f15bd909fae615f5812`.
 
-Antes de concluir a publicacao, verificar que a release contem o ZIP principal, seu checksum e o ZIP separado do Veronica Extractor. Se o extrator ganhar uma nova versao, atualizar esta referencia para o novo pacote validado.
+Antes de concluir a publicacao, verificar que a release contem somente os ZIPs necessarios: o ZIP principal e o ZIP separado do Veronica Extractor. Manter o arquivo .sha256 apenas na verificacao local, sem anexa-lo aos Assets publicos, conforme preferencia do mantenedor. Se o extrator ganhar uma nova versao, atualizar esta referencia para o novo pacote validado.
