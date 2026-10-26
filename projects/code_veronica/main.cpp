@@ -59,6 +59,7 @@
  * around is a Windows problem. */
 #include <timeapi.h>
 #include <io.h>        /* _dup2: the log redirect of a double-clicked start */
+#include "cv_support_log.h"
 #endif
 
 #ifdef _WIN32
@@ -568,6 +569,7 @@ int main(int argc, char** argv)
 #pragma comment(lib, "winmm.lib")
     cv_enhanced_set(11,cv_pc_settings_film_read());
     cv_enhanced_apply_startup();
+    cv_support::settings();
     fprintf(stderr,"[film-filter] %s (boot-latched, original assets preserved)\n",cv_enhanced_get(11)?"on":"off");
     /* 1 ms timer resolution. The default granularity is about 15.6 ms, which
      * inflates every shorter wait the title makes and throttles the whole

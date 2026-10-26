@@ -803,3 +803,13 @@ if(WIN32)
   target_compile_definitions(code_veronica_appearance_settings_tests PRIVATE CV_REGION_US=1)
  endif()
 endif()
+
+# Lightweight startup/failure reporting tests. The --crash case is deliberately
+# run by the support test script, not automatically while launching the game.
+if(WIN32)
+ add_executable(code_veronica_support_log_tests EXCLUDE_FROM_ALL tests/test_support_log.cpp)
+ set_target_properties(code_veronica_support_log_tests PROPERTIES CXX_STANDARD 20)
+ target_compile_options(code_veronica_support_log_tests PRIVATE /UNDEBUG)
+ add_executable(code_veronica_support_gpu_tests EXCLUDE_FROM_ALL tests/test_support_gpu.c)
+ target_link_libraries(code_veronica_support_gpu_tests PRIVATE d3d12 dxgi dxguid)
+endif()

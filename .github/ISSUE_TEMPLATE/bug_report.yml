@@ -1,0 +1,182 @@
+{
+  "name": "Bug report",
+  "description": "Report a crash, graphical issue, audio issue or performance problem.",
+  "title": "[Bug] ",
+  "body": [
+    {
+      "type": "markdown",
+      "attributes": {
+        "value": "Reproduce the problem, close the game, then attach **bin/run-log.txt** from your port installation. Do not upload original game files or RAP licenses. You may redact personal folder names."
+      }
+    },
+    {
+      "type": "checkboxes",
+      "id": "checks",
+      "attributes": {
+        "label": "Before reporting",
+        "options": [
+          {
+            "label": "I searched existing issues for this problem.",
+            "required": true
+          },
+          {
+            "label": "I tested the latest release, or specified the older/test version below.",
+            "required": true
+          }
+        ]
+      }
+    },
+    {
+      "type": "dropdown",
+      "id": "category",
+      "attributes": {
+        "label": "Category",
+        "options": [
+          "Crash or freeze",
+          "Graphics / lighting / shadows",
+          "Frame generation / character outlines",
+          "Audio",
+          "Performance / game speed",
+          "Launcher / extraction / startup",
+          "Input / controls",
+          "Other"
+        ]
+      },
+      "validations": {
+        "required": true
+      }
+    },
+    {
+      "type": "input",
+      "id": "port-version",
+      "attributes": {
+        "label": "Port version",
+        "description": "Copy the launcher version; include the test-build name if applicable.",
+        "placeholder": "For example: v1.1.4 or a named test build"
+      },
+      "validations": {
+        "required": true
+      }
+    },
+    {
+      "type": "input",
+      "id": "operating-system",
+      "attributes": {
+        "label": "Operating system",
+        "placeholder": "For example: Windows 11 24H2, build 26100"
+      },
+      "validations": {
+        "required": true
+      }
+    },
+    {
+      "type": "input",
+      "id": "gpu-driver",
+      "attributes": {
+        "label": "GPU and driver version",
+        "placeholder": "GPU model + driver version; include both GPUs on a laptop if known"
+      },
+      "validations": {
+        "required": true
+      }
+    },
+    {
+      "type": "input",
+      "id": "cpu-memory",
+      "attributes": {
+        "label": "CPU and RAM",
+        "placeholder": "Processor model and installed RAM; write unknown if needed"
+      },
+      "validations": {
+        "required": true
+      }
+    },
+    {
+      "type": "dropdown",
+      "id": "game-region",
+      "attributes": {
+        "label": "Game region",
+        "options": [
+          "NPEB00553 (Europe)",
+          "NPUB30467 (USA)",
+          "NPJB00135 (Japan)",
+          "Other / unknown"
+        ]
+      },
+      "validations": {
+        "required": true
+      }
+    },
+    {
+      "type": "input",
+      "id": "location",
+      "attributes": {
+        "label": "Where in the game?",
+        "placeholder": "Room, chapter, cutscene, weapon, or launcher screen"
+      },
+      "validations": {
+        "required": true
+      }
+    },
+    {
+      "type": "textarea",
+      "id": "behavior",
+      "attributes": {
+        "label": "What happened?",
+        "description": "Describe expected and actual behavior, including the exact error message."
+      },
+      "validations": {
+        "required": true
+      }
+    },
+    {
+      "type": "textarea",
+      "id": "reproduction",
+      "attributes": {
+        "label": "Steps to reproduce",
+        "placeholder": "1. Load...\n2. Go to...\n3. The problem occurs when..."
+      },
+      "validations": {
+        "required": true
+      }
+    },
+    {
+      "type": "textarea",
+      "id": "settings",
+      "attributes": {
+        "label": "Settings and modifications",
+        "description": "Include resolution, 30/60 FPS mode, Frame Generation, AA, sharpness, film grain, VSync and any patches or texture mods. A screenshot of the graphics page also helps."
+      },
+      "validations": {
+        "required": true
+      }
+    },
+    {
+      "type": "input",
+      "id": "regression",
+      "attributes": {
+        "label": "Did it work in an earlier port version?",
+        "placeholder": "Version, never worked, or not tested"
+      }
+    },
+    {
+      "type": "textarea",
+      "id": "log",
+      "attributes": {
+        "label": "run-log.txt",
+        "description": "Drag bin/run-log.txt into this box or use the attachment button. Attach the file rather than pasting thousands of lines. If no log was created, explain that here."
+      },
+      "validations": {
+        "required": true
+      }
+    },
+    {
+      "type": "textarea",
+      "id": "media",
+      "attributes": {
+        "label": "Screenshot or video",
+        "description": "Attach a screenshot or link a YouTube video. For graphical issues, show the same scene with Frame Generation off and on if possible."
+      }
+    }
+  ]
+}

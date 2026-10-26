@@ -59,6 +59,7 @@
 #include <initguid.h>
 #include "rsx_pose_compute_d3d12.h"
 #include "rsx_fsr31.h"
+#include "rsx_support_caps.h"
 static int s_fsr_ready;
 static u32 s_fsr_depth_at=0xFFFFFFFFu,s_fsr_depth_w,s_fsr_depth_h;
 
@@ -1885,6 +1886,8 @@ static int init_d3d12(u32 width, u32 height)
         }
         printf("[D3D12] Device created on default adapter (feature level 11.0)\n");
     }
+
+    rsx_support_caps(s_d3d.device,factory);
 
     /* Create command queue */
     D3D12_COMMAND_QUEUE_DESC queue_desc = {0};
