@@ -1,3 +1,9 @@
+NEW IN v1.1.4
+Added optional Film grain in launcher graphics and in-game Recomp Config. Enabled by default; restart the game to apply. Original game files remain untouched.
+
+NEW IN v1.1.3
+Fixed white-screen rendering when firing weapons in scenes with many lighting effects.
+
 NEW IN v1.1.2
 Improved graphics compatibility: fixed texture-upload alignment associated with lighter-related black screens on affected installations. Includes previous audio and shadow fixes.
 

@@ -1,3 +1,9 @@
+NOVIDADES DA v1.1.4
+Nova opcao Granulado de filme nos graficos do launcher e Film grain no Recomp Config. Ligado por padrao; reinicie o jogo para aplicar. Arquivos originais preservados.
+
+NOVIDADES DA v1.1.3
+Corrigida a tela branca ao disparar armas em cenas com muitos efeitos de iluminacao.
+
 NOVIDADES DA v1.1.2
 Melhorada a compatibilidade grafica: alinhamento de texturas corrigido para evitar a tela preta ao usar o isqueiro em instalacoes afetadas. Inclui as correcoes anteriores de audio e sombras.
 

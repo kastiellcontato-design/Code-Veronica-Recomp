@@ -14,7 +14,7 @@ static HWND menu_foreground(){return keyboard_focused?reinterpret_cast<HWND>(1):
 
 static std::array<unsigned char, 16 * 1024 * 1024> memory;
 static std::array<int,8> settings={4,2,1,160,0,0,70,4};
-static std::array<int,3> enhanced={100,100,0};
+static std::array<int,4> enhanced={100,100,0,1};
 static int language=1,device=100;
 static PadPhys test_pad{};
 static int test_360_layout=-1;
@@ -141,6 +141,9 @@ int main(int argc,char**) {
     press(0,kDown);assert(pc_row==7&&values[7]==4);
     press(0,kRight);assert(settings[7]==0&&changes.back()==std::make_pair(7,0));
     press(0,kLeft);assert(settings[7]==4);
+    press(0,kDown);assert(pc_row==8&&values[8]==1);
+    press(0,kRight);assert(enhanced[3]==0&&changes.back()==std::make_pair(11,0));
+    press(0,kLeft);assert(enhanced[3]==1);
     press(kCancel,0);assert(!pc_open);
     press(0x4000,0);assert(values[6]==100&&values[7]==4);
     press(0,kDown);assert(pc_row==1);

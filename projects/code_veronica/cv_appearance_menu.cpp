@@ -59,9 +59,9 @@ int pc_row=0;
 cv_appearance::AppearancePreview appearance_preview;
 bool appearance_assets_attempted=false;
 unsigned appearance_choice=0;
-constexpr int kSettingCount=8, kResetColorsRow=kSettingCount+1;
+constexpr int kSettingCount=9, kResetColorsRow=kSettingCount+1;
 constexpr int kBackRow=kResetColorsRow+1, kPcRowCount=kBackRow+1;
-std::array<int,kSettingCount> values={1,0,0,80,50,100,0,0}; // neutral brightness, contrast and saturation
+std::array<int,kSettingCount> values={1,0,0,80,50,100,0,0,1}; // neutral brightness, contrast and saturation
 int pc_adjust_direction=0;
 ULONGLONG pc_adjust_started=0;
 
@@ -105,7 +105,7 @@ void sound(const ppu_context* caller,int id) {
 }
 void read_settings() {
     const int packed=cv_pc_settings_read(),effects=cv_pc_settings_effects_read();
-    values={ (packed>>4)&7, (packed>>8)&3, packed&3, (packed>>10)&255, (packed>>18)&255, cv_pc_settings_saturation_read(), effects&127, (effects>>8)&7 };
+    values={ (packed>>4)&7, (packed>>8)&3, packed&3, (packed>>10)&255, (packed>>18)&255, cv_pc_settings_saturation_read(), effects&127, (effects>>8)&7,cv_enhanced_get(11) };
     values[0]=std::clamp(values[0],0,4); values[1]=std::clamp(values[1],0,2); values[2]=std::clamp(values[2],0,2);
     values[3]=std::clamp(values[3],0,160); values[4]=std::clamp(values[4],0,130); values[5]=std::clamp(values[5],0,200);
     values[6]=std::clamp(values[6],0,100)/10*10;values[7]=std::clamp(values[7],0,4);
@@ -143,7 +143,11 @@ uint32_t tab_buttons(unsigned port){
  const int left=swapped?PB_L2:PB_L1,right=swapped?PB_R2:PB_R1;
  return (((pad.buttons>>left)&1u)<<PB_L1)|(((pad.buttons>>right)&1u)<<PB_R1);
 }
-std::string tr(cv_enhanced_text::Id id){return cv_enhanced_text::utf8(cv_enhanced_language(),id);}
+std::string tr(cv_enhanced_text::Id id){
+    if(id==cv_enhanced_text::FilmFilter)return "Film grain";
+    if(id==cv_enhanced_text::RestartApply)return "Restart the game to apply.";
+    return cv_enhanced_text::utf8(cv_enhanced_language(),id);
+}
 int menu_rows(){return pc_tab==0?kPcRowCount:pc_tab==1?4:2;}
 bool menu_back(){return pc_row==menu_rows()-1;}
 int tab_direction(uint32_t input,bool q,bool e){
@@ -241,14 +245,15 @@ void draw_settings(const ppu_context* caller) {
     draw_tabs(batch);
     if(pc_tab){draw_extra(batch);batch.submit(caller);auto work=call_context(caller);invoke(&work,CV_FN_MENU_FRAME);return;}
     using namespace cv_enhanced_text;
-    const std::string labels[]={tr(Resolution),tr(AA),tr(Mode),tr(Brightness),tr(Contrast),tr(Saturation),tr(Sharpness),tr(Aniso),tr(Reset),tr(Back)};
+    const std::string labels[]={tr(Resolution),tr(AA),tr(Mode),tr(Brightness),tr(Contrast),tr(Saturation),tr(Sharpness),tr(Aniso),tr(FilmFilter),tr(Reset),tr(Back)};
     char brightness[24],contrast[24],saturation[24],sharpness[24];
     std::snprintf(brightness,sizeof brightness,"%+d%%",-80+values[3]);
     std::snprintf(contrast,sizeof contrast,"%d%%",50+values[4]);
     std::snprintf(saturation,sizeof saturation,"%d%%",values[5]);
     if(values[6])std::snprintf(sharpness,sizeof sharpness,"%d%%",values[6]);
     else std::snprintf(sharpness,sizeof sharpness,"%s",off.c_str());
-    const char* current[]={resolution[values[0]],aa[values[1]],mode[values[2]],brightness,contrast,saturation,sharpness,aniso[values[7]]};
+    const std::string on=tr(On);
+    const char* current[]={resolution[values[0]],aa[values[1]],mode[values[2]],brightness,contrast,saturation,sharpness,aniso[values[7]],values[8]?"On":"Off"};
     if(!appearance_assets_attempted) {
         appearance_assets_attempted=true;
         const char* root=std::getenv("PS3_VFS_ROOT");
@@ -274,7 +279,7 @@ void draw_settings(const ppu_context* caller) {
     appearance_preview.select(appearance_choice);
     appearance_preview.append(batch.quads,384,125,240,280);
     batch.text(appearance_preview.error().empty()?tr(cv_enhanced_text::Preview):tr(cv_enhanced_text::NoPreview),504,408,0xCFDCCEB1,.47f,true);
-    batch.text(cv_appearance::status(),320,425,0xCFDCCEB1,.40f,true);
+    batch.text(pc_row==9?tr(RestartApply):cv_appearance::status(),320,425,0xCFDCCEB1,.40f,true);
     batch.text(tr(cv_enhanced_text::Adjust),320,443,0xBFCFCFCF,.53f,true);
     batch.submit(caller);
     auto work=call_context(caller);invoke(&work,CV_FN_MENU_FRAME);
@@ -336,7 +341,7 @@ void CV_FN_MENU_INPUT(ppu_context* ctx) {
             else if(pc_row>0 && pc_row<=kSettingCount && ((repeat&(kLeft|kRight)) || (input&kConfirm))) {
                 const int setting=pc_row-1;
                 if(setting<3||setting>=6) {
-                    const int limit=setting==0||setting==7?5:setting==6?11:3;
+                    const int limit=setting==0||setting==7?5:setting==6?11:setting==8?2:3;
                     const int step=(repeat&kLeft)?-1:1,unit=setting==6?10:1;
                     values[setting]=((values[setting]/unit+step+limit)%limit)*unit;
                     pc_adjust_direction=0;pc_adjust_started=0;
@@ -349,7 +354,7 @@ void CV_FN_MENU_INPUT(ppu_context* ctx) {
                     const int maximum=setting==3?160:setting==4?130:200;
                     values[setting]=std::clamp(values[setting]+direction*step,0,maximum);
                 }
-                cv_pc_settings_change(setting,values[setting]);sound(ctx,2);
+                cv_pc_settings_change(setting==8?11:setting,values[setting]);sound(ctx,2);
             } else pc_adjust_direction=0;
             consume(input_address,repeat_address);draw_settings(ctx);ctx->gpr[3]=0;return;
         }

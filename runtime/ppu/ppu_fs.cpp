@@ -576,6 +576,7 @@ static void cellFsStat(ppu_context* ctx)
     guest_strcpy(gpath, (uint32_t)ctx->gpr[3], sizeof gpath);
     uint32_t sb = (uint32_t)ctx->gpr[4];
     host_path(hpath, sizeof hpath, gpath);
+    {char overlay_path[1200];const char* use=vfs_overlay_resolve(hpath,overlay_path,sizeof overlay_path);if(use!=hpath)snprintf(hpath,sizeof hpath,"%s",use);}
     struct stat st;
     if (stat(hpath, &st) != 0) {
         if (getenv("PS3_FSLOG")) fprintf(stderr, "[fs] stat '%s' -> ENOENT\n", gpath);

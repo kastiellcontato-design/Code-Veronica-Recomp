@@ -5,6 +5,7 @@ extern "C" {
 void cv_enhanced_configure_env(void);
 void cv_enhanced_language_set(int language);
 int cv_enhanced_language(void);
-int cv_enhanced_get(int which); // settings bridge IDs 8 music/voice, 9 effects, 10 Battle Game
+void cv_enhanced_apply_startup(void);
+int cv_enhanced_get(int which); // settings bridge IDs 8 music/voice, 9 effects, 10 Battle Game, 11 film filter (restart required)
 void cv_enhanced_set(int which,int value);
 }

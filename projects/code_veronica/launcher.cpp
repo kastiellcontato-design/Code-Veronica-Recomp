@@ -241,6 +241,7 @@ struct Settings {
     bool test_tools=false; // optional experimental map window, off by default
     int music_volume=100,sfx_volume=100;
     bool battle_unlocked=false;
+    bool film_filter=true;
     bool focus_pause=true; // pause while the game window is out of focus (cv_focus_pause.cpp)
     bool items_menu=false; // F6 item menu in the game (cv_item_menu.cpp), off by default
     bool check_updates=true; // look for a newer GitHub release when the launcher opens (cv_updater.h)
@@ -499,6 +500,7 @@ Settings load_settings()
     s.items_menu=_wtoi(ini_get(L"inventario",L"menu_itens",L"0").c_str())!=0;
     s.music_volume=std::clamp(_wtoi(ini_get(L"audio",L"musica",L"100").c_str()),0,100);
     s.sfx_volume=std::clamp(_wtoi(ini_get(L"audio",L"efeitos",L"100").c_str()),0,100);
+    s.film_filter=_wtoi(ini_get(L"tela",L"filtro_filme",L"1").c_str())!=0;
     s.battle_unlocked=_wtoi(ini_get(L"extras",L"battle_game",L"0").c_str())!=0;
     s.focus_pause=_wtoi(ini_get(L"jogo",L"pausar_sem_foco",L"1").c_str())!=0;
     s.check_updates=_wtoi(ini_get(L"launcher",L"procurar_atualizacoes",L"1").c_str())!=0;
@@ -582,6 +584,7 @@ void save_settings(const Settings& s)
     ini_set(L"audio",L"musica",std::to_wstring(s.music_volume));
     ini_set(L"audio",L"efeitos",std::to_wstring(s.sfx_volume));
     ini_set(L"extras",L"battle_game",s.battle_unlocked?L"1":L"0");
+    ini_set(L"tela",L"filtro_filme",s.film_filter?L"1":L"0");
     ini_set(L"jogo",L"pausar_sem_foco",s.focus_pause?L"1":L"0");
     ini_set(L"launcher",L"procurar_atualizacoes",s.check_updates?L"1":L"0");
     ini_set(L"srt", L"mostrar",s.srt?L"1":L"0");
@@ -806,7 +809,7 @@ UI g;
 /* ids */
 enum {
     ID_NAV = 100,               /* + page */
-    ID_DD_MODE = 200, ID_DD_RES = 201, ID_DD_AA = 202, ID_DD_LANG = 203, ID_DD_FPS = 204, ID_DD_ANISO = 205, ID_DD_SHARP = 206, ID_DD_POSE_DEVICE = 207, ID_DD_FRAME_GEN = 208, ID_DD_VSYNC = 209, ID_DD_ITEM = 300,  /* + item index */
+    ID_DD_MODE = 200, ID_DD_RES = 201, ID_DD_AA = 202, ID_DD_LANG = 203, ID_DD_FPS = 204, ID_DD_ANISO = 205, ID_DD_SHARP = 206, ID_DD_POSE_DEVICE = 207, ID_DD_FRAME_GEN = 208, ID_DD_VSYNC = 209, ID_DD_FILM = 210, ID_DD_ITEM = 300,  /* + item index */
     ID_DD_UP = 390, ID_DD_DOWN = 391,
     ID_PLAY = 400, ID_RESUME, ID_QUIT,
     ID_GAME_BROWSE = 500, ID_GAME_OPEN, ID_RAP_BROWSE, ID_RAP_OPEN, ID_SAVE_BROWSE, ID_SAVE_OPEN, ID_SAVE_DEFAULT,
@@ -1111,7 +1114,7 @@ void section(Graphics& gr, const std::wstring& t, float x, float y, float w, con
 
 
 /* Release shown under the sidebar, beside the credit. Bump it per release. */
-const wchar_t* const k_launcher_version = L"v1.1.3";
+const wchar_t* const k_launcher_version = L"v1.1.4";
 
 /* ---------------------------------------------------------------- updates
  * cv_updater.h does the network and file work on threads of its own, which
@@ -1504,13 +1507,14 @@ void draw_inicio(Graphics& gr,const Font& head,const Font& body,const Font&,cons
  for(int i=0;i<3;i++){float xx=x+i*(cw+gap);SolidBrush b(Color(245,22,21,23));gr.FillRectangle(&b,xx,cy,cw,ch);Pen p(Color(255,96,78,54));gr.DrawRectangle(&p,xx,cy,cw,ch);text(gr,titles[i],xx+17,cy+12,head,C_TEXT,StringAlignmentNear,cw-34,34);}
  auto setting=[&](int card,int row,const wchar_t* name,const std::wstring& value,int id,bool enabled=true){float xx=x+card*(cw+gap)+16,yy=cy+60+row*61; text(gr,name,xx,yy,hint_font,C_DIM,StringAlignmentNear,cw-32,21);dropdown(gr,RectF(xx,yy+22,cw-32,29),value,id,body,enabled);};
  setting(0,0,T(S_DISPLAY_MODE),mode_name(g.s.mode),ID_DD_MODE);setting(0,1,T(S_RENDER_RES),res_name(g.s.res),ID_DD_RES);
+ setting(0,2,cv_enhanced_text::get(g_lang,cv_enhanced_text::FilmFilter),cv_enhanced_text::get(g_lang,g.s.film_filter?cv_enhanced_text::On:cv_enhanced_text::Off),ID_DD_FILM);
  setting(1,0,T(S_AA),aa_name(g.s.aa),ID_DD_AA);setting(1,1,T(S_ANISO),aniso_name(g.s.aniso),g.running?-1:ID_DD_ANISO,!g.running);setting(1,2,T(S_SHARPNESS),sharp_name(g.s.sharpness/10),ID_DD_SHARP);
  setting(2,0,T(S_FRAME_LIMIT),fps_name(g.s.fps),g.running||opt30_comparison()?-1:ID_DD_FPS,!g.running&&!opt30_comparison());
  if((g.s.fps==1||pose_device_override()>=0)&&!opt30_comparison())setting(2,1,T(S_FRAME_GEN),frame_generation_name(frame_generation_allowed()?g.s.frame_generation:0),g.running||!frame_generation_allowed()?-1:ID_DD_FRAME_GEN,!g.running&&frame_generation_allowed());
  /* VSync switches live, except in a session running frame generation (its swapchain paces itself). */
  if((g.s.fps==1||pose_device_override()>=0)&&!opt30_comparison()){const bool fg_running=g.running&&g.s.frame_generation&&frame_generation_allowed();
   setting(2,2,T(S_VSYNC),vsync_name(fg_running?0:g.s.vsync),fg_running?-1:ID_DD_VSYNC,!fg_running);}
- text(gr,lx(design::MORE),x,627,hint_font,C_DIM,StringAlignmentNear,w,24);
+ text(gr,cv_enhanced_text::get(g_lang,cv_enhanced_text::RestartApply),x,627,hint_font,C_DIM,StringAlignmentNear,w,24);
  std::wstring note=T(g.s.fps?S_FPS_NOTE_60:S_FPS_NOTE_30);if(g.s.fps&&g.s.frame_generation&&frame_generation_allowed())note+=L"\n"+std::wstring(T(S_FPS_NOTE_FG));if(g.s.fps&&g.s.vsync)note+=L"\n"+std::wstring(T(S_FPS_NOTE_VSYNC));
  StringFormat sf;sf.SetLineAlignment(StringAlignmentNear);if(g_lang==LANG_AR)sf.SetFormatFlags(StringFormatFlagsDirectionRightToLeft);SolidBrush ink(C_DIM);gr.DrawString(note.c_str(),-1,&hint_font,RectF(x,657,w,60),&sf,&ink);g_page_end=700;
 }
@@ -2716,6 +2720,7 @@ void paint(HDC hdc)
         else if(g.open_dd==ID_DD_FRAME_GEN){for(int i=0;i<2;i++)items.push_back(frame_generation_name(i));sel=g.s.frame_generation;}
         else if(g.open_dd==ID_DD_VSYNC){for(int i=0;i<2;i++)items.push_back(vsync_name(i));sel=g.s.vsync;}
         else if (g.open_dd == ID_DD_FPS) { for (int i = 0; i < 2; i++) items.push_back(fps_name(i)); sel = g.s.fps; }
+        else if (g.open_dd == ID_DD_FILM) {items.push_back(cv_enhanced_text::get(g_lang,cv_enhanced_text::Off));items.push_back(cv_enhanced_text::get(g_lang,cv_enhanced_text::On));sel=g.s.film_filter?1:0;}
         else if (g.open_dd == ID_DD_ANISO) { for (int i = 0; i < 5; i++) items.push_back(aniso_name(i)); sel = g.s.aniso; }
         else if (g.open_dd == ID_DD_SHARP) { for (int i = 0; i <= 10; i++) items.push_back(sharp_name(i)); sel = g.s.sharpness / 10; }
         else if (g.open_dd == ID_DD_SRT_ENEMIES) { for(int i=0;i<=5;i++)items.push_back(srt_enemy_value(i));items.push_back(T(S_SRT_ALL));sel=g.s.srt_enemies==99?6:g.s.srt_enemies; }
@@ -2880,7 +2885,7 @@ void apply_live(bool restore_menu = true)
     cv_test_tools_enable(g.s.test_tools);
     cv_item_menu_enable(g.s.items_menu);
     cv_cheats_set(g.s.patch[2],g.s.patch[3]);
-    cv_enhanced_set(8,g.s.music_volume);cv_enhanced_set(9,g.s.sfx_volume);cv_enhanced_set(10,g.s.battle_unlocked);
+    cv_enhanced_set(8,g.s.music_volume);cv_enhanced_set(9,g.s.sfx_volume);cv_enhanced_set(10,g.s.battle_unlocked);cv_enhanced_set(11,g.s.film_filter);
     cv_focus_pause_enable(g.s.focus_pause);
     cv_focus_pause_label(T(S_PAUSED));
     if (!g.running) return;
@@ -3055,6 +3060,7 @@ void click(int id)
             else if(g.open_dd==ID_DD_POSE_DEVICE)g.s.pose_device=i;
             else if(g.open_dd==ID_DD_FRAME_GEN){g.s.frame_generation=i;if(i)g.s.vsync=0;}
             else if(g.open_dd==ID_DD_VSYNC){g.s.vsync=i;if(i&&!g.running)g.s.frame_generation=0;}
+            else if (g.open_dd == ID_DD_FILM) g.s.film_filter = i!=0;
             else if (g.open_dd == ID_DD_ANISO) g.s.aniso = i;
             else if (g.open_dd == ID_DD_SHARP) g.s.sharpness = i * 10;
             else if(g.open_dd==ID_DD_SRT_ENEMIES)g.s.srt_enemies=i==6?99:i;
@@ -3080,7 +3086,7 @@ void click(int id)
         if (g.page == P_MODS) g.tex_rep = -1;        /* count the textures again */
     }
     else if (id >= ID_PATCH && id < ID_PATCH + NPATCHES) { g.s.patch[id - ID_PATCH] ^= true; changed(); }
-    else if (id == ID_DD_MODE || id == ID_DD_RES || id == ID_DD_AA || id == ID_DD_FPS || id == ID_DD_POSE_DEVICE || id == ID_DD_FRAME_GEN || id == ID_DD_VSYNC || id == ID_DD_ANISO || id == ID_DD_SHARP || id == ID_DD_LANG || id==ID_DD_SRT_ENEMIES || id==ID_DD_SRT_CORNER || id==ID_DD_SRT_LANGUAGE || id == ID_DD_OV_CORNER || id == ID_DD_OV_LAYOUT || id == ID_DD_OV_SIZE || id == ID_DD_OV_BG || id == ID_DD_SRT_INVPOS || id == ID_DD_SRT_WINDOW || id == ID_DD_SRT_BOSSBAR) {
+    else if (id == ID_DD_FILM || id == ID_DD_MODE || id == ID_DD_RES || id == ID_DD_AA || id == ID_DD_FPS || id == ID_DD_POSE_DEVICE || id == ID_DD_FRAME_GEN || id == ID_DD_VSYNC || id == ID_DD_ANISO || id == ID_DD_SHARP || id == ID_DD_LANG || id==ID_DD_SRT_ENEMIES || id==ID_DD_SRT_CORNER || id==ID_DD_SRT_LANGUAGE || id == ID_DD_OV_CORNER || id == ID_DD_OV_LAYOUT || id == ID_DD_OV_SIZE || id == ID_DD_OV_BG || id == ID_DD_SRT_INVPOS || id == ID_DD_SRT_WINDOW || id == ID_DD_SRT_BOSSBAR) {
         g.open_dd = id; g.dd_scroll = 0;
         if (id == ID_DD_LANG && g_lang_pick >= 0)   /* open with the chosen language in view */
             for (int i = 0; i < LANG_COUNT; i++)
@@ -3283,6 +3289,7 @@ LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp)
         else if(wp==8&&lp>=0&&lp<=100)g.s.music_volume=int(lp);
         else if(wp==9&&lp>=0&&lp<=100)g.s.sfx_volume=int(lp);
         else if(wp==10&&lp>=0&&lp<=1)g.s.battle_unlocked=lp!=0;
+        else if(wp==11&&lp>=0&&lp<=1)g.s.film_filter=lp!=0;
         else return 0;
         save_settings(g.s); KillTimer(h, 2); apply_live(false);
         InvalidateRect(h, NULL, FALSE); return 1;
@@ -3787,7 +3794,7 @@ DWORD WINAPI launcher_thread(void*)
     GdiplusStartupInput gsi; ULONG_PTR gtok;
     GdiplusStartup(&gtok, &gsi, NULL);
     g.s = load_settings();
-    cv_enhanced_set(8,g.s.music_volume);cv_enhanced_set(9,g.s.sfx_volume);cv_enhanced_set(10,g.s.battle_unlocked);
+    cv_enhanced_set(8,g.s.music_volume);cv_enhanced_set(9,g.s.sfx_volume);cv_enhanced_set(10,g.s.battle_unlocked);cv_enhanced_set(11,g.s.film_filter);
     init_social_links();
     for(int i=0;i<2;i++)g.social_urls[i]=social_url(i);
     cv_test_tools_enable(g.s.test_tools);
@@ -3923,11 +3930,17 @@ extern "C" int cv_pc_settings_effects_read(void)
     }
     return cv_pc_fallback_effects;
 }
+extern "C" int cv_pc_settings_film_read(void){
+ if(g.hwnd&&IsWindow(g.hwnd))return cv_enhanced_get(11);
+ const char* override_value=getenv("CV_FILM_FILTER");
+ return override_value&&*override_value?atoi(override_value)!=0:_wtoi(ini_get(L"tela",L"filtro_filme",L"1").c_str())!=0;
+}
 extern "C" void cv_pc_settings_change(int which,int value)
 {
-    static const int maximum[]={4,2,2,160,130,200,100,4,100,100,1};
-    if (which<0 || which>=11 || value<0 || value>maximum[which] || (which==6 && value%10!=0)) return;
+    static const int maximum[]={4,2,2,160,130,200,100,4,100,100,1,1};
+    if (which<0 || which>=12 || value<0 || value>maximum[which] || (which==6 && value%10!=0)) return;
     if (g.hwnd && IsWindow(g.hwnd)) { SendMessageW(g.hwnd,WM_PC_SETTINGS_CHANGE,WPARAM(which),LPARAM(value)); return; }
+    if(which==11){cv_enhanced_set(11,value);ini_set(L"tela",L"filtro_filme",std::to_wstring(value));return;}
     if(which>=8){cv_enhanced_set(which,value);ini_set(which==10?L"extras":L"audio",which==8?L"musica":which==9?L"efeitos":L"battle_game",std::to_wstring(value));return;}
     int packed=cv_pc_settings_read();
     if(which==0) {

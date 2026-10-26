@@ -490,6 +490,7 @@ static void harness_guest_caller(uint32_t opd, uint64_t a0, uint64_t a1,
 }
 
 extern "C" int cv_launcher_run(char* eboot_out, size_t cap);
+extern "C" int cv_pc_settings_film_read(void);
 extern "C" const rsx_ui_quad* (*g_rsx_srt_hook)(uint32_t,uint32_t,uint32_t*);
 extern "C" const rsx_ui_sprite* (*g_rsx_srt_sprites_hook)(uint32_t*,const uint32_t**,uint32_t*,uint32_t*,uint64_t*);
 extern "C" void cv_button_icons_init(void);   /* button_icons.cpp */
@@ -565,6 +566,9 @@ int main(int argc, char** argv)
 
 #ifdef _WIN32
 #pragma comment(lib, "winmm.lib")
+    cv_enhanced_set(11,cv_pc_settings_film_read());
+    cv_enhanced_apply_startup();
+    fprintf(stderr,"[film-filter] %s (boot-latched, original assets preserved)\n",cv_enhanced_get(11)?"on":"off");
     /* 1 ms timer resolution. The default granularity is about 15.6 ms, which
      * inflates every shorter wait the title makes and throttles the whole
      * thing. POSIX timers are already fine-grained. */

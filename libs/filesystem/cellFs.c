@@ -426,6 +426,8 @@ s32 cellFsOpen(const char* path, s32 flags, CellFsFd* fd, const void* arg, u64 s
         return (s32)CELL_ENOENT;
     }
 
+    {char overlay_path[CELL_FS_MAX_FS_PATH_LENGTH];const char* use=vfs_overlay_resolve(host_path,overlay_path,sizeof overlay_path);if(use!=host_path)snprintf(host_path,sizeof host_path,"%s",use);}
+
     /* If creating, ensure parent directories exist */
     if (flags & CELL_FS_O_CREAT) {
         ensure_parent_dirs(host_path);

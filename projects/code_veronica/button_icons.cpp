@@ -1,3 +1,4 @@
+#include "cv_film_filter.h"
 /*
  * Button icons for Code Veronica: PlayStation, Xbox, keyboard or Nintendo Switch.
  *
@@ -2038,6 +2039,8 @@ void watcher()
 
 const char* overlay(const char* host_path, char* buf, size_t cap)
 {
+    const char* filtered=cv_film_filter::resolve(host_path);
+    if(filtered!=host_path)return filtered;
     std::string key(host_path);
     for (char& c : key) if (c == '\\') c = '/';
     // Explicit appearance-test overlay. The original archive stays untouched;
