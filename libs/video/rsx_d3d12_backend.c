@@ -492,7 +492,9 @@ static D3D12State s_d3d;
  * separate optional float3 override; the other attributes stay on GPU. */
 #define VF_REC_BYTES   ((u64)MAX_VERTICES * 8u)
 #define VF_DESC_SIZE   512u                     /* 16 attributes x 32 bytes */
-#define VF_DESC_MAX    16384u
+/* Heavy lighting/gunfire batches exceeded 16384 descriptors and reused
+ * a slot still referenced by earlier draws. Budget two descriptors per draw. */
+#define VF_DESC_MAX    (2u * MAX_DRAWS)
 #define VF_DESC_OFF    VF_REC_BYTES
 #define VF_ARENA_OFF   (VF_DESC_OFF + (u64)VF_DESC_SIZE * VF_DESC_MAX)
 #define VF_ARENA_BYTES (48u << 20)
