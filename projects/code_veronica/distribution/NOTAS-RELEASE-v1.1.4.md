@@ -27,3 +27,10 @@ When disabled, the Code Veronica VFS overlay makes only the six `TVMask`, `TVNoi
 Validation: the maintainer confirmed the effect removal in the private build. Automated tests cover EU/US/JP paths, restart-latched behavior, off/on restoration, exclusion of unrelated files, menu input, translated launcher strings, fixed English in-game labels and notices, menu bounds and isolation from Reset Colors. EU, US and JP distribution builds are included.
 
 Original PS3 game files are not included.
+
+### Downloads
+
+- **Port / launcher:** `CodeVeronica-PC-v1.1.4.zip`
+- **Veronica Extractor — download separado / separate download:** [Veronica-PKG-Extractor-v1.0.zip](https://github.com/kastieloficial/RE-Code-Veronica-Recomp/releases/download/v1.1.4/Veronica-PKG-Extractor-v1.0.zip)
+
+O extrator continua na versao 1.0 e nao fica dentro do ZIP do launcher. / The extractor remains at version 1.0 and is not included inside the launcher ZIP.

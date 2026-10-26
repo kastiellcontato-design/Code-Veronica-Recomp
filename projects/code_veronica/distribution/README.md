@@ -50,3 +50,11 @@ O atualizador protege essa pasta. Nunca inclua seu conteúdo num pacote público
 O alvo code_veronica_appearance_prepare_tests verifica os 33 modelos/prévias,
 reuso/reparação de cache e isolamento de um personagem ausente. Recebe a pasta
 system do jogo e uma pasta temporária gravável. Não executa o jogo.
+
+## Downloads separados em cada release estavel
+
+Anexar `Veronica-PKG-Extractor-v1.0.zip` como asset independente em toda nova release estavel, mesmo que o extrator nao tenha mudado de versao. Ele deve aparecer ao lado do ZIP principal nos Assets do GitHub; nunca dentro do ZIP do launcher. Reutilizar o pacote oficial ja publicado em v1.0 e conferir seu SHA-256 antes de anexar.
+
+Pacote oficial atual: SHA-256 `376922e267402094c00950a972e32339d6839cea480f5f15bd909fae615f5812`.
+
+Antes de concluir a publicacao, verificar que a release contem o ZIP principal, seu checksum e o ZIP separado do Veronica Extractor. Se o extrator ganhar uma nova versao, atualizar esta referencia para o novo pacote validado.
