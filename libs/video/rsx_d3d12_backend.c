@@ -1626,6 +1626,11 @@ static u32    s_lock_n  = 0;
  * Reserved b1 metadata lane is used only by these diagnostic shaders. */
 static int s_lighter_probe;
 static volatile LONG s_lighter_shadow_bypass;
+#include "cv_shadow_switch.h"
+static volatile LONG s_cv_dynamic_shadows=1;
+int cv_dynamic_shadows_get(void){return InterlockedCompareExchange(&s_cv_dynamic_shadows,0,0)!=0;}
+void cv_dynamic_shadows_set(int enabled){InterlockedExchange(&s_cv_dynamic_shadows,enabled!=0);}
+
 static int lighter_shadow_code(u32 code) {
     return code == 0x0C121A16u || code == 0x59540949u ||
            code == 0x4D26314Du;
@@ -11246,6 +11251,8 @@ static void render_frame_impl(void)
             u64 bound_srv = 0; D3D12_GPU_VIRTUAL_ADDRESS bound_cb0 = 0, bound_cb2 = 0;
             const int batch_shadow=shadow_batch_on()&&shader_uses_dxc()&&s_vf_buf&&
                 !s_cap_steps_on&&!s_cv_query_active&&!cv_diag&&!getenv("FP_ZERO_K");
+            const int cv_shadows_enabled=cv_dynamic_shadows_get();
+            unsigned char cv_shadow_neutralized[MAX_OFF_RTS]={0};
             for (u32 d = 0; d < s_rb.count && d < MAX_DRAWS; d++) {
                 const D3D12DrawRecord* dr = &s_rb.draws[d];
                 if (split_n && d - split_last >= (u32)split_n && submit_split(fi)) {
@@ -11537,6 +11544,22 @@ static void render_frame_impl(void)
                             D3D12_CPU_DESCRIPTOR_HANDLE rhm = off_rt_rtv(cur_m[_m]);
                             s_d3d.cmd_list->lpVtbl->ClearRenderTargetView(s_d3d.cmd_list, rhm, dr->cc, 1, &clear_rect);
                         }
+                    continue;
+                }
+                /* Keep the shadow atlas at far distance, not old-frame data.
+                 * Clear once per target, skip only the exact known generator.
+                 * All receiver lighting, room geometry and UI remain intact. */
+                if(!cv_shadows_enabled && cur_rt>=0 && cur_rt<MAX_OFF_RTS && cv_shadow_skip(cv_shadows_enabled,
+                    dr->is_vp,dr->is_clear,dr->is_copy,dr->rt_off,dr->fp_exp32,
+                    dr->fp_bytes,cv_shadows_enabled?0:fp_snap_code(dr),dr_num_rts(dr))) {
+                    if(!cv_shadow_neutralized[cur_rt]) {
+                        const float far_moments[4]={1,1,1,1};
+                        s_d3d.cmd_list->lpVtbl->ClearRenderTargetView(s_d3d.cmd_list,
+                            off_rt_rtv(cur_rt),far_moments,0,NULL);
+                        cv_shadow_neutralized[cur_rt]=1;
+                        static int reported=0;
+                        if(!reported){reported=1;fprintf(stderr,"[SHADOWS] supported dynamic-shadow map neutralized; lighting preserved\n");}
+                    }
                     continue;
                 }
                 /* Per-draw pipeline: prefer the guest's own compiled FP; fall

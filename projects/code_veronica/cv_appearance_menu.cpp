@@ -59,9 +59,9 @@ int pc_row=0;
 cv_appearance::AppearancePreview appearance_preview;
 bool appearance_assets_attempted=false;
 unsigned appearance_choice=0;
-constexpr int kSettingCount=9, kResetColorsRow=kSettingCount+1;
+constexpr int kSettingCount=10, kResetColorsRow=kSettingCount+1;
 constexpr int kBackRow=kResetColorsRow+1, kPcRowCount=kBackRow+1;
-std::array<int,kSettingCount> values={1,0,0,80,50,100,0,0,1}; // neutral brightness, contrast and saturation
+std::array<int,kSettingCount> values={1,0,0,80,50,100,0,0,1,1}; // neutral brightness, contrast and saturation
 int pc_adjust_direction=0;
 ULONGLONG pc_adjust_started=0;
 
@@ -105,7 +105,7 @@ void sound(const ppu_context* caller,int id) {
 }
 void read_settings() {
     const int packed=cv_pc_settings_read(),effects=cv_pc_settings_effects_read();
-    values={ (packed>>4)&7, (packed>>8)&3, packed&3, (packed>>10)&255, (packed>>18)&255, cv_pc_settings_saturation_read(), effects&127, (effects>>8)&7,cv_enhanced_get(11) };
+    values={ (packed>>4)&7, (packed>>8)&3, packed&3, (packed>>10)&255, (packed>>18)&255, cv_pc_settings_saturation_read(), effects&127, (effects>>8)&7,cv_enhanced_get(11),cv_enhanced_get(12) };
     values[0]=std::clamp(values[0],0,4); values[1]=std::clamp(values[1],0,2); values[2]=std::clamp(values[2],0,2);
     values[3]=std::clamp(values[3],0,160); values[4]=std::clamp(values[4],0,130); values[5]=std::clamp(values[5],0,200);
     values[6]=std::clamp(values[6],0,100)/10*10;values[7]=std::clamp(values[7],0,4);
@@ -144,8 +144,6 @@ uint32_t tab_buttons(unsigned port){
  return (((pad.buttons>>left)&1u)<<PB_L1)|(((pad.buttons>>right)&1u)<<PB_R1);
 }
 std::string tr(cv_enhanced_text::Id id){
-    if(id==cv_enhanced_text::FilmFilter)return "Film grain";
-    if(id==cv_enhanced_text::RestartApply)return "Restart the game to apply.";
     return cv_enhanced_text::utf8(cv_enhanced_language(),id);
 }
 int menu_rows(){return pc_tab==0?kPcRowCount:pc_tab==1?4:2;}
@@ -178,7 +176,7 @@ int tab_hint_kind(){
 }
 void draw_tabs(cv_menu_text::TextBatch& batch){
  using namespace cv_enhanced_text;
- batch.text("RECOMP SETTINGS",320,78,0xDFFFFFFF,1.08f,true);
+ batch.text(cv_enhanced_language()==0?"CONFIGURAÇÕES DO RECOMP":"RECOMP SETTINGS",320,78,0xDFFFFFFF,1.08f,true);
  const Id names[]={Graphics,Audio,Gameplay};
  const int kind=tab_hint_kind();
  const char* left=kind==PAD_KIND_XINPUT?"LB":kind==PAD_KIND_SWITCH?"L":kind==PAD_KIND_DS4||kind==PAD_KIND_DUALSENSE?"L1":"Q";
@@ -218,7 +216,7 @@ bool extra_input(uint32_t input,uint32_t repeat){
  * backend draws our batch over this same frame of the game's. */
 void draw_entry(const ppu_context* caller,uint32_t screen,uint32_t fade_bits) {
     if(screen!=0) { rsx_d3d12_set_ui_quads(nullptr,0); return; }
-    TextBatch batch; batch.text("RECOMP SETTINGS",32,310,selected_color(pc_selected));
+    TextBatch batch; batch.text(cv_enhanced_language()==0?"CONFIGURAÇÕES DO RECOMP":"RECOMP SETTINGS",32,310,selected_color(pc_selected));
     /* The black layer: the rows darken under it as it thickens. */
     float fade; std::memcpy(&fade,&fade_bits,4);
     const float shade=1.f-std::clamp(fade,0.f,1.f);
@@ -234,7 +232,7 @@ void draw_entry(const ppu_context* caller,uint32_t screen,uint32_t fade_bits) {
     batch.submit(caller);
 }
 void draw_settings(const ppu_context* caller) {
-    static const char* resolution[]={"480P","720P (NATIVE)","1080P","1440P","4K"};
+    static const char* resolution[]={"480P",cv_enhanced_language()==0?"720P (NATIVA)":"720P (NATIVE)","1080P","1440P","4K"};
     const std::string off=tr(cv_enhanced_text::Off);
     const char* aa[]={off.c_str(),"FXAA","SMAA"};
     const std::string modes[]={tr(cv_enhanced_text::Window),tr(cv_enhanced_text::Borderless),tr(cv_enhanced_text::Fullscreen)};
@@ -245,7 +243,7 @@ void draw_settings(const ppu_context* caller) {
     draw_tabs(batch);
     if(pc_tab){draw_extra(batch);batch.submit(caller);auto work=call_context(caller);invoke(&work,CV_FN_MENU_FRAME);return;}
     using namespace cv_enhanced_text;
-    const std::string labels[]={tr(Resolution),tr(AA),tr(Mode),tr(Brightness),tr(Contrast),tr(Saturation),tr(Sharpness),tr(Aniso),tr(FilmFilter),tr(Reset),tr(Back)};
+    const std::string labels[]={tr(Resolution),tr(AA),tr(Mode),tr(Brightness),tr(Contrast),tr(Saturation),tr(Sharpness),tr(Aniso),tr(FilmFilter),tr(DynamicShadows),tr(Reset),tr(Back)};
     char brightness[24],contrast[24],saturation[24],sharpness[24];
     std::snprintf(brightness,sizeof brightness,"%+d%%",-80+values[3]);
     std::snprintf(contrast,sizeof contrast,"%d%%",50+values[4]);
@@ -253,7 +251,7 @@ void draw_settings(const ppu_context* caller) {
     if(values[6])std::snprintf(sharpness,sizeof sharpness,"%d%%",values[6]);
     else std::snprintf(sharpness,sizeof sharpness,"%s",off.c_str());
     const std::string on=tr(On);
-    const char* current[]={resolution[values[0]],aa[values[1]],mode[values[2]],brightness,contrast,saturation,sharpness,aniso[values[7]],values[8]?"On":"Off"};
+    const char* current[]={resolution[values[0]],aa[values[1]],mode[values[2]],brightness,contrast,saturation,sharpness,aniso[values[7]],values[8]?on.c_str():off.c_str(),values[9]?on.c_str():off.c_str()};
     if(!appearance_assets_attempted) {
         appearance_assets_attempted=true;
         const char* root=std::getenv("PS3_VFS_ROOT");
@@ -279,7 +277,7 @@ void draw_settings(const ppu_context* caller) {
     appearance_preview.select(appearance_choice);
     appearance_preview.append(batch.quads,384,125,240,280);
     batch.text(appearance_preview.error().empty()?tr(cv_enhanced_text::Preview):tr(cv_enhanced_text::NoPreview),504,408,0xCFDCCEB1,.47f,true);
-    batch.text(pc_row==9?tr(RestartApply):cv_appearance::status(),320,425,0xCFDCCEB1,.40f,true);
+    batch.text(pc_row==9?tr(RestartApply):pc_row==10?tr(ShadowHelp):cv_appearance::status(),320,425,0xCFDCCEB1,.40f,true);
     batch.text(tr(cv_enhanced_text::Adjust),320,443,0xBFCFCFCF,.53f,true);
     batch.submit(caller);
     auto work=call_context(caller);invoke(&work,CV_FN_MENU_FRAME);
@@ -341,7 +339,7 @@ void CV_FN_MENU_INPUT(ppu_context* ctx) {
             else if(pc_row>0 && pc_row<=kSettingCount && ((repeat&(kLeft|kRight)) || (input&kConfirm))) {
                 const int setting=pc_row-1;
                 if(setting<3||setting>=6) {
-                    const int limit=setting==0||setting==7?5:setting==6?11:setting==8?2:3;
+                    const int limit=setting==0||setting==7?5:setting==6?11:setting>=8?2:3;
                     const int step=(repeat&kLeft)?-1:1,unit=setting==6?10:1;
                     values[setting]=((values[setting]/unit+step+limit)%limit)*unit;
                     pc_adjust_direction=0;pc_adjust_started=0;
@@ -354,7 +352,7 @@ void CV_FN_MENU_INPUT(ppu_context* ctx) {
                     const int maximum=setting==3?160:setting==4?130:200;
                     values[setting]=std::clamp(values[setting]+direction*step,0,maximum);
                 }
-                cv_pc_settings_change(setting==8?11:setting,values[setting]);sound(ctx,2);
+                cv_pc_settings_change(setting>=8?setting+3:setting,values[setting]);sound(ctx,2);
             } else pc_adjust_direction=0;
             consume(input_address,repeat_address);draw_settings(ctx);ctx->gpr[3]=0;return;
         }

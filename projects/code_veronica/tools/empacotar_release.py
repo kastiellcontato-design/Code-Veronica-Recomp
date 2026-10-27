@@ -17,6 +17,7 @@ def main():
     ap.add_argument('--distribution',action='store_true',help='Package the GUI build with developer captures disabled')
     ap.add_argument('--output-dir',type=Path,default=root/'build-release/pacote')
     ap.add_argument('--version',help='Defaults to k_launcher_version in launcher.cpp')
+    ap.add_argument('--localization-dir',type=Path,default=root/'localization')
     ap.add_argument('--check-only',action='store_true')
     ap.add_argument('--vc-redist',action='store_true',help='Add requisitos/vc_redist.x64.exe for packages sent by hand')
     args=ap.parse_args()
@@ -35,10 +36,10 @@ def main():
         result=json.loads(result_path.read_text(encoding='utf-8'))
         if result.get('distribution') is not True:ap.error('Not a distribution build')
         for name in (*FILES[:3], 'Code Veronica.exe'):
-            with (args.bin_dir/name).open('rb') as f:digest=hashlib.file_digest(f,'sha256').hexdigest()
+            with (args.bin_dir.parent/name if name=='Code Veronica.exe' else args.bin_dir/name).open('rb') as f:digest=hashlib.file_digest(f,'sha256').hexdigest()
             if result.get('executables',{}).get(name)!=digest:ap.error('Distribution executable changed since build: '+name)
         for name in (*FILES[:3], 'Code Veronica.exe'):
-            with (args.bin_dir/name).open('rb') as f:
+            with (args.bin_dir.parent/name if name=='Code Veronica.exe' else args.bin_dir/name).open('rb') as f:
                 f.seek(0x3c); pe=struct.unpack('<I',f.read(4))[0]
                 f.seek(pe); signature=f.read(4)
                 f.seek(pe+24+68); subsystem=struct.unpack('<H',f.read(2))[0]
@@ -58,7 +59,7 @@ def main():
     temporary=archive.with_suffix('.zip.part')
     manifest={'version':version,'files':{}}
     sources={(('bin/'+n) if args.distribution else n):args.bin_dir/n for n in FILES}
-    if args.distribution:sources['Code Veronica.exe']=args.bin_dir/'Code Veronica.exe'
+    if args.distribution:sources['Code Veronica.exe']=args.bin_dir.parent/'Code Veronica.exe'
     octicons=root/'launcher_art/github-octicons-LICENSE.txt'
     if octicons.is_file():sources['github-octicons-LICENSE.txt']=octicons
     if (root/'LEIA-ME.txt').is_file():sources['LEIA-ME.txt']=root/'LEIA-ME.txt'
@@ -78,6 +79,9 @@ def main():
         redist=find_vc_redist()
         if not redist:ap.error('vc_redist.x64.exe was not found in the Visual Studio installation')
         sources['requisitos/vc_redist.x64.exe']=redist
+    if args.localization_dir and args.localization_dir.is_dir():
+        for p in sorted(args.localization_dir.rglob('*')):
+            if p.is_file():sources['assets/'+p.relative_to(args.localization_dir).as_posix()]=p
     for n in sources:
         with sources[n].open('rb') as f:manifest['files'][n]=hashlib.file_digest(f,'sha256').hexdigest()
     try:

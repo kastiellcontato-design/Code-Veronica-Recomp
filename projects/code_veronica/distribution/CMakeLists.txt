@@ -35,6 +35,7 @@ file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/launcher_entry.rc"
     "1 ICON \"${PORT}/launcher_art/icon.ico\"\n")
 add_executable(CodeVeronicaLauncher WIN32 launcher_entry.cpp "${CMAKE_CURRENT_BINARY_DIR}/launcher_entry.rc")
 set_target_properties(CodeVeronicaLauncher PROPERTIES OUTPUT_NAME "Code Veronica"
-    CXX_STANDARD 17 MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    CXX_STANDARD 17 MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>"
+    RUNTIME_OUTPUT_DIRECTORY "${PORT}/build-distribution")
 set_source_files_properties("${CMAKE_CURRENT_BINARY_DIR}/launcher_entry.rc" PROPERTIES
     OBJECT_DEPENDS "${PORT}/launcher_art/icon.ico")

@@ -20,7 +20,7 @@
 #define DUMP_CAP_BYTES   (256ull << 20)   /* waiting to be written */
 
 /* ---- switches and folders ------------------------------------------------ */
-static volatile LONG s_rep_on, s_dump_on;
+static volatile LONG s_rep_on, s_dump_on, s_user_rep_on;
 static volatile ULONGLONG s_flags_at;
 static void flags_refresh(void)
 {
@@ -29,14 +29,16 @@ static void flags_refresh(void)
     s_flags_at = now;
     const char* r = getenv("TEXTURE_REPLACE");
     const char* d = getenv("TEXTURE_DUMP");
-    s_rep_on = r && r[0] == '1';
+    const char* translation=getenv("CV_PTBR_TEXTURE_DIR");
+    s_user_rep_on = r && r[0] == '1';
+    s_rep_on = s_user_rep_on || (translation && *translation);
     s_dump_on = d && d[0] == '1';
 }
 int texpack_replace_on(void) { flags_refresh(); return s_rep_on; }
 void texpack_flags_changed(void) { s_flags_at = 0; }
 int texpack_dump_on(void) { flags_refresh(); return s_dump_on; }
 
-static wchar_t s_dir[PATH_CAP], s_root[PATH_CAP], s_dump_dir[PATH_CAP];
+static wchar_t s_dir[PATH_CAP], s_root[PATH_CAP], s_dump_dir[PATH_CAP], s_ptbr_dir[PATH_CAP];
 /* Replacement paths are immutable for one game session. The dump override
  * can change live, protected by the same lock as the dump queue and hash set. */
 static wchar_t s_dump_override[PATH_CAP];
@@ -70,6 +72,7 @@ static BOOL CALLBACK paths_init(PINIT_ONCE once, PVOID arg, PVOID* ctx)
         wcsncat(s_dir, L"textures", PATH_CAP - wcslen(s_dir) - 1);
     }
     for (size_t n = wcslen(s_dir); n > 3 && (s_dir[n - 1] == L'\\' || s_dir[n - 1] == L'/'); n--) s_dir[n - 1] = 0;
+    env_path("CV_PTBR_TEXTURE_DIR",L"CV_PTBR_TEXTURE_DIR",s_ptbr_dir);
     wchar_t code[32] = L"";
     const char* g = getenv("TEXTURE_GAME");
     if (g && *g) MultiByteToWideChar(CP_UTF8, 0, g, -1, code, 32);
@@ -175,6 +178,11 @@ static const IdxEnt* idx_find(uint64_t h)
         if (s_idx[i].hash == h) return &s_idx[i];
     }
 }
+static int translation_path(const wchar_t* path)
+{
+    const size_t n=wcslen(s_ptbr_dir);
+    return n && !_wcsnicmp(path,s_ptbr_dir,n) && (path[n]==L'\\'||path[n]==L'/');
+}
 static void idx_add(uint64_t h, const wchar_t* path)
 {
     if ((s_idx_n + 1) * 2 > s_idx_cap) {
@@ -190,7 +198,8 @@ static void idx_add(uint64_t h, const wchar_t* path)
         if (s_idx[i].hash == h) {
             /* DDS wins over PNG; equal types use a stable lexical path. */
             const int newer=is_dds(path), older=is_dds(s_idx[i].path);
-            if(newer>older||(newer==older&&_wcsicmp(path,s_idx[i].path)<0)) {
+            const int ptbr=translation_path(path), old_ptbr=translation_path(s_idx[i].path);
+            if(ptbr>old_ptbr||(ptbr==old_ptbr&&(newer>older||(newer==older&&_wcsicmp(path,s_idx[i].path)<0)))) {
                 wchar_t* copy=_wcsdup(path);if(copy){free(s_idx[i].path);s_idx[i].path=copy;}
             }
             return;
@@ -236,6 +245,7 @@ static DWORD WINAPI idx_thread(LPVOID arg)
     (void)arg;
     const ULONGLONG t0 = GetTickCount64();
     scan_dir(s_root, 0);
+    if(s_ptbr_dir[0] && _wcsicmp(s_ptbr_dir,s_root))scan_dir(s_ptbr_dir,0);
     InterlockedExchange(&s_idx_state, 2);
     fprintf(stderr, "[TEXPACK] %u replacement textures listed in %ls (%.1f s)%c",
             s_idx_n, s_root, (GetTickCount64() - t0) / 1000.0, 10);
@@ -250,7 +260,8 @@ int texpack_lookup(uint64_t hash)
         else InterlockedExchange(&s_idx_state, 2);
     }
     if (s_idx_state != 2) return -1;
-    return idx_find(hash) ? 1 : 0;
+    const IdxEnt* found=idx_find(hash);
+    return found && (s_user_rep_on || translation_path(found->path)) ? 1 : 0;
 }
 
 /* ---- decoding replacements ------------------------------------------------- */

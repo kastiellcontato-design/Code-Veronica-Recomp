@@ -494,11 +494,14 @@ static void harness_guest_caller(uint32_t opd, uint64_t a0, uint64_t a1,
 
 extern "C" int cv_launcher_run(char* eboot_out, size_t cap);
 extern "C" int cv_pc_settings_film_read(void);
+extern "C" int cv_pc_settings_shadows_read(void);
 extern "C" const rsx_ui_quad* (*g_rsx_srt_hook)(uint32_t,uint32_t,uint32_t*);
 extern "C" const rsx_ui_sprite* (*g_rsx_srt_sprites_hook)(uint32_t*,const uint32_t**,uint32_t*,uint32_t*,uint64_t*);
 extern "C" void cv_button_icons_init(void);   /* button_icons.cpp */
 extern "C" void ps3_patch_site(uint32_t addr, uint32_t word, const char* flag);   /* runtime/patches */
 extern "C" void ps3_patch_writes_from_env(void);
+
+#include "cv_ptbr_spacing.h"
 
 int main(int argc, char** argv)
 {
@@ -570,6 +573,7 @@ int main(int argc, char** argv)
 #ifdef _WIN32
 #pragma comment(lib, "winmm.lib")
     cv_enhanced_set(11,cv_pc_settings_film_read());
+    cv_enhanced_set(12,cv_pc_settings_shadows_read());
     cv_enhanced_apply_startup();
     derive_vfs_root(eboot_path.c_str());
     const char* trophy_root=ppu_vfs_root;
@@ -617,6 +621,12 @@ int main(int argc, char** argv)
     if (!entry) {
         fprintf(stderr, "ERROR: could not load %s\n", eboot_path.c_str());
         return 1;
+    }
+
+    if(!cv_ptbr_choices_install()||!cv_ptbr_spacing_install()){fprintf(stderr,"ERROR: incompatible PT-BR font metrics\n");return 2;}
+    if(argc>=3 && !strcmp(argv[2],"--ptbr-metrics-self-test")) {
+        fprintf(stderr,"[PTBR-SPACING] REAL-ELF-BOOT-TEST PASS; VM range guard=%u\n",ppu_vm_size);
+        return 0;
     }
 
     ps3_patch_writes_from_env();   /* patch files: the data they change, before the game reads it */

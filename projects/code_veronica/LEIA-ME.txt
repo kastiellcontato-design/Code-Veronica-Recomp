@@ -1,3 +1,7 @@
+NOVIDADES DA v1.1.7
+Traducao Portugues (Brasil) opcional nas versoes europeia e americana, com legendas sincronizadas e imagens da introducao. Idioma original por padrao. Sombras dinamicas podem ser ligadas/desligadas no launcher e no jogo; ligadas por padrao. Granulado continua exigindo reiniciar.
+Extraia o pacote completo: Code Veronica.exe fica ao lado de bin/ e assets/. A pasta assets/ e necessaria para a traducao. Nao copie somente os executaveis. Saves, trofeus e configuracoes pessoais nao acompanham o ZIP.
+
 NOVIDADES DA v1.1.5
 Refinada a protecao de bordas claras em movimento com FSR Frame Generation. Relatorio leve de hardware/configuracoes e falhas no run-log.txt. Sem coletor pesado ou novas esperas de apresentacao.
 

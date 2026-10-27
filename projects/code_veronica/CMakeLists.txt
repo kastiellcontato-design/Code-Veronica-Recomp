@@ -846,3 +846,11 @@ if(WIN32)
  target_compile_options(code_veronica_trophy_popup_gpu_tests PRIVATE /UNDEBUG)
  target_link_libraries(code_veronica_trophy_popup_gpu_tests PRIVATE d3d12 dxgi dxguid)
 endif()
+
+# Offline verification of localization patches against the user's game files.
+if(WIN32)
+ add_executable(code_veronica_translation_patch_tests EXCLUDE_FROM_ALL tests/test_translation_patch.cpp)
+ set_target_properties(code_veronica_translation_patch_tests PROPERTIES CXX_STANDARD 20)
+ target_compile_options(code_veronica_translation_patch_tests PRIVATE /UNDEBUG)
+ target_link_libraries(code_veronica_translation_patch_tests PRIVATE bcrypt)
+endif()

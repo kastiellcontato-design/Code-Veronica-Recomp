@@ -1,3 +1,7 @@
+NEW IN v1.1.7
+Optional Portuguese (Brazil) game text for European and American editions, synchronized subtitles and introduction images. Original language by default. Dynamic shadows can be toggled in the launcher and in game; enabled by default. Film grain still requires a restart.
+Extract the complete package: Code Veronica.exe belongs beside bin/ and assets/. The assets/ folder is required for localization. Do not copy only the executables. Personal saves, trophies and settings are not bundled.
+
 NEW IN v1.1.5
 Refined FSR Frame Generation handling of bright moving edges. Added lightweight startup/hardware/settings and terminal-failure support logs. No heavy profiler or new presentation waits.
 

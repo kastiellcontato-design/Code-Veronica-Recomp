@@ -1,4 +1,5 @@
 #include "cv_film_filter.h"
+#include "cv_translation_patch.h"
 /*
  * Button icons for Code Veronica: PlayStation, Xbox, keyboard or Nintendo Switch.
  *
@@ -2039,6 +2040,44 @@ void watcher()
 
 const char* overlay(const char* host_path, char* buf, size_t cap)
 {
+    // Private proof: route only the verified text archive. Never write game data.
+    if(const char* root=getenv("CV_PTBR_ASSET_ROOT")) if(*root && (!strcmp(CV_TITLE_ID,"NPEB00553") || !strcmp(CV_TITLE_ID,"NPUB30467"))) {
+        std::string path(host_path);for(char& c:path){if(c=='\\')c='/';if(c>='A'&&c<='Z')c+=32;}
+        if(ends_with(path,"/biocv_disc/eng/system/sysmes.msb") || ends_with(path,"/biocv_disc/usa/system/sysmes.msb")) {
+            const auto local=(fs::path(root)/"sysmes.msb").string();
+            if(local.size()+1<=cap&&fs::is_regular_file(local)) {
+                memcpy(buf,local.c_str(),local.size()+1);
+                fprintf(stderr,"[PTBR-SYSMES] stat/open overlay: %s\n",buf);return buf;
+            }
+        }
+        const std::string marker=!strcmp(CV_TITLE_ID,"NPUB30467")?"/biocv_disc/usa/":"/biocv_disc/eng/";
+        const auto at=path.rfind(marker);
+        if(at!=std::string::npos) {
+            const auto relative=path.substr(at+marker.size());
+            const bool room=relative.rfind("rdx_lnk/rm_",0)==0 && relative.find('/',8)==std::string::npos && ends_with(relative,".arc");
+            if(room || relative=="adv/boot.arc" || relative=="adv/opt.arc") {
+                const auto patch=fs::path(root)/(relative+".cvp");
+                if(fs::is_regular_file(patch)) {
+                    const auto cache=cv_translation_patch::resolve(fs::path(host_path),patch);
+                    const auto ready=cache.string();
+                    if(!ready.empty() && ready.size()+1<=cap){memcpy(buf,ready.c_str(),ready.size()+1);return buf;}
+                    fprintf(stderr,"[PTBR] Translation patch invalid or cache unavailable: %s\n",relative.c_str());
+                    return "";
+                }
+                const auto local=(fs::path(root)/relative).string();
+                if(local.size()+1<=cap&&fs::is_regular_file(local)) {
+                    memcpy(buf,local.c_str(),local.size()+1);return buf;
+                }
+            }
+        }
+        if(ends_with(path,"/biocv_disc/eng/rdx_lnk/rm_0000.arc") || ends_with(path,"/biocv_disc/usa/rdx_lnk/rm_0000.arc")) {
+            const auto local=(fs::path(root)/"rm_0000.arc").string();
+            if(local.size()+1<=cap&&fs::is_regular_file(local)) {
+                memcpy(buf,local.c_str(),local.size()+1);
+                fprintf(stderr,"[PTBR-TEXT-TEST] serving first-room messages: %s\n",buf);return buf;
+            }
+        }
+    }
     const char* filtered=cv_film_filter::resolve(host_path);
     if(filtered!=host_path)return filtered;
     std::string key(host_path);
