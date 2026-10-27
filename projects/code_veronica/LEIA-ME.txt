@@ -1,3 +1,6 @@
+NOVIDADES DA v1.1.8
+Removida temporariamente a filtragem anisotropica forcada do launcher e do PC Recomp para evitar bordas brancas/coloridas em configuracoes afetadas. Configuracoes antigas sao ignoradas; a filtragem forcada permanece desligada. As demais funcoes da v1.1.7 foram mantidas.
+
 NOVIDADES DA v1.1.7
 Traducao Portugues (Brasil) opcional nas versoes europeia e americana, com legendas sincronizadas e imagens da introducao. Idioma original por padrao. Sombras dinamicas podem ser ligadas/desligadas no launcher e no jogo; ligadas por padrao. Granulado continua exigindo reiniciar.
 Extraia o pacote completo: Code Veronica.exe fica ao lado de bin/ e assets/. A pasta assets/ e necessaria para a traducao. Nao copie somente os executaveis. Saves, trofeus e configuracoes pessoais nao acompanham o ZIP.

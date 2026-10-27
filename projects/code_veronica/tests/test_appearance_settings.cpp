@@ -85,15 +85,20 @@ const char* status(){return "";}
 std::filesystem::path appearance_system_directory(const std::filesystem::path& p){return p;}
 }
 int main(){
- ppu_context ctx{};ctx.gpr[1]=0x8000;CV_FN_MENU_RESET(&ctx);pc_open=true;pc_tab=0;pc_row=9;read_settings();
- assert(kSettingCount==10&&values[8]==1&&values[9]==1);
+ ppu_context ctx{};ctx.gpr[1]=0x8000;CV_FN_MENU_RESET(&ctx);pc_open=true;pc_tab=0;pc_row=8;read_settings();
+ assert(kSettingCount==9&&values[7]==1&&values[8]==1);
  auto press=[&](unsigned input,unsigned repeat){ctx.gpr[3]=0;ctx.gpr[4]=1;vm_write32(kInput,input);vm_write32(kRepeat,repeat);CV_FN_MENU_INPUT(&ctx);};
  press(0,kRight);assert(enhanced[3]==0&&changes.back()==std::make_pair(11,0));
  press(0,kLeft);assert(enhanced[3]==1&&changes.back()==std::make_pair(11,1));
- pc_row=10;press(0,kRight);assert(enhanced[4]==0&&changes.back()==std::make_pair(12,0));
+ pc_row=9;press(0,kRight);assert(enhanced[4]==0&&changes.back()==std::make_pair(12,0));
  press(0,kLeft);assert(enhanced[4]==1&&changes.back()==std::make_pair(12,1));
+ for(int row=1;row<=kSettingCount;row++){
+  pc_row=row;press(0,kRight);assert(changes.back().first!=7);draw_settings(&ctx);
+ }
+ pc_row=8;press(0,kLeft);pc_row=9;press(0,kLeft); // Restore toggles after traversal.
+ for(auto c:changes)assert(c.first!=7);
  for(int row=0;row<kPcRowCount;row++){pc_row=row;draw_settings(&ctx);}
  auto before=settings;reset_colors();assert(settings[6]==before[6]&&settings[7]==before[7]&&enhanced[3]==1);
- for(language=0;language<13;language++){assert(tr(cv_enhanced_text::FilmFilter)==cv_enhanced_text::utf8(language,cv_enhanced_text::FilmFilter));assert(tr(cv_enhanced_text::RestartApply)==cv_enhanced_text::utf8(language,cv_enhanced_text::RestartApply));pc_row=9;draw_settings(&ctx);assert(last_batch>0);}
- puts("PASS appearance menu: film row on/off, bridge ID 11, localized restart notice, reset isolation, 13 languages and 640x480 bounds");
+ for(language=0;language<13;language++){assert(tr(cv_enhanced_text::FilmFilter)==cv_enhanced_text::utf8(language,cv_enhanced_text::FilmFilter));assert(tr(cv_enhanced_text::RestartApply)==cv_enhanced_text::utf8(language,cv_enhanced_text::RestartApply));pc_row=8;draw_settings(&ctx);assert(last_batch>0);}
+ puts("PASS appearance menu: forced anisotropy row absent, retired ID 7 never emitted, film row on/off, bridge ID 11, localized restart notice, reset isolation, 13 languages and 640x480 bounds");
 }

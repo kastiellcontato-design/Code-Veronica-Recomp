@@ -248,7 +248,6 @@ struct Settings {
     int vsync = 0;         /* 60 FPS only, never with frame generation; switches live */
     int pose_device = 0; /* CPU default; GPU compute requires restart, 60 FPS only */
     int fps = 0;           /* 0 original 30; 1 experimental 60 with render-only interpolation */
-    int aniso = 0;         /* anisotropic filtering: 0 off, 1-4 = 2x/4x/8x/16x */
     int brightness = 0;   /* -80..80, zero leaves the image unchanged */
     int contrast = 100;   /* 50..180 percent */
     int saturation = 100; /* 0..200 percent */
@@ -308,7 +307,6 @@ std::wstring vsync_name(int i){return T(i?S_VSYNC_ON:S_VSYNC_OFF);}
 bool frame_generation_allowed(){const char* d=getenv("CV_FPS_DIAGNOSTIC"),*p=getenv("CV_FSR_DIAGNOSTIC");return !(d&&!strcmp(d,"1"))||(p&&!strcmp(p,"1"));}
 int pose_device_override(){const char* d=std::getenv("CV_FPS_DIAGNOSTIC"),*p=std::getenv("CV_POSE_COMPUTE");return d&&std::strcmp(d,"1")==0&&p?(std::strcmp(p,"1")==0?1:0):-1;}
 std::wstring fps_name(int i) { return T(i ? S_FPS_60_DIAG : S_FPS_ORIG); }
-std::wstring aniso_name(int i) { return i ? std::to_wstring(1 << i) + L"x" : T(S_AA_OFF); }
 std::wstring sharp_name(int i) { return i ? std::to_wstring(i * 10) + L"%" : T(S_AA_OFF); }
 
 /* Game patches (projects/code_veronica/patches.json, lifted as switchable
@@ -481,7 +479,7 @@ Settings load_settings()
     if(s.vsync)s.frame_generation=0;   // the two never run together
     if(pose_device_override()>=0)s.pose_device=pose_device_override();
     if(opt30_comparison())s.fps=0;   // this process only; saved FPS choice is preserved
-    s.aniso  = std::clamp(_wtoi(ini_get(L"tela", L"anisotropico", L"0").c_str()), 0, 4);
+    // Forced anisotropy temporarily retired: never restore legacy 2x-16x preferences.
     s.brightness = _wtoi(ini_get(L"tela", L"brilho", L"0").c_str());
     s.contrast = _wtoi(ini_get(L"tela", L"contraste", L"100").c_str());
     s.saturation = _wtoi(ini_get(L"tela", L"saturacao", L"100").c_str());
@@ -603,7 +601,7 @@ void save_settings(const Settings& s)
     if(pose_device_override()<0)ini_set(L"tela",L"interpolacao_gpu",std::to_wstring(s.pose_device));
     ini_set(L"tela",L"fsr_frame_generation",std::to_wstring(s.frame_generation));
     ini_set(L"tela",L"vsync",std::to_wstring(s.vsync));
-    ini_set(L"tela", L"anisotropico", std::to_wstring(s.aniso));
+    ini_set(L"tela", L"anisotropico", L"0");
     ini_set(L"tela", L"brilho", std::to_wstring(s.brightness));
     ini_set(L"tela", L"contraste", std::to_wstring(s.contrast));
     ini_set(L"tela", L"saturacao", std::to_wstring(s.saturation));
@@ -848,7 +846,7 @@ UI g;
 /* ids */
 enum {
     ID_NAV = 100,               /* + page */
-    ID_DD_MODE = 200, ID_DD_RES = 201, ID_DD_AA = 202, ID_DD_LANG = 203, ID_DD_FPS = 204, ID_DD_ANISO = 205, ID_DD_SHARP = 206, ID_DD_POSE_DEVICE = 207, ID_DD_FRAME_GEN = 208, ID_DD_VSYNC = 209, ID_DD_FILM = 210, ID_DD_GAME_TEXT = 211, ID_DD_SHADOWS=212, ID_DD_ITEM = 300,  /* + item index */
+    ID_DD_MODE = 200, ID_DD_RES = 201, ID_DD_AA = 202, ID_DD_LANG = 203, ID_DD_FPS = 204, ID_DD_SHARP = 206, ID_DD_POSE_DEVICE = 207, ID_DD_FRAME_GEN = 208, ID_DD_VSYNC = 209, ID_DD_FILM = 210, ID_DD_GAME_TEXT = 211, ID_DD_SHADOWS=212, ID_DD_ITEM = 300,  /* + item index */
     ID_DD_UP = 390, ID_DD_DOWN = 391,
     ID_PLAY = 400, ID_RESUME, ID_QUIT,
     ID_GAME_BROWSE = 500, ID_GAME_OPEN, ID_RAP_BROWSE, ID_RAP_OPEN, ID_SAVE_BROWSE, ID_SAVE_OPEN, ID_SAVE_DEFAULT,
@@ -1154,7 +1152,7 @@ void section(Graphics& gr, const std::wstring& t, float x, float y, float w, con
 
 
 /* Release shown under the sidebar, beside the credit. Bump it per release. */
-const wchar_t* const k_launcher_version = L"v1.1.7";
+const wchar_t* const k_launcher_version = L"v1.1.8";
 
 /* ---------------------------------------------------------------- updates
  * cv_updater.h does the network and file work on threads of its own, which
@@ -1606,7 +1604,7 @@ void draw_inicio(Graphics& gr,const Font& head,const Font& body,const Font&,cons
  setting(0,0,T(S_DISPLAY_MODE),mode_name(g.s.mode),ID_DD_MODE);setting(0,1,T(S_RENDER_RES),res_name(g.s.res),ID_DD_RES);
  setting(0,2,cv_enhanced_text::get(g_lang,cv_enhanced_text::FilmFilter),cv_enhanced_text::get(g_lang,g.s.film_filter?cv_enhanced_text::On:cv_enhanced_text::Off),ID_DD_FILM);
  setting(0,3,cv_enhanced_text::get(g_lang,cv_enhanced_text::DynamicShadows),cv_enhanced_text::get(g_lang,g.s.dynamic_shadows?cv_enhanced_text::On:cv_enhanced_text::Off),ID_DD_SHADOWS);
- setting(1,0,T(S_AA),aa_name(g.s.aa),ID_DD_AA);setting(1,1,T(S_ANISO),aniso_name(g.s.aniso),g.running?-1:ID_DD_ANISO,!g.running);setting(1,2,T(S_SHARPNESS),sharp_name(g.s.sharpness/10),ID_DD_SHARP);
+ setting(1,0,T(S_AA),aa_name(g.s.aa),ID_DD_AA);setting(1,1,T(S_SHARPNESS),sharp_name(g.s.sharpness/10),ID_DD_SHARP);
  setting(2,0,T(S_FRAME_LIMIT),fps_name(g.s.fps),g.running||opt30_comparison()?-1:ID_DD_FPS,!g.running&&!opt30_comparison());
  if((g.s.fps==1||pose_device_override()>=0)&&!opt30_comparison())setting(2,1,T(S_FRAME_GEN),frame_generation_name(frame_generation_allowed()?g.s.frame_generation:0),g.running||!frame_generation_allowed()?-1:ID_DD_FRAME_GEN,!g.running&&frame_generation_allowed());
  /* VSync switches live, except in a session running frame generation (its swapchain paces itself). */
@@ -2857,7 +2855,6 @@ void paint(HDC hdc)
         else if (g.open_dd == ID_DD_GAME_TEXT) {items={ptbr_ui(1),ptbr_ui(2)};sel=g.s.game_text_ptbr;}
         else if(g.open_dd==ID_DD_SHADOWS){items={cv_enhanced_text::get(g_lang,cv_enhanced_text::Off),cv_enhanced_text::get(g_lang,cv_enhanced_text::On)};sel=g.s.dynamic_shadows?1:0;}
         else if (g.open_dd == ID_DD_FILM) {items.push_back(cv_enhanced_text::get(g_lang,cv_enhanced_text::Off));items.push_back(cv_enhanced_text::get(g_lang,cv_enhanced_text::On));sel=g.s.film_filter?1:0;}
-        else if (g.open_dd == ID_DD_ANISO) { for (int i = 0; i < 5; i++) items.push_back(aniso_name(i)); sel = g.s.aniso; }
         else if (g.open_dd == ID_DD_SHARP) { for (int i = 0; i <= 10; i++) items.push_back(sharp_name(i)); sel = g.s.sharpness / 10; }
         else if (g.open_dd == ID_DD_SRT_ENEMIES) { for(int i=0;i<=5;i++)items.push_back(srt_enemy_value(i));items.push_back(T(S_SRT_ALL));sel=g.s.srt_enemies==99?6:g.s.srt_enemies; }
         else if (g.open_dd == ID_DD_SRT_CORNER) {for(int i=0;i<4;i++)items.push_back(T(S_SRT_TL+i));sel=g.s.srt_corner;}
@@ -3214,7 +3211,6 @@ void click(int id)
             else if (g.open_dd == ID_DD_GAME_TEXT) g.s.game_text_ptbr=i;
             else if(g.open_dd==ID_DD_SHADOWS)g.s.dynamic_shadows=i!=0;
             else if (g.open_dd == ID_DD_FILM) g.s.film_filter = i!=0;
-            else if (g.open_dd == ID_DD_ANISO) g.s.aniso = i;
             else if (g.open_dd == ID_DD_SHARP) g.s.sharpness = i * 10;
             else if(g.open_dd==ID_DD_SRT_ENEMIES)g.s.srt_enemies=i==6?99:i;
             else if(g.open_dd==ID_DD_SRT_CORNER)g.s.srt_corner=i;
@@ -3239,7 +3235,7 @@ void click(int id)
         if (g.page == P_MODS) g.tex_rep = -1;        /* count the textures again */
     }
     else if (id >= ID_PATCH && id < ID_PATCH + NPATCHES) { g.s.patch[id - ID_PATCH] ^= true; changed(); }
-    else if (id == ID_DD_SHADOWS || id == ID_DD_GAME_TEXT || id == ID_DD_TROPHY_CORNER || id == ID_DD_TROPHY_FILTER || id == ID_DD_FILM || id == ID_DD_MODE || id == ID_DD_RES || id == ID_DD_AA || id == ID_DD_FPS || id == ID_DD_POSE_DEVICE || id == ID_DD_FRAME_GEN || id == ID_DD_VSYNC || id == ID_DD_ANISO || id == ID_DD_SHARP || id == ID_DD_LANG || id==ID_DD_SRT_ENEMIES || id==ID_DD_SRT_CORNER || id==ID_DD_SRT_LANGUAGE || id == ID_DD_OV_CORNER || id == ID_DD_OV_LAYOUT || id == ID_DD_OV_SIZE || id == ID_DD_OV_BG || id == ID_DD_SRT_INVPOS || id == ID_DD_SRT_WINDOW || id == ID_DD_SRT_BOSSBAR) {
+    else if (id == ID_DD_SHADOWS || id == ID_DD_GAME_TEXT || id == ID_DD_TROPHY_CORNER || id == ID_DD_TROPHY_FILTER || id == ID_DD_FILM || id == ID_DD_MODE || id == ID_DD_RES || id == ID_DD_AA || id == ID_DD_FPS || id == ID_DD_POSE_DEVICE || id == ID_DD_FRAME_GEN || id == ID_DD_VSYNC || id == ID_DD_SHARP || id == ID_DD_LANG || id==ID_DD_SRT_ENEMIES || id==ID_DD_SRT_CORNER || id==ID_DD_SRT_LANGUAGE || id == ID_DD_OV_CORNER || id == ID_DD_OV_LAYOUT || id == ID_DD_OV_SIZE || id == ID_DD_OV_BG || id == ID_DD_SRT_INVPOS || id == ID_DD_SRT_WINDOW || id == ID_DD_SRT_BOSSBAR) {
         g.open_dd = id; g.dd_scroll = 0;
         if (id == ID_DD_LANG && g_lang_pick >= 0)   /* open with the chosen language in view */
             for (int i = 0; i < LANG_COUNT; i++)
@@ -3429,7 +3425,7 @@ LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp)
     switch (m) {
     case WM_PC_SETTINGS_READ: return g.s.mode | (g.s.res << 4) | (g.s.aa << 8) | ((g.s.brightness + 80) << 10) | ((g.s.contrast - 50) << 18);
     case WM_PC_SETTINGS_READ_SATURATION: return g.s.saturation;
-    case WM_PC_SETTINGS_READ_EFFECTS: return g.s.sharpness | (g.s.aniso << 8);
+    case WM_PC_SETTINGS_READ_EFFECTS: return g.s.sharpness;
     case WM_PC_SETTINGS_CHANGE:
         if (wp == 0 && lp >= 0 && lp <= 4) g.s.res = int(lp);
         else if (wp == 1 && lp >= 0 && lp <= 2) g.s.aa = int(lp);
@@ -3438,7 +3434,7 @@ LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp)
         else if (wp == 4 && lp >= 0 && lp <= 130) g.s.contrast = 50 + int(lp);
         else if (wp == 5 && lp >= 0 && lp <= 200) g.s.saturation = int(lp);
         else if (wp == 6 && lp >= 0 && lp <= 100 && lp % 10 == 0) g.s.sharpness = int(lp);
-        else if (wp == 7 && lp >= 0 && lp <= 4) g.s.aniso = int(lp);
+        else if (wp == 7) return 0; // Retired anisotropy bridge ID.
         else if(wp==8&&lp>=0&&lp<=100)g.s.music_volume=int(lp);
         else if(wp==9&&lp>=0&&lp<=100)g.s.sfx_volume=int(lp);
         else if(wp==10&&lp>=0&&lp<=1)g.s.battle_unlocked=lp!=0;
@@ -3893,7 +3889,7 @@ void start_game()
     set_env("RES_SCALE", k_res[s.res].scale);
     set_env("WINDOW_MODE", k_mode_env[s.mode]);
     set_env("AA_MODE", std::to_string(s.aa));
-    set_env("RSX_ANISO", s.aniso ? std::to_string(1 << s.aniso) : "0");
+    set_env("RSX_ANISO", "0");
     /* Opt-in 60 FPS: preserve native 30 Hz gameplay, blend render poses.
      * The accelerated RAW benchmark remains a separate diagnostic shortcut. */
     const char* diagnostic_env=std::getenv("CV_FPS_DIAGNOSTIC");
@@ -4104,7 +4100,7 @@ extern "C" int cv_pc_settings_saturation_read(void)
     return cv_pc_fallback_saturation;
 }
 // Effects are separate from the original packed display/color settings.
-// Anisotropy is a saved preference; the renderer creates its samplers at startup.
+// Retired anisotropy bits are never returned, including without a launcher window.
 static int cv_pc_fallback_effects = -1;
 extern "C" int cv_pc_settings_effects_read(void)
 {
@@ -4112,11 +4108,7 @@ extern "C" int cv_pc_settings_effects_read(void)
     if (cv_pc_fallback_effects < 0) {
         const char* sharp=getenv("CV_SHARPNESS");
         const int sharpness=std::clamp(sharp?atoi(sharp):_wtoi(ini_get(L"tela",L"nitidez",L"0").c_str()),0,100)/10*10;
-        int aniso=std::clamp(_wtoi(ini_get(L"tela",L"anisotropico",L"0").c_str()),0,4);
-        if (const char* filter=getenv("RSX_ANISO")) {
-            const int factor=atoi(filter);aniso=factor>=16?4:factor>=8?3:factor>=4?2:factor>=2?1:0;
-        }
-        cv_pc_fallback_effects=sharpness|(aniso<<8);
+        cv_pc_fallback_effects=sharpness;
     }
     return cv_pc_fallback_effects;
 }
@@ -4132,6 +4124,7 @@ extern "C" int cv_pc_settings_film_read(void){
 extern "C" void cv_pc_settings_change(int which,int value)
 {
     static const int maximum[]={4,2,2,160,130,200,100,4,100,100,1,1,1};
+    if(which==7)return; // Prevent stale callers from re-enabling retired anisotropy.
     if (which<0 || which>=13 || value<0 || value>maximum[which] || (which==6 && value%10!=0)) return;
     if (g.hwnd && IsWindow(g.hwnd)) { SendMessageW(g.hwnd,WM_PC_SETTINGS_CHANGE,WPARAM(which),LPARAM(value)); return; }
     if(which==12){cv_enhanced_set(12,value);ini_set(L"tela",L"sombras_dinamicas",std::to_wstring(value));return;}
@@ -4165,9 +4158,6 @@ extern "C" void cv_pc_settings_change(int which,int value)
     } else if(which==6) {
         cv_pc_fallback_effects=(cv_pc_settings_effects_read()&~127)|value;
         ini_set(L"tela",L"nitidez",std::to_wstring(value));rsx_d3d12_set_sharpness(value);
-    } else {
-        cv_pc_fallback_effects=(cv_pc_settings_effects_read()&~(7<<8))|(value<<8);
-        ini_set(L"tela",L"anisotropico",std::to_wstring(value));
     }
     cv_pc_fallback_settings=packed;
 }

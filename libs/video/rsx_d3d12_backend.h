@@ -43,6 +43,9 @@ int rsx_d3d12_backend_init(u32 width, u32 height, const char* title);
 /* Shut down the D3D12 backend and release all resources. */
 void rsx_d3d12_backend_shutdown(void);
 
+/* Call before backend initialization to retire the forced anisotropy override. */
+void rsx_d3d12_disable_forced_anisotropy(void);
+
 /* Process Win32 messages. Returns 0 normally, -1 if window closed. */
 int rsx_d3d12_backend_pump_messages(void);
 

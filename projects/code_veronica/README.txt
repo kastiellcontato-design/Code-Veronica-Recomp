@@ -1,3 +1,6 @@
+NEW IN v1.1.8
+Temporarily removed forced anisotropic filtering from the launcher and in-game PC Recomp menu to avoid white/colored outlines on affected configurations. Old preferences are ignored; forced anisotropy remains disabled. Other v1.1.7 features are retained.
+
 NEW IN v1.1.7
 Optional Portuguese (Brazil) game text for European and American editions, synchronized subtitles and introduction images. Original language by default. Dynamic shadows can be toggled in the launcher and in game; enabled by default. Film grain still requires a restart.
 Extract the complete package: Code Veronica.exe belongs beside bin/ and assets/. The assets/ folder is required for localization. Do not copy only the executables. Personal saves, trophies and settings are not bundled.

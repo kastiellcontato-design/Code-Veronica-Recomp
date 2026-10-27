@@ -566,8 +566,13 @@ static int vf_enabled(void)
  * units, sharper floors and walls seen at an angle. Screen-aligned quads (HUD,
  * text, post passes) sample the same as before. 0/unset = trilinear, as the
  * guest asked. */
+/* This title can retire the forced override before rendering starts.
+ * Other SDK clients retain their existing behavior. */
+static int s_forced_aniso_disabled;
+void rsx_d3d12_disable_forced_anisotropy(void){s_forced_aniso_disabled=1;}
 static UINT tex_aniso(void)
 {
+    if(s_forced_aniso_disabled)return 0;
     static int n = -1;
     if (n < 0) {
         const char* e = getenv("RSX_ANISO");
