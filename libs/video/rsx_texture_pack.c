@@ -22,6 +22,7 @@
 /* ---- switches and folders ------------------------------------------------ */
 static volatile LONG s_rep_on, s_dump_on, s_user_rep_on;
 static volatile ULONGLONG s_flags_at;
+static volatile LONG s_user_gen = 1;   /* bumps whenever the user's own pack is switched on or off */
 static void flags_refresh(void)
 {
     const ULONGLONG now = GetTickCount64();
@@ -30,11 +31,14 @@ static void flags_refresh(void)
     const char* r = getenv("TEXTURE_REPLACE");
     const char* d = getenv("TEXTURE_DUMP");
     const char* translation=getenv("CV_PTBR_TEXTURE_DIR");
-    s_user_rep_on = r && r[0] == '1';
+    const LONG user = r && r[0] == '1';
+    if (user != s_user_rep_on) InterlockedIncrement(&s_user_gen);
+    s_user_rep_on = user;
     s_rep_on = s_user_rep_on || (translation && *translation);
     s_dump_on = d && d[0] == '1';
 }
 int texpack_replace_on(void) { flags_refresh(); return s_rep_on; }
+uint32_t texpack_user_generation(void) { return (uint32_t)s_user_gen; }
 void texpack_flags_changed(void) { s_flags_at = 0; }
 int texpack_dump_on(void) { flags_refresh(); return s_dump_on; }
 

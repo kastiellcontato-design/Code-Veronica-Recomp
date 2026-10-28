@@ -6573,7 +6573,7 @@ static u32 tex_csum(const u8* base, u32 nbytes)
  * While a replacement is still decoding, its texture draws with its own image.
  * Moddable: B8, A8R8G8B8, G8B8 and DXT1/3/5 -- the formats drawn as such.
  * -------------------------------------------------------------------------*/
-typedef struct { u64 hash; int state; ID3D12Resource* res; u64 bytes; u64 last; u32 opaque; } RepEntry;
+typedef struct { u64 hash; int state; ID3D12Resource* res; u64 bytes; u64 last; u32 opaque; u32 gen; int allowed; } RepEntry;
 enum { REP_NEW = 0, REP_NONE, REP_LOADING, REP_READY, REP_DROPPED };
 #define REP_CAP 65536u
 static RepEntry* s_rep;
@@ -6713,13 +6713,22 @@ static ID3D12Resource* texrep_for_slot(int ts, u32* opaque)
         t->thash_ok = 1;
     }
     RepEntry* e = rep_find(t->thash, 0);
+    const u32 gen = texpack_user_generation();
     if (!e) {
         const int has = texpack_lookup(t->thash);
         if (has < 0 || !(e = rep_find(t->thash, 1))) return NULL;   /* the folder is still being listed */
         e->state = has ? REP_LOADING : REP_NONE;
+        e->gen = gen; e->allowed = has;
         if (has) texpack_request(t->thash);
         return NULL;
     }
+    if (e->gen != gen) {   /* the user's pack was switched on or off since this entry was judged */
+        const int has = texpack_lookup(e->hash);
+        if (has < 0) return NULL;
+        e->gen = gen; e->allowed = has;
+        if (has && e->state == REP_NONE) { e->state = REP_LOADING; texpack_request(e->hash); }
+    }
+    if (!e->allowed) return NULL;   /* off: the original texture, while the loaded copy stays for switching back */
     if (e->state == REP_DROPPED) { e->state = REP_LOADING; texpack_request(e->hash); return NULL; }
     if (e->state != REP_READY) return NULL;
     e->last = s_tex_frame; *opaque=e->opaque;

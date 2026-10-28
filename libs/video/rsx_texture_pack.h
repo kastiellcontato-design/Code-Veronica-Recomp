@@ -42,6 +42,7 @@ static inline uint32_t texpack_alpha_mapping(uint32_t mapping,int opaque) {
     return mapping;
 }
 int texpack_replace_on(void);
+uint32_t texpack_user_generation(void);   /* changes when the user's pack is toggled; cached lookups are then stale */
 int texpack_dump_on(void);
 /* The switches were just changed: read them again now, not within half a second. */
 void texpack_flags_changed(void);
