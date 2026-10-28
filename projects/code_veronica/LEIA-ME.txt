@@ -1,3 +1,9 @@
+NOVIDADES DA v1.1.10
+Controle moderno opcional, com movimento relativo à câmera fixa e continuidade da direção nos cortes. Ative dentro do jogo: Options > Recomp Settings > Jogabilidade > Estilo de movimento > Moderno. Pode alternar durante a partida; Clássico continua como padrão, e a escolha é salva.
+No launcher, Controles agora inclui as quatro direções de cada analógico, com ícones e mapeamento para teclado ou controle. No Moderno, pouca inclinação do analógico permite caminhar e inclinação maior corre automaticamente. Padrão do teclado: WASD no analógico esquerdo e setas no D-pad. O D-pad permite caminhar; teclas atribuídas ao analógico esquerdo simulam inclinação máxima. Os mapeamentos salvos são preservados; Restaurar padrões aplica esse novo esquema. O analógico direito também é configurável.
+Mantidas as melhorias anteriores: HUD, recarga manual, atalhos de equipamento, DXC/FXC e tradução corrigida. Textos das novas opções nos 13 idiomas da interface. Esta versão não inclui a câmera experimental no ombro.
+Extraia o ZIP completo mantendo Code Veronica.exe, bin/ e assets/ juntos. Não inclui arquivos originais do jogo, modelos 3D, saves ou configurações pessoais.
+
 NOVIDADES DA v1.1.9
 HUD de combate opcional com vida, estado de saúde, arma, munição carregada e reserva. Inclui isqueiro, animação de dano, brilho na vida, veneno/gás, escala por resolução e fade após cinco segundos sem ação. Texto e cores usam os limites do inventário original (120/60/30 HP).
 Recarga manual opcional sem abrir o inventário: mire e pressione o comando configurado. Teclado e controle podem ser usados juntos. Depende de munição compatível e das animações nativas; armas sem recarga compatível continuam seguindo as regras do jogo.

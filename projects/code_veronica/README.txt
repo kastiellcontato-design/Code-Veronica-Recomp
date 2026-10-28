@@ -1,3 +1,9 @@
+NEW IN v1.1.10
+Optional modern movement relative to the fixed camera, retaining direction across camera cuts. Enable in game: Options > Recomp Settings > Gameplay > Movement style > Modern. Switch during gameplay; Classic remains the default and your choice is saved.
+Launcher Controls now includes four directions for each analog stick, with icons and keyboard/controller remapping. Modern mode walks at low stick tilt and automatically runs at higher tilt. Keyboard defaults: WASD for the left stick and arrow keys for the D-pad. The D-pad walks; keys assigned to the left stick simulate full tilt. Saved mappings are preserved; Restore defaults applies this new layout. The right stick is also remappable.
+Previous HUD, manual reload, equipment shortcuts, DXC/FXC and corrected localization are retained. New option text supports all 13 UI languages. The experimental shoulder camera is not included.
+Extract the complete ZIP, keeping Code Veronica.exe, bin/ and assets/ together. No original game files, 3D models, saves or personal settings included.
+
 NEW IN v1.1.9
 Optional combat HUD: health, condition, weapon, loaded/reserve ammo and lighter icon, damage trail, moving health highlight, poison/gas colors, resolution scaling and five-second idle fade. Health text and colors now match the original inventory thresholds (120/60/30 HP).
 Optional manual reload without the inventory: aim and press your assigned command. Keyboard and controller work together. Compatible ammunition and native animation rules still apply; weapons without a supported reload retain their original behavior.
