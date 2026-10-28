@@ -279,6 +279,9 @@ Só o **código** importa. O arquivo de substituição pode ter outra resoluçã
 2. No jogo, aperte **F9** (controle: R1+R2+L1+L2+□ / RB+RT+LB+LT+X) para comparar o mod com as texturas originais quando quiser.
 3. Pacotes grandes não pesam de cara: cada arquivo só é carregado quando a textura dele aparece na tela.
 
+> [!NOTE]
+> **Pacote de texturas HD pronto (comunidade).** Um pacote de texturas HD do PS2 adaptado para este port, para as versões americana, europeia e japonesa, está disponível como download separado. Não faz parte do download do port. Créditos, link e instruções: [TEXTURAS-HD-COMUNIDADE.md](projects/code_veronica/TEXTURAS-HD-COMUNIDADE.md).
+
 > [!TIP]
 > **Adaptando pacotes de texturas HD do PS2.** DDS nos formatos acima pode ser usado diretamente, sem converter para PNG. Use **Extrair texturas de todos os mapas** para obter referências do PS3, identifique cada imagem correspondente e renomeie o arquivo do pack com o **código de 16 caracteres do PS3**, mantendo sua extensão real `.dds` ou `.png`. Não basta trocar a extensão. Confira recortes, orientação, transparência e organização de cada imagem: esses detalhes podem diferir entre PS2 e PS3. Coloque os arquivos na pasta do mod como no Passo 2.
 
@@ -391,6 +394,8 @@ Os outros alvos de teste (por exemplo `code_veronica_launcher_cache_tests`) est�
 **Comunidade de Resident Evil**
 - **Kapdap**: [re-cvx-srt-provider](https://github.com/kapdap/re-cvx-srt-provider) (MIT), cujos endereços de memória e regras de estado do jogo foram estudados para o SRT; o [autosplitter do Code: Veronica](https://github.com/kapdap/re-cvx-autosplitter) (MIT), que o script do LiveSplit incluído amplia; e o patch de pular portas da lista de patches do RPCS3.
 - **aikatore e colaboradores**: [recvx-enhanced-port](https://github.com/aikatore/recvx-enhanced-port) (MIT), pelos nomes dos locais das salas e como referência para os quadros intermediários.
+
+- **Pacote de texturas HD (download opcional):** texturas de **ewgeha**, **SonicB00M** e **JuanchoTexHD**, adaptadas para a versão de PS3 por Kastiel. Créditos completos e links: [TEXTURAS-HD-COMUNIDADE.md](projects/code_veronica/TEXTURAS-HD-COMUNIDADE.md).
 
 A **Capcom** criou o *Resident Evil Code: Veronica*. Apoie os lançamentos oficiais.
 

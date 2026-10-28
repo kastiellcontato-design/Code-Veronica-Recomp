@@ -279,6 +279,9 @@ Only the **code** matters. A replacement can use a different resolution (a 512×
 2. In game, press **F9** (controller: R1+R2+L1+L2+□ / RB+RT+LB+LT+X) to compare the mod with the original textures at any time.
 3. Big packs do not cost memory up front: each file is only loaded when its texture appears on screen.
 
+> [!NOTE]
+> **Ready-made HD texture pack (community).** A pack of PS2 HD textures adapted to this port, for the US, EU and JP versions, is available as a separate download. It is not part of the port's download. Credits, download link and instructions: [TEXTURAS-HD-COMUNIDADE.md](projects/code_veronica/TEXTURAS-HD-COMUNIDADE.md).
+
 > [!TIP]
 > **Adapting PS2 HD texture packs.** DDS files in the formats above can be used directly, without converting to PNG. Use **Extract textures from all maps** to obtain PS3 references, identify each matching image, and rename the pack file with its **16-character PS3 code**, keeping its actual `.dds` or `.png` extension. Changing an extension does not convert a file. Check cropping, orientation, transparency and image layout per texture: these may differ between PS2 and PS3. Place the files in the mod folder as in Step 2.
 
@@ -391,6 +394,8 @@ Other test targets (for example `code_veronica_launcher_cache_tests`) are listed
 **Resident Evil community**
 - **Kapdap**: [re-cvx-srt-provider](https://github.com/kapdap/re-cvx-srt-provider) (MIT), whose memory addresses and game-state rules were studied for the SRT; the [Code: Veronica autosplitter](https://github.com/kapdap/re-cvx-autosplitter) (MIT) that the included LiveSplit script extends; and the door-skip patch from the RPCS3 patch list.
 - **aikatore and contributors**: [recvx-enhanced-port](https://github.com/aikatore/recvx-enhanced-port) (MIT), for room location labels and as a reference for in-between frames.
+
+- **HD texture pack (optional download):** textures by **ewgeha**, **SonicB00M** and **JuanchoTexHD**, adapted to the PS3 version by Kastiel. Full credits and links: [TEXTURAS-HD-COMUNIDADE.md](projects/code_veronica/TEXTURAS-HD-COMUNIDADE.md).
 
 **Capcom** created *Resident Evil Code: Veronica*. Please support the official releases.
 
