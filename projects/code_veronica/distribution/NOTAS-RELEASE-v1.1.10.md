@@ -1,8 +1,8 @@
-# v1.1.10 — Optional modern controls and remappable analog sticks
+# v1.1.10 — Modern controls inspired by Resident Evil HD Remaster and Resident Evil 0 HD Remaster
 
 ## English
 
-- **Optional modern movement:** move relative to the fixed camera, retaining your direction across camera cuts. The corrected walk/run/turn behavior from the local test build is now in the main release.
+- **Optional modern mode, inspired by Resident Evil HD Remaster and Resident Evil 0 HD Remaster:** move relative to the fixed camera, retaining your direction across camera cuts. The corrected walk/run/turn behavior from the local test build is now in the main release.
 - **Switch in game:** Options → Recomp Settings → Gameplay → Movement style → Modern. You can switch during gameplay; **Classic remains the default**, and your choice is saved.
 - **Both analog sticks are remappable:** four directions per stick in the launcher's Controls page, with matching icons, keyboard bindings and controller bindings. New interface text follows all 13 supported UI languages.
 - **New keyboard defaults:** **WASD = left stick**, **arrow keys = D-pad**. In Modern mode, left-stick keys simulate full tilt for automatic running; the D-pad walks. On a controller, lower stick tilt walks and higher tilt runs.
@@ -20,7 +20,7 @@ No original game files, game 3D models, saves or personal settings are bundled. 
 
 ## Português
 
-- **Movimento moderno opcional:** movimentação relativa à câmera fixa, mantendo a direção nos cortes de câmera. A caminhada, corrida e as viradas corrigidas na build de teste agora estão na versão principal.
+- **Modo moderno opcional, no estilo de Resident Evil HD Remaster e Resident Evil 0 HD Remaster:** movimentação relativa à câmera fixa, mantendo a direção nos cortes de câmera. A caminhada, corrida e as viradas corrigidas na build de teste agora estão na versão principal.
 - **Troca dentro do jogo:** Options → Recomp Settings → Jogabilidade → Estilo de movimento → Moderno. Pode alternar durante a partida; **Clássico continua como padrão**, e a escolha fica salva.
 - **Os dois analógicos são configuráveis:** quatro direções por analógico na página Controles do launcher, com ícones, teclas e botões configuráveis. Os novos textos acompanham os 13 idiomas da interface.
 - **Novo padrão do teclado:** **WASD = analógico esquerdo**, **setas = D-pad**. No Moderno, as teclas do analógico simulam inclinação máxima para correr automaticamente; o D-pad permite caminhar. No controle, pouca inclinação caminha e inclinação maior corre.

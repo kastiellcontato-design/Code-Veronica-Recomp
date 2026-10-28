@@ -20,7 +20,7 @@ Replay the PS3 version on PC. Practice routes with a native SRT, room selection 
 
 ## Downloads — v1.1.10
 
-Optional modern movement and remappable analog sticks are now available. Keyboard defaults: **WASD for the left stick, arrow keys for the D-pad**. Enable Modern under **Recomp Settings → Gameplay → Movement style**; Classic remains the default. Saved mappings are preserved; use **Restore defaults** to adopt the new keyboard layout.
+Optional modern controls inspired by **Resident Evil HD Remaster** and **Resident Evil 0 HD Remaster**, with remappable analog sticks, are now available. Keyboard defaults: **WASD for the left stick, arrow keys for the D-pad**. Enable Modern under **Recomp Settings → Gameplay → Movement style**; Classic remains the default. Saved mappings are preserved; use **Restore defaults** to adopt the new keyboard layout.
 
 [**RE Code Veronica Recomp Release v1.1.10**](https://github.com/kastieloficial/RE-Code-Veronica-PS3-HD-Recomp-PC/releases/tag/v1.1.10)
 

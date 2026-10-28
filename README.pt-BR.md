@@ -20,7 +20,7 @@ Rejogue a versão de PS3 no PC. Treine rotas com SRT nativo, seleção de salas 
 
 ## Downloads — v1.1.10
 
-Movimento moderno opcional e analógicos configuráveis. Novo padrão do teclado: **WASD no analógico esquerdo e setas no D-pad**. Ative em **Recomp Settings → Jogabilidade → Estilo de movimento**; Clássico continua como padrão. Configurações salvas são preservadas; use **Restaurar padrões** para aplicar o novo esquema.
+Modo moderno opcional no estilo de **Resident Evil HD Remaster** e **Resident Evil 0 HD Remaster**, com analógicos configuráveis. Novo padrão do teclado: **WASD no analógico esquerdo e setas no D-pad**. Ative em **Recomp Settings → Jogabilidade → Estilo de movimento**; Clássico continua como padrão. Configurações salvas são preservadas; use **Restaurar padrões** para aplicar o novo esquema.
 
 [**RE Code Veronica Recomp Release v1.1.10**](https://github.com/kastieloficial/RE-Code-Veronica-PS3-HD-Recomp-PC/releases/tag/v1.1.10)
 

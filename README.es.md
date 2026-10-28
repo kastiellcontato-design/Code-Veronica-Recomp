@@ -20,7 +20,7 @@ Vuelve a jugar a la versión de PS3 en PC. Practica rutas con SRT nativo, selecc
 
 ## Descargas — v1.1.10
 
-Movimiento moderno opcional y sticks analógicos configurables. Nuevas teclas predeterminadas: **WASD para el stick izquierdo y flechas para la cruceta**. Actívalo en **Recomp Settings → Jugabilidad → Estilo de movimiento**; Clásico sigue siendo el valor predeterminado. Se conservan las asignaciones guardadas; usa **Restaurar valores predeterminados** para aplicar la nueva distribución.
+Modo moderno opcional inspirado en **Resident Evil HD Remaster** y **Resident Evil 0 HD Remaster**, con sticks analógicos configurables. Nuevas teclas predeterminadas: **WASD para el stick izquierdo y flechas para la cruceta**. Actívalo en **Recomp Settings → Jugabilidad → Estilo de movimiento**; Clásico sigue siendo el valor predeterminado. Se conservan las asignaciones guardadas; usa **Restaurar valores predeterminados** para aplicar la nueva distribución.
 
 [**RE Code Veronica Recomp Release v1.1.10**](https://github.com/kastieloficial/RE-Code-Veronica-PS3-HD-Recomp-PC/releases/tag/v1.1.10)
 
