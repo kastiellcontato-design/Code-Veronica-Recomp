@@ -18,19 +18,19 @@ Replay the PS3 version on PC. Practice routes with a native SRT, room selection 
 > [!IMPORTANT]
 > **No game files are included.** This repository and its releases contain only the port: no game data, no game executable and no code generated from it. You need your **own original copy** of the PS3 game (PSN release). *Resident Evil*, *Code: Veronica* and all related names, characters and images are trademarks and copyrights of **Capcom**. This is a fan project. It is **not affiliated with, authorized or endorsed by Capcom or Sony Interactive Entertainment**.
 
-## Downloads — v1.1.2
+## Downloads — v1.1.10
 
-Improved D3D12 texture-upload compatibility for lighter-related black screens on affected installations, including the reported RTX 2080 Ti case. Includes the previous audio and shadow fixes. Update through the launcher or download below. [Previous releases](https://github.com/kastieloficial/RE-Code-Veronica-Recomp/releases) remain available.
+Optional modern movement and remappable analog sticks are now available. Keyboard defaults: **WASD for the left stick, arrow keys for the D-pad**. Enable Modern under **Recomp Settings → Gameplay → Movement style**; Classic remains the default. Saved mappings are preserved; use **Restore defaults** to adopt the new keyboard layout.
 
-[**Code Veronica Recomp Release v1.1.2**](https://github.com/kastieloficial/RE-Code-Veronica-Recomp/releases/tag/v1.1.2)
+[**RE Code Veronica Recomp Release v1.1.10**](https://github.com/kastieloficial/RE-Code-Veronica-PS3-HD-Recomp-PC/releases/tag/v1.1.10)
 
 | Download | Contents |
 |---|---|
-| [Code.Veronica.Recomp.Release.v1.1.2.zip](https://github.com/kastieloficial/RE-Code-Veronica-Recomp/releases/download/v1.1.2/Code.Veronica.Recomp.Release.v1.1.2.zip) | Windows port with launcher and EU/JP/US support. Extract everything and open **Code Veronica.exe**. |
-| [Veronica-PKG-Extractor-v1.0.zip](https://github.com/kastiellcontato-design/Code-Veronica-Recomp/releases/download/v1.0/Veronica-PKG-Extractor-v1.0.zip) | Optional tool to prepare your own PKG. RPCS3 is also supported for extraction. |
-| [CodeVeronica-LiveSplit-Speedrun-v1.0.zip](https://github.com/kastiellcontato-design/Code-Veronica-Recomp/releases/download/v1.0/CodeVeronica-LiveSplit-Speedrun-v1.0.zip) | Any%/S-Rank split lists with icons and official LiveSplit catalog setup instructions. |
+| [CodeVeronica-PC-v1.1.10.zip](https://github.com/kastieloficial/RE-Code-Veronica-PS3-HD-Recomp-PC/releases/download/v1.1.10/CodeVeronica-PC-v1.1.10.zip) | Windows port with launcher and EU/JP/US support. Extract everything and open **Code Veronica.exe**. |
+| [Veronica-PKG-Extractor-v1.0.1.zip](https://github.com/kastieloficial/RE-Code-Veronica-PS3-HD-Recomp-PC/releases/download/v1.1.10/Veronica-PKG-Extractor-v1.0.1.zip) | Separate, unchanged PKG preparation tool for your own game; RPCS3 extraction is also supported. |
+| [CodeVeronica-LiveSplit-Speedrun-v1.0.zip](https://github.com/kastiellcontato-design/Code-Veronica-Recomp/releases/download/v1.0/CodeVeronica-LiveSplit-Speedrun-v1.0.zip) | Previous LiveSplit Any%/S-Rank split lists and setup instructions. |
 
-English and Portuguese instructions are included in each ZIP. Original game files and licenses are not included.
+English and Portuguese instructions are included. Original game files and licenses are not included. [Releases](https://github.com/kastieloficial/RE-Code-Veronica-PS3-HD-Recomp-PC/releases).
 
 <p align="center">
   <img src="docs/images/gameplay-claire-red-room.jpg" alt="Resident Evil Code: Veronica X" width="880">

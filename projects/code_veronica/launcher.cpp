@@ -43,6 +43,8 @@
 #include "pad_phys.h"
 #include "../../libs/video/rsx_render_optimizations.h"
 #include "pad_map.h"
+#include "analog_bindings.h"
+#include "analog_i18n.h"
 #include "launcher_i18n.h"
 #include "launcher_design_i18n.h"
 #include "launcher_maps_i18n.h"
@@ -355,7 +357,8 @@ const int NSHADER_OPTS = sizeof k_shader_opts / sizeof k_shader_opts[0];
 
 /* Actions shown on the Controles page. */
 const int k_rows[] = { PA_CROSS, PA_CIRCLE, PA_SQUARE, PA_TRIANGLE, PA_L1, PA_R1, PA_L2, PA_R2,
-                       PA_L3, PA_R3, PA_UP, PA_DOWN, PA_LEFT, PA_RIGHT, PA_SELECT, PA_START };
+                       PA_L3, PA_R3, PA_UP, PA_DOWN, PA_LEFT, PA_RIGHT, PA_SELECT, PA_START,
+                       PA_LS_UP, PA_LS_DOWN, PA_LS_LEFT, PA_LS_RIGHT, PA_RS_UP, PA_RS_DOWN, PA_RS_LEFT, PA_RS_RIGHT };
 const int NROWS = sizeof k_rows / sizeof k_rows[0];
 const wchar_t* k_action_name[PA_COUNT] = {
     L"Cross", L"Circle", L"Square", L"Triangle", L"L1", L"R1", L"L2", L"R2", L"L3", L"R3",
@@ -371,11 +374,13 @@ const wchar_t* k_pb_name[3][PB_COUNT] = {
 /* The d-pad's names are translated; the rest are the buttons' own names. */
 std::wstring action_name(int a)
 {
+    if(a>=PA_LS_UP&&a<PA_COUNT)return cv_axis_name(g_lang,a-PA_LS_UP);
     return (a >= PA_UP && a <= PA_RIGHT) ? T(S_DPAD_UP + (a - PA_UP)) : k_action_name[a];
 }
 std::wstring pb_name(int layout, int pb)
 {
     if (pb < 0) return L"-";
+    if(pb>=CV_AXIS_FIRST&&pb<CV_BINDING_COUNT)return cv_axis_name(g_lang,pb-CV_AXIS_FIRST);
     return (pb >= PB_UP && pb <= PB_RIGHT) ? T(S_DPAD_UP + (pb - PB_UP)) : k_pb_name[layout][pb];
 }
 
@@ -602,9 +607,9 @@ Settings load_settings()
         }
         for (int k = 0; k < PAD_BTN_SLOTS; k++) {
             std::wstring bid = L"botao_" + widen(k_pad_action_id[a]) + (k ? L"_" + std::to_wstring(k + 1) : L"");
-            std::wstring b = ini_get(L"controles", bid.c_str(), widen(pad_phys_id(k ? -1 : k_pad_default_btn[a])));
+            std::wstring b = ini_get(L"controles", bid.c_str(), widen(cv_binding_id(k ? -1 : k_pad_default_btn[a])));
             std::string nb(b.begin(), b.end());
-            int pb = pad_phys_from_id(nb.c_str());
+            int pb = cv_binding_from_id(nb.c_str());
             s.btn[a][k] = pb >= 0 || nb == "none" ? pb : (k ? -1 : k_pad_default_btn[a]);
         }
     }
@@ -701,7 +706,7 @@ void save_settings(const Settings& s)
                     std::to_wstring(s.key[a][k]));
         for (int k = 0; k < PAD_BTN_SLOTS; k++)
             ini_set(L"controles", (L"botao_" + widen(k_pad_action_id[a]) + (k ? L"_" + std::to_wstring(k + 1) : L"")).c_str(),
-                    widen(pad_phys_id(s.btn[a][k])));
+                    widen(cv_binding_id(s.btn[a][k])));
     }
 }
 
@@ -1019,6 +1024,15 @@ void btn_glyph(Graphics& gr, int layout, int pb, float x, float y, float s = 30.
         SolidBrush disc(Color(255, 40, 34, 34)); gr.FillEllipse(&disc, cx - r, cy - r, 2 * r, 2 * r);
         Pen ring(G_LINE, 1.5f * k); gr.DrawEllipse(&ring, cx - r, cy - r, 2 * r, 2 * r);
     }
+    if(pb>=CV_AXIS_FIRST&&pb<CV_BINDING_COUNT){
+        int n=pb-CV_AXIS_FIRST,d=n%4;
+        const float dx=d==2?-1.f:d==3?1.f:0.f,dy=d==0?-1.f:d==1?1.f:0.f;
+        Pen inner(G_LINE,1.1f*k);gr.DrawEllipse(&inner,cx-6*k,cy-6*k,12*k,12*k);
+        g_label(gr,n<4?L"L":L"R",RectF(cx-5*k,cy-5*k,10*k,10*k),7*k,G_FILL);
+        PointF tip(cx+dx*10*k,cy+dy*10*k),base(cx+dx*7*k,cy+dy*7*k);
+        PointF tri[]={tip,PointF(base.X-dy*2*k,base.Y+dx*2*k),PointF(base.X+dy*2*k,base.Y-dx*2*k)};
+        SolidBrush arrow(G_FILL);gr.FillPolygon(&arrow,tri,3);return;
+    }
     SolidBrush fill(G_FILL);
     switch (pb) {
     case PB_SOUTH: case PB_EAST: case PB_WEST: case PB_NORTH: {
@@ -1184,7 +1198,7 @@ void section(Graphics& gr, const std::wstring& t, float x, float y, float w, con
 
 
 /* Release shown under the sidebar, beside the credit. Bump it per release. */
-const wchar_t* const k_launcher_version = L"v1.1.9";
+const wchar_t* const k_launcher_version = L"v1.1.10";
 
 /* ---------------------------------------------------------------- updates
  * cv_updater.h does the network and file work on threads of its own, which
@@ -2237,6 +2251,7 @@ void draw_controles(Graphics& gr, const Font& head, const Font& body, const Font
     g_rumble_y = by;
     srt_slider(gr, ID_RUMBLE, srt_slider_rect(ID_RUMBLE), g.s.rumble, 0, 200, body);
     text(gr, lx(design::RUMBLE_HINT), x, by + 34, fsm, C_DIM, StringAlignmentNear, W - SIDE - 64.0f, 20);
+    text(gr, cv_axis_hints[g_lang], x, by + 64, fsm, C_DIM, StringAlignmentNear, W - SIDE - 64.0f, 52);
 }
 
 /* Resolve the port independently of how a shortcut/editor launched it.
@@ -3394,7 +3409,7 @@ void click(int id)
     else if (id >= ID_BTN && id < ID_BTN + PA_COUNT * PAD_BTN_SLOTS) {
         g.cap = CAP_BTN; g.cap_action = (id - ID_BTN) / PAD_BTN_SLOTS; g.cap_slot = (id - ID_BTN) % PAD_BTN_SLOTS;
         g.cap_since = GetTickCount64();
-        for (int i = 0; i < PAD_PHYS_MAX; i++) { PadPhys p; pad_phys_poll(i, &p); g.pad_prev[i] = p.buttons; }
+        for (int i = 0; i < PAD_PHYS_MAX; i++) { PadPhys p; pad_phys_poll(i, &p); g.pad_prev[i] = cv_binding_mask(&p); }
     }
     else if (id == ID_LOG_VIEW) { g.log_msg.clear(); log_viewer_open(g.hwnd, log_viewer_text(), pick_log_save); }
     else if (id == ID_LOG_COPY) {
@@ -3762,9 +3777,9 @@ LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp)
         if (g.cap == CAP_BTN) {
             for (int i = 0; i < PAD_PHYS_MAX; i++) {
                 PadPhys p; pad_phys_poll(i, &p);
-                uint32_t pressed = p.buttons & ~g.pad_prev[i];
-                g.pad_prev[i] = p.buttons;
-                for (int b = 0; b < PB_COUNT && pressed; b++)
+                uint32_t mask=cv_binding_mask(&p),pressed = mask & ~g.pad_prev[i];
+                g.pad_prev[i] = mask;
+                for (int b = 0; b < CV_BINDING_COUNT && pressed; b++)
                     if (pressed & (1u << b)) {
                         int* btns = g.s.btn[g.cap_action];
                         for (int k = 0; k < PAD_BTN_SLOTS; k++) if (btns[k] == b) btns[k] = -1;   /* once per action */
@@ -3880,7 +3895,7 @@ void set_map_env()
     for (int a = 0; a < PA_COUNT; a++) {
         bm += std::string(k_pad_action_id[a]) + "=";
         km += std::string(k_pad_action_id[a]) + "=";
-        for (int k = 0; k < PAD_BTN_SLOTS; k++) bm += std::string(k ? "+" : "") + pad_phys_id(g.s.btn[a][k]);
+        for (int k = 0; k < PAD_BTN_SLOTS; k++) bm += std::string(k ? "+" : "") + cv_binding_id(g.s.btn[a][k]);
         for (int k = 0; k < PAD_KEY_SLOTS; k++) km += (k ? "+" : "") + std::to_string(g.s.key[a][k]);
         if (a + 1 < PA_COUNT) { bm += ","; km += ","; }
     }

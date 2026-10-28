@@ -516,10 +516,12 @@ extern "C" void ps3_patch_writes_from_env(void);
 #include "cv_ptbr_spacing.h"
 
 extern "C" void rsx_d3d12_disable_forced_anisotropy(void);
+extern "C" void cv_modern_boot();
 int main(int argc, char** argv)
 {
     std::string eboot_path;
 #ifdef _WIN32
+    cv_modern_boot();
     _putenv_s("RSX_ANISO","0");
     rsx_d3d12_disable_forced_anisotropy();
     /* Started by a double-click, this process owns its console: send the log

@@ -1,3 +1,4 @@
+#include "modern_text.h"
 /* Code Veronica (EU/JP/US 1.00; addresses in cv_version.h): extend the guest's OPTION menu using its own 2D queue.
  * Only the build-local lift is wrapped. EBOOT and original generated files stay intact.
  * New labels use serif glyphs rasterized by Windows at the menu's own scale (one
@@ -146,7 +147,7 @@ uint32_t tab_buttons(unsigned port){
 std::string tr(cv_enhanced_text::Id id){
     return cv_enhanced_text::utf8(cv_enhanced_language(),id);
 }
-int menu_rows(){return pc_tab==0?kPcRowCount:pc_tab==1?4:2;}
+int menu_rows(){return pc_tab==0?kPcRowCount:pc_tab==1?4:3;}
 bool menu_back(){return pc_row==menu_rows()-1;}
 int tab_direction(uint32_t input,bool q,bool e){
  int direction=(input&(1u<<PB_L1))?-1:(input&(1u<<PB_R1))?1:0;
@@ -189,14 +190,15 @@ void draw_extra(cv_menu_text::TextBatch& batch){
  for(int row=0;row<menu_rows();row++){
   float y=174.f+row*48;auto color=selected_color(pc_row==row);
   Id id=pc_tab==1?(row==0?Music:row==1?Effects:row==2?Restore:Back):(row==0?Battle:Back);
-  batch.text(tr(id),32,y,color,.70f,false,365);
+  batch.text(pc_tab==2&&row==1?modern_text(0):tr(id),32,y,color,.70f,false,365);
   if(pc_tab==1&&row<2){
    int v=cv_enhanced_get(8+row);batch.text("< "+std::to_string(v)+"% >",456,y,color,.7f,false,145);
    batch.quads.push_back({40,y+31,520,3,0x6FAFAFAF,0xFFFFFFFF});
    if(v)batch.quads.push_back({40,y+31,520.f*v/100,3,0xFFDCCEB1,0xFFFFFFFF});
   }else if(pc_tab==2&&row==0)batch.text("< "+tr(cv_enhanced_get(10)?On:Off)+" >",444,y,color,.64f,false,162);
+  if(pc_tab==2&&row==1)batch.text("< "+modern_text(cv_modern_get()?2:1)+" >",444,y,color,.64f,false,162);
  }
- batch.text(tr(pc_tab==1?MusicHelp:BattleHelp),320,386,0xCFDCCEB1,.51f,true,570);
+ batch.text(pc_tab==2&&pc_row==1?modern_text(3):tr(pc_tab==1?MusicHelp:BattleHelp),320,386,0xCFDCCEB1,.51f,true,570);
  batch.text(tr(Adjust),320,417,0xBFCFCFCF,.5f,true);
 }
 bool extra_input(uint32_t input,uint32_t repeat){
@@ -205,6 +207,7 @@ bool extra_input(uint32_t input,uint32_t repeat){
  else if(repeat&kDown)pc_row=(pc_row+1)%menu_rows();
  else if(pc_tab==1&&pc_row<2&&((repeat&(kLeft|kRight))||(input&kConfirm))){int which=8+pc_row;cv_pc_settings_change(which,std::clamp(cv_enhanced_get(which)+((repeat&kLeft)?-5:5),0,100));}
  else if(pc_tab==1&&pc_row==2&&(input&kConfirm)){cv_pc_settings_change(8,100);cv_pc_settings_change(9,100);}
+ else if(pc_tab==2&&pc_row==1&&((repeat&(kLeft|kRight))||(input&kConfirm)))cv_modern_change(!cv_modern_get());
  else if(pc_tab==2&&pc_row==0&&((repeat&(kLeft|kRight))||(input&kConfirm)))cv_pc_settings_change(10,!cv_enhanced_get(10));
  return true;
 }

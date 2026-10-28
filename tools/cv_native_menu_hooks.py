@@ -35,6 +35,24 @@ def battle_reads(source,region):
         source=source[:m.start()]+body+source[end:]
     return source,changed
 
+
+def modern_controls(source,region):
+    player,input_fn,reg={"eu":("00174C28","0016F3C8","9"),"us":("00173290","0016DAD0","9"),"jp":("00173258","0016DA80","8")}[region]
+    changed=False
+    for key,address in (("player",player),("input",input_fn)):
+        head=f"void func_{address}(ppu_context* ctx) {{"
+        if head not in source:continue
+        start=source.index(head);end=source.find("\nvoid ",start+1)
+        if end<0:end=len(source)
+        body=source[start:end]
+        needle=("if (/* cond: bcctrl */ 1) { ps3_indirect_call(ctx); DRAIN_TRAMPOLINE(ctx); }" if key=="player" else f"        ctx->gpr[{reg}] = ~(ctx->gpr[{reg}] | ctx->gpr[{reg}]);")
+        if key=="input" and body.count(needle)!=1:raise RuntimeError("Native modern input site changed")
+        if needle not in body:raise RuntimeError("Native modern turn site changed")
+        body=body.replace(needle,needle+"\n        cv_modern_turn();" if key=="player" else "        ctx->gpr[3] = cv_controls_input(uint32_t(ctx->gpr[3]));\n"+needle,1)
+        source=source[:start]+body+source[end:];changed=True
+    if changed:source='extern "C" void cv_modern_turn();\nextern "C" unsigned cv_controls_input(unsigned);\n'+source
+    return source
+
 def main(finalize=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--discover", type=Path)
@@ -82,6 +100,7 @@ def main(finalize=None):
         raise SystemExit("No guest function found for cheat store wrappers")
     source = source[:first.start()] + '#include "cv_cheats_lift.h"\n' + source[first.start():]
     if battle_count:source=source.replace('#include "cv_cheats_lift.h"','#include "cv_cheats_lift.h"\n#include "cv_unlock_lift.h"')
+    source=modern_controls(source,args.region)
     if finalize:source=finalize(source,args.region)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     if not args.output.exists() or args.output.read_text(encoding="utf-8", errors="surrogateescape") != source:

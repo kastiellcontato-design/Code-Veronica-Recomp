@@ -16,10 +16,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
-#include "../../runtime/platform/win32_compat.h"   /* GetTickCount64 on POSIX */
-#include "../../runtime/ppu/ppu_memory.h"   /* GUEST_PTR, vm_write*: guest EA -> host */
+#include "D:\ps3recomp\runtime/platform/win32_compat.h"   /* GetTickCount64 on POSIX */
+#include "D:\ps3recomp\runtime/ppu/ppu_memory.h"   /* GUEST_PTR, vm_write*: guest EA -> host */
 #include "pad_phys.h"
 #include "pad_map.h"
+#include "analog_bindings.h"
 #include "pad_keyboard_filter.h"
 
 /* ---------------------------------------------------------------------------
@@ -177,7 +178,7 @@ static void pad_map_load(void)
                 for (int k = 0; k < (which == 0 ? PAD_BTN_SLOTS : PAD_KEY_SLOTS); k++) {
                     char* plus = part ? strchr(part, '+') : NULL;
                     if (plus) *plus = 0;
-                    if (which == 0) s_map_btn[a][k] = part ? pad_phys_from_id(part) : -1;
+                    if (which == 0) s_map_btn[a][k] = part ? cv_binding_from_id(part) : -1;
                     else            s_map_key[a][k] = part ? (int)strtol(part, NULL, 0) : 0;
                     part = plus ? plus + 1 : NULL;
                 }
@@ -191,6 +192,9 @@ static void pad_map_load(void)
 /* A launcher's options menu, while the game runs: new mapping (applies on the
  * next poll) and input hold-off while the menu has the focus. */
 int g_pad_block;
+static int cv_keyboard_left_analog,cv_physical_left_analog;
+static volatile LONG cv_modern_axes_value,cv_modern_axes_tick;
+uint32_t cv_modern_axes(void){return GetTickCount()-(DWORD)InterlockedCompareExchange(&cv_modern_axes_tick,0,0)<250?(uint32_t)InterlockedCompareExchange(&cv_modern_axes_value,0,0):0x8080;}
 static volatile LONG cv_hud_bits,cv_hud_tick,cv_reload_raw,cv_reload_raw_tick;
 #include "pad_gameplay_filters.h"
 static int (*s_gameplay_key_filter)(int);
@@ -256,21 +260,38 @@ static void pad_poll_keyboard(void)
         return;
     }
     u16 btns = 0;
+    int axis_keys[8]={0},raw_axis_keys[8]={0},right_keys_configured=0;
     const unsigned reserved=pad_keyboard_reserved_keys();
-    for (int a = 0; a < PA_COUNT; a++)
-        for (int k = 0; k < PAD_KEY_SLOTS; k++)
-            if (s_map_key[a][k] > 0 && (!s_gameplay_key_filter || !s_gameplay_key_filter(s_map_key[a][k])) && pad_keyboard_key_down(reserved,(unsigned)s_map_key[a][k],GetAsyncKeyState(s_map_key[a][k]) & 0x8000)) btns |= k_action_bit[a];
+    for(int a=0;a<PA_COUNT;a++)for(int k=0;k<PAD_KEY_SLOTS;k++){
+        int key=s_map_key[a][k];
+        if(a>=PA_RS_UP&&key>0)right_keys_configured=1;
+        if(key<=0||!pad_keyboard_key_down(reserved,(unsigned)key,GetAsyncKeyState(key)&0x8000))continue;
+        if(a>=PA_LS_UP)raw_axis_keys[a-PA_LS_UP]=1;
+        if(s_gameplay_key_filter&&s_gameplay_key_filter(key))continue;
+        if(a>=PA_LS_UP)axis_keys[a-PA_LS_UP]=1;else btns|=k_action_bit[a];
+    }
     if (!hs->connected) {   /* no controller: the keyboard is the whole pad */
         hs->buttons = 0;
         hs->analog_lx = hs->analog_ly = hs->analog_rx = hs->analog_ry = 128;
         hs->trigger_l2 = hs->trigger_r2 = 0;
         hs->connected = 1;
     }
+    cv_keyboard_left_analog=axis_keys[0]||axis_keys[1]||axis_keys[2]||axis_keys[3];
+    if(cv_keyboard_left_analog){hs->analog_lx=cv_axis_pair(axis_keys[2]*128,axis_keys[3]*128);hs->analog_ly=cv_axis_pair(axis_keys[0]*128,axis_keys[1]*128);}
+    if(raw_axis_keys[4]||raw_axis_keys[5]||raw_axis_keys[6]||raw_axis_keys[7]){
+        unsigned char rx=cv_axis_pair(raw_axis_keys[6]*128,raw_axis_keys[7]*128),ry=cv_axis_pair(raw_axis_keys[4]*128,raw_axis_keys[5]*128);
+        InterlockedExchange(&cv_quick_axes,0x10000|rx|(ry<<8));
+    }
+    if(axis_keys[4]||axis_keys[5]||axis_keys[6]||axis_keys[7]){
+        hs->analog_rx=cv_axis_pair(axis_keys[6]*128,axis_keys[7]*128);hs->analog_ry=cv_axis_pair(axis_keys[4]*128,axis_keys[5]*128);
+    }
+    if(right_keys_configured)InterlockedOr(&cv_quick_axes,0x20000);
+    if(btns||cv_keyboard_left_analog||raw_axis_keys[4]||raw_axis_keys[5]||raw_axis_keys[6]||raw_axis_keys[7])s_last_input=PAD_INPUT_KEYBOARD;
     hs->buttons |= btns;
     if (btns) s_last_input = PAD_INPUT_KEYBOARD;
     if (btns & (CELL_PAD_CTRL_UP | CELL_PAD_CTRL_DOWN | CELL_PAD_CTRL_LEFT | CELL_PAD_CTRL_RIGHT)) {
         /* a controller's stick at rest never reads exactly 128 */
-        if (abs((int)hs->analog_lx - 128) < 40 && abs((int)hs->analog_ly - 128) < 40) {
+        if (!cv_keyboard_left_analog && abs((int)hs->analog_lx - 128) < 40 && abs((int)hs->analog_ly - 128) < 40) {
             hs->analog_lx = (u8)((btns & CELL_PAD_CTRL_LEFT) ? 0 : (btns & CELL_PAD_CTRL_RIGHT) ? 255 : 128);
             hs->analog_ly = (u8)((btns & CELL_PAD_CTRL_UP) ? 0 : (btns & CELL_PAD_CTRL_DOWN) ? 255 : 128);
         }
@@ -309,6 +330,7 @@ static void pad_poll_xinput(void)
         PadHostState* hs = &s_host_state[i];
         static unsigned shortcut_held[PAD_MAX_HOST_PORTS];
         if (!pad_phys_poll(i, &p)) {
+            if(i==0){InterlockedExchange(&cv_quick_axes,0x18080);InterlockedExchange(&cv_reload_raw,0);InterlockedExchange(&cv_reload_raw_tick,(LONG)GetTickCount());}
             shortcut_held[i] = 0;
             hs->connected = 0;
             hs->buttons = 0;
@@ -316,7 +338,8 @@ static void pad_poll_xinput(void)
             hs->trigger_l2 = hs->trigger_r2 = 0;
             continue;
         }
-        if(i==0){InterlockedExchange(&cv_quick_axes,(LONG)(0x10000|p.rx|(p.ry<<8)));InterlockedExchange(&cv_reload_raw,(LONG)p.buttons);InterlockedExchange(&cv_reload_raw_tick,(LONG)GetTickCount());}
+        unsigned char axes[4];cv_map_sticks(&p,s_map_btn,axes);
+        if(i==0){InterlockedExchange(&cv_quick_axes,(LONG)(0x10000|axes[2]|(axes[3]<<8)));InterlockedExchange(&cv_reload_raw,(LONG)p.buttons);InterlockedExchange(&cv_reload_raw_tick,(LONG)GetTickCount());}
         hs->connected = 1;
         if (g_pad_shortcut_chords && pad_shortcut_gate(&shortcut_held[i],p.buttons)) {
             /* Launcher polls the unmodified physical state independently. */
@@ -327,18 +350,18 @@ static void pad_poll_xinput(void)
             if(p.buttons)s_last_input=p.kind;
             continue;
         }
-        if(s_gameplay_button_filter)p.buttons=s_gameplay_button_filter(p.buttons);if(s_gameplay_right_stick_filter&&s_gameplay_right_stick_filter())p.rx=p.ry=128;
+        if(s_gameplay_button_filter)p.buttons=s_gameplay_button_filter(p.buttons);cv_map_sticks(&p,s_map_btn,axes);if(i==0)cv_physical_left_analog=(abs((int)axes[0]-128)>30||abs((int)axes[1]-128)>30);if(s_gameplay_right_stick_filter&&s_gameplay_right_stick_filter())axes[2]=axes[3]=128;
         u16 btns = 0;
         for (int a = 0; a < PA_COUNT; a++)
             for (int k = 0; k < PAD_BTN_SLOTS; k++)
-                if (s_map_btn[a][k] >= 0 && (p.buttons & (1u << s_map_btn[a][k]))) btns |= k_action_bit[a];
+                if (cv_binding_value(&p,s_map_btn[a][k])>70) btns |= k_action_bit[a];
         if (p.buttons || abs((int)p.lx - 128) > 64 || abs((int)p.ly - 128) > 64 ||
             abs((int)p.rx - 128) > 64 || abs((int)p.ry - 128) > 64)
             s_last_input = p.kind;
         hs->buttons = btns;
         /* PS3 Y axis: up = 0 -- pad_phys already reports it that way. */
-        hs->analog_lx = p.lx; hs->analog_ly = p.ly;
-        hs->analog_rx = p.rx; hs->analog_ry = p.ry;
+        hs->analog_lx = axes[0]; hs->analog_ly = axes[1];
+        hs->analog_rx = axes[2]; hs->analog_ry = axes[3];
         /* Analog L2/R2 follow the triggers the action is mapped to (the
          * deeper press of the two when both are); other buttons are full. */
         hs->trigger_l2 = pad_trigger(PA_L2, &p, (btns & CELL_PAD_CTRL_L2) != 0);
@@ -531,6 +554,7 @@ static void pad_poll_backend(void)
     for (int _i = 0; _i < PAD_MAX_HOST_PORTS; _i++) s_data_fresh[_i] = 1;
 
 #if PAD_BACKEND_XINPUT
+    cv_keyboard_left_analog=cv_physical_left_analog=0;
     pad_poll_xinput();
 #elif PAD_BACKEND_SDL2
     pad_poll_sdl2();
@@ -902,6 +926,7 @@ skip_inject: ;
     }  /* end connected block */
 
 emit:
+    if(port_no==0){InterlockedExchange(&cv_modern_axes_value,0x10000|((cv_keyboard_left_analog||cv_physical_left_analog)?0x20000:0)|data->button[CELL_PAD_BTN_OFFSET_ANALOG_LEFT_X]|(data->button[CELL_PAD_BTN_OFFSET_ANALOG_LEFT_Y]<<8));InterlockedExchange(&cv_modern_axes_tick,(LONG)GetTickCount());}
     if(port_no==0){InterlockedExchange(&cv_hud_bits,(LONG)((data->button[CELL_PAD_BTN_OFFSET_DIGITAL2]<<8)|data->button[CELL_PAD_BTN_OFFSET_DIGITAL1]));InterlockedExchange(&cv_hud_tick,(LONG)GetTickCount());}
     /* A non-zero len means "here is a CHANGE packet" -- the constant is literally
      * named CELL_PAD_LEN_CHANGE_DEFAULT. Hardware reports len = 0 once the port

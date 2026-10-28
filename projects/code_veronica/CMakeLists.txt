@@ -234,6 +234,7 @@ add_executable(${PROJECT_NAME}
     cv_texture_export.cpp
     cv_srt.cpp
     cv_combat_hud.cpp
+    $<$<PLATFORM_ID:Windows>:cv_modern.cpp>
     cv_manual_reload.cpp
     cv_quick_select.cpp
     cv_srt_data.cpp

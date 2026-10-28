@@ -15,7 +15,10 @@ def main():
     names=['CodeVeronicaPort.exe','CodeVeronicaPort_JP.exe','CodeVeronicaPort_US.exe','cv_launcher.ini']
     kept={n:sha(PORT/'build-release/bin'/n) for n in names}
     results={}
+    selected=set(sys.argv[1:]) or {'eu','us','jp'}
+    if not selected <= {'eu','us','jp'}:raise ValueError('Regions must be eu, us or jp')
     for region,suffix,cache in [('JP','_jp','build-release-jp'),('EU','','build-release'),('US','_us','build-release-us')]:
+        if region.lower() not in selected:continue
         build=OUT/region.lower();build.mkdir(exist_ok=True)
         old=PORT/cache
         objects=[];provenance=[]
@@ -25,7 +28,10 @@ def main():
             run([sys.executable,ROOT/'tools/cv_appearance_hooks.py','--input',source,'--output',fresh,'--region',region.lower()],build/f'verify-{source.stem}.log')
             saved=old/'native_menu_lift'/source.name
             obj=old/'CMakeFiles/MyGameRecomp.dir/native_menu_lift'/(source.name+'.obj')
-            if not saved.is_file() or sha(saved)!=sha(fresh):raise RuntimeError(f'Cached lifted source mismatch: {source}')
+            if not saved.is_file() or sha(saved)!=sha(fresh):
+                objects.append(fresh)
+                provenance.append(dict(source=str(source),generated_sha256=sha(fresh),compiled_fresh=True))
+                continue
             if not obj.is_file() or obj.stat().st_mtime<saved.stat().st_mtime:raise RuntimeError(f'Stale lifted object: {obj}')
             objects.append(obj);provenance.append(dict(source=str(source),generated_sha256=sha(fresh),object=str(obj),object_sha256=sha(obj)))
         for source in sorted((PORT/'spu').glob('*/spu_recomp.c')):
@@ -34,6 +40,8 @@ def main():
             objects.append(obj);provenance.append(dict(source=str(source),source_sha256=sha(source),object=str(obj),object_sha256=sha(obj)))
         copied=[]
         for index,obj in enumerate(objects):
+            if obj.suffix=='.cpp':
+                copied.append(obj.as_posix());continue
             dst=build/'lifted-objects'/f'{index:03}.obj';dst.parent.mkdir(exist_ok=True)
             shutil.copy2(obj,dst);copied.append(dst.as_posix())
         (build/'reuse.cmake').write_text('set(CV_LIFTED_OBJECTS\n'+''.join(f' "{p}"\n' for p in copied)+')\n',encoding='utf-8')
@@ -49,6 +57,6 @@ def main():
         print(f'DONE {region}: {exe}',flush=True)
     results['Code Veronica.exe']=sha(OUT/'Code Veronica.exe')
     if kept!={n:sha(PORT/'build-release/bin'/n) for n in names}:raise RuntimeError('Local normal files changed')
-    (OUT/'build-result.json').write_text(json.dumps(dict(distribution=True,version='v1.1.9',executables=results,normal_preserved=kept),indent=2),encoding='utf-8')
+    (OUT/('build-result-'+next(iter(selected))+'.json' if len(selected)==1 else 'build-result.json')).write_text(json.dumps(dict(distribution=True,version='v1.1.10',executables=results,normal_preserved=kept),indent=2),encoding='utf-8')
     print('PASS: all three GUI distribution builds completed; normal local files unchanged',flush=True)
 if __name__=='__main__':main()

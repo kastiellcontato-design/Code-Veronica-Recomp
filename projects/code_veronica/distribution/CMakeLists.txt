@@ -19,6 +19,16 @@ set_target_properties(MyGameRecomp PROPERTIES WIN32_EXECUTABLE TRUE)
 # ABI headers before copying the existing objects into this private cache.
 if(EXISTS "${CMAKE_BINARY_DIR}/reuse.cmake")
     include("${CMAKE_BINARY_DIR}/reuse.cmake")
+    foreach(source IN LISTS CV_LIFTED_OBJECTS)
+        if(source MATCHES "\\.cpp$")
+            set_property(SOURCE "${source}" TARGET_DIRECTORY MyGameRecomp
+                PROPERTY COMPILE_OPTIONS "-w;-ffp-contract=off")
+            if(PPU_VM_INLINE)
+                set_property(SOURCE "${source}" TARGET_DIRECTORY MyGameRecomp
+                    APPEND PROPERTY COMPILE_DEFINITIONS PPU_VM_INLINE=1)
+            endif()
+        endif()
+    endforeach()
     get_target_property(sources MyGameRecomp SOURCES)
     set(filtered)
     foreach(source IN LISTS sources)
