@@ -3,6 +3,8 @@
 ## English
 
 - **Texture mods switch (F9) fixed:** turning the mod off now returns to the original textures at once, and turning it on again brings the mod textures back, without restarting the game. This also works when the game text is set to Brazilian Portuguese, which used to keep already-loaded mod textures on screen.
+- **Faster launcher:** turning options on or off and switching tabs no longer waits on the settings file being rewritten key by key (about 140 ms per click before, about 12 ms now), and the Mods tab no longer recounts a large texture folder on every visit.
+- **The launcher stays available after the game:** closing the game window brings the launcher back, with your settings, so you can change them and play again. Closing the launcher itself while the game runs still quits everything.
 - **Portuguese translation:** the incendiary grenade name is corrected in this package.
 - **Community HD texture pack (optional, separate download):** a pack of PS2 HD textures adapted to this port for the **US, EU and JP** versions. It is **not** part of the port's ZIP. Download: [Google Drive](https://drive.google.com/file/d/1t6yVG1yEC5dl3Td6jT4rhFj1EEwmbsAZ/view?usp=sharing). Credits to the original authors, the download link and the install steps are in [TEXTURAS-HD-COMUNIDADE.md](https://github.com/kastieloficial/RE-Code-Veronica-PS3-HD-Recomp-PC/blob/code-veronica/projects/code_veronica/TEXTURAS-HD-COMUNIDADE.md). Only the US version was used as the base; EU and JP were checked by texture names, not played.
 - Previous improvements are retained: optional modern controls, remappable analog sticks, combat HUD, quick equipment, manual reload and shader compiler selection.
@@ -19,6 +21,8 @@ No original game files, game 3D models, saves or personal settings are bundled. 
 ## Português
 
 - **Liga/desliga das texturas (F9) corrigido:** ao desligar, as texturas voltam ao original na hora, e ao ligar de novo as do mod voltam, sem reiniciar o jogo. Também funciona com o texto do jogo em português do Brasil, que antes mantinha na tela as texturas do mod já carregadas.
+- **Launcher mais rápido:** ligar e desligar opções e trocar de aba não espera mais o arquivo de configurações ser reescrito chave por chave (cerca de 140 ms por clique antes, cerca de 12 ms agora), e a aba Mods não recalcula mais uma pasta grande de texturas a cada visita.
+- **O launcher continua disponível depois do jogo:** ao fechar a janela do jogo, o launcher volta, com as suas configurações, para você mudar e jogar de novo. Fechar o próprio launcher durante o jogo ainda fecha tudo.
 - **Tradução em português:** o nome da granada incendiária está corrigido neste pacote.
 - **Pacote de texturas HD da comunidade (opcional, download separado):** texturas HD do PS2 adaptadas para este port, para as versões **americana, europeia e japonesa**. **Não** faz parte do ZIP do port. Download: [Google Drive](https://drive.google.com/file/d/1t6yVG1yEC5dl3Td6jT4rhFj1EEwmbsAZ/view?usp=sharing). Créditos aos autores originais, link e instruções estão em [TEXTURAS-HD-COMUNIDADE.md](https://github.com/kastieloficial/RE-Code-Veronica-PS3-HD-Recomp-PC/blob/code-veronica/projects/code_veronica/TEXTURAS-HD-COMUNIDADE.md). Só a versão americana serviu de base; a europeia e a japonesa foram conferidas pelos nomes das texturas, sem jogar.
 - Mantidas as melhorias anteriores: controle moderno opcional, analógicos remapeáveis, HUD de combate, equipamento rápido, recarga manual e seleção do compilador de shaders.

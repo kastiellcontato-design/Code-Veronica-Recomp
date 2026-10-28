@@ -407,6 +407,13 @@ void ini_set(const wchar_t* sec, const wchar_t* key, const std::wstring& v)
         WriteFile(file, &bom, sizeof bom, &written, NULL);
         CloseHandle(file);
     }
+    /* save_settings() writes every key on each change (about 170), and every
+     * WritePrivateProfileString rewrites the whole file: that made each click
+     * in the launcher take over 100 ms. Read first and write only a key whose
+     * stored value differs; a missing key reads as the \x01 sentinel. */
+    wchar_t current[1024];
+    GetPrivateProfileStringW(sec, key, L"\x01", current, 1024, path.c_str());
+    if (current[0] != L'\x01' && v == current) return;
     WritePrivateProfileStringW(sec, key, v.c_str(), path.c_str());
 }
 // Editable beside all regional executables; defaults are seeded only once.
@@ -2747,9 +2754,11 @@ int count_png(const fs::path& dir, bool recurse, const fs::path& excluded = {})
     }
     return n;
 }
+ULONGLONG g_tex_scan_tick = 0;   /* when the texture folders were last counted */
 void scan_tex_dir()
 {
     std::error_code ec;
+    g_tex_scan_tick = GetTickCount64();
     const auto root = tex_replacement_folder();
     g.tex_root_name = texture_game_code();
     g.tex_rep = count_png(root, true, tex_dump_folder());
@@ -3211,8 +3220,12 @@ void toggle_srt()
     if(g.running)perf_overlay_toast(T(g.s.srt?S_SRT_ON:S_SRT_OFF),g.s.srt);
     changed();
 }
+/* Closing the game window brings the launcher back (cv_launcher_relaunch);
+ * closing the launcher itself while the game runs quits everything. */
+volatile LONG g_quit_all = 0;
 void quit_game()
 {
+    InterlockedExchange(&g_quit_all, 1);
     if (rsx_d3d12_window()) rsx_d3d12_close();
     else ExitProcess(0);   /* still booting: nothing to close yet */
 }
@@ -3221,7 +3234,17 @@ int prepare_eboot();
 void start_other_version();
 void set_icon_env();
 
-void changed() { save_settings(g.s); g.play_msg.clear(); apply_live(); InvalidateRect(g.hwnd, NULL, FALSE); }
+/* CV_LAUNCHER_PERF=1: print the paints and settings saves that take long. */
+bool launcher_perf() { static const bool on = [] { const char* e = getenv("CV_LAUNCHER_PERF"); return e && e[0] == '1'; }(); return on; }
+double launcher_perf_ms() { LARGE_INTEGER f, c; QueryPerformanceFrequency(&f); QueryPerformanceCounter(&c); return 1000.0 * (double)c.QuadPart / (double)f.QuadPart; }
+void changed()
+{
+    const bool perf = launcher_perf(); const double t0 = perf ? launcher_perf_ms() : 0.0;
+    save_settings(g.s);
+    const double t1 = perf ? launcher_perf_ms() : 0.0;
+    g.play_msg.clear(); apply_live(); InvalidateRect(g.hwnd, NULL, FALSE);
+    if (perf) fprintf(stderr, "[launcher-perf] changed: save %.1f ms, apply %.1f ms%c", t1 - t0, launcher_perf_ms() - t1, 10);
+}
 
 /* The SRT's size and opacity, and the vibration strength (Controles). */
 void update_srt_slider(int id,int x) {
@@ -3353,7 +3376,10 @@ void click(int id)
     if (id >= ID_NAV && id < ID_NAV + P_COUNT) {
         g.page = (Page)(id - ID_NAV); g.cache_msg.clear(); g.log_msg.clear();
         if (g.page == P_PATCHES) scan_patch_dir();   /* the folder may have new files */
-        if (g.page == P_MODS) g.tex_rep = -1;        /* count the textures again */
+        /* Count the textures again, but not on every visit: a large pack means
+         * walking thousands of files on the paint path. Changing a folder or
+         * the format still recounts at once. */
+        if (g.page == P_MODS && GetTickCount64() - g_tex_scan_tick > 15000) g.tex_rep = -1;
     }
     else if (id >= ID_PATCH && id < ID_PATCH + NPATCHES) { g.s.patch[id - ID_PATCH] ^= true; changed(); }
     else if (id == ID_DD_MANUAL_RELOAD || id == ID_DD_COMBAT_HUD || id == ID_DD_SHADOWS || id == ID_DD_GAME_TEXT || id == ID_DD_TROPHY_CORNER || id == ID_DD_TROPHY_FILTER || id == ID_DD_FILM || id == ID_DD_MODE || id == ID_DD_RES || id == ID_DD_AA || id == ID_DD_FPS || id == ID_DD_POSE_DEVICE || id == ID_DD_FRAME_GEN || id == ID_DD_VSYNC || id == ID_DD_SHARP || id == ID_DD_LANG || id==ID_DD_SRT_ENEMIES || id==ID_DD_SRT_CORNER || id==ID_DD_SRT_LANGUAGE || id == ID_DD_OV_CORNER || id == ID_DD_OV_LAYOUT || id == ID_DD_OV_SIZE || id == ID_DD_OV_BG || id == ID_DD_SRT_INVPOS || id == ID_DD_SRT_WINDOW || id == ID_DD_SRT_BOSSBAR) {
@@ -3568,7 +3594,12 @@ LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp)
         save_settings(g.s); KillTimer(h, 2); apply_live(false);
         InvalidateRect(h, NULL, FALSE); return 1;
     case WM_ERASEBKGND: return 1;
-    case WM_PAINT: { PAINTSTRUCT ps; HDC dc = BeginPaint(h, &ps); paint(dc); EndPaint(h, &ps); return 0; }
+    case WM_PAINT: {
+        PAINTSTRUCT ps; HDC dc = BeginPaint(h, &ps);
+        const bool perf = launcher_perf(); const double t0 = perf ? launcher_perf_ms() : 0.0;
+        paint(dc); EndPaint(h, &ps);
+        if (perf) { const double dt = launcher_perf_ms() - t0; if (dt > 16.0) fprintf(stderr, "[launcher-perf] paint %.1f ms (page %d)%c", dt, (int)g.page, 10); }
+        return 0; }
     case WM_MOUSEMOVE: {
         if(g_upd.notes_drag){upd_notes_drag_to(float(logical_y(GET_Y_LPARAM(lp))));return 0;}
         if(g.srt_layout_drag>=0){move_srt_preview(logical_x(GET_X_LPARAM(lp)),logical_y(GET_Y_LPARAM(lp)));return 0;}
@@ -4319,8 +4350,45 @@ extern "C" void cv_pc_settings_change(int which,int value)
 /* Opens the launcher on its own thread and returns 1 with the EBOOT.elf path
  * once the player pressed Jogar, or 0 if the window was closed first. After
  * Jogar the window stays open as the options menu for the running game. */
+/* The environment this process started with (before any set_env of the
+ * settings), for the launcher that replaces it after the game window closes. */
+static std::vector<wchar_t> g_start_env;
+static std::wstring g_start_cwd;
+static void snapshot_start_env()
+{
+    if (!g_start_env.empty()) return;
+    if (wchar_t* block = GetEnvironmentStringsW()) {
+        for (const wchar_t* p = block; *p; p += wcslen(p) + 1) {
+            /* one-shot switches must not repeat in the new launcher */
+            if (!_wcsnicmp(p, L"CV_LAUNCHER_AUTOPLAY=", 21) || !_wcsnicmp(p, L"CV_UPDATE_DONE=", 15)) continue;
+            g_start_env.insert(g_start_env.end(), p, p + wcslen(p) + 1);
+        }
+        g_start_env.push_back(0);   /* the block ends with an empty string */
+        FreeEnvironmentStringsW(block);
+    }
+    wchar_t cwd[MAX_PATH];
+    if (GetCurrentDirectoryW(MAX_PATH, cwd)) g_start_cwd = cwd;
+}
+
+/* The game window was closed: start a fresh launcher (the running game cannot
+ * be restarted inside this process) so the settings can be changed. The caller
+ * ends this process. Not when the launcher itself was closed: that quits all. */
+extern "C" void cv_launcher_relaunch(void)
+{
+    if (g_quit_all || g_start_env.size() < 2) return;
+    wchar_t self[MAX_PATH];
+    if (!GetModuleFileNameW(NULL, self, MAX_PATH)) return;
+    std::wstring cmd = L"\"" + std::wstring(self) + L"\"";
+    STARTUPINFOW si = { sizeof si }; PROCESS_INFORMATION pi = {};
+    if (CreateProcessW(self, &cmd[0], NULL, NULL, FALSE, CREATE_UNICODE_ENVIRONMENT, g_start_env.data(),
+                       g_start_cwd.empty() ? NULL : g_start_cwd.c_str(), &si, &pi)) {
+        CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
+    }
+}
+
 extern "C" int cv_launcher_run(char* eboot_out, size_t cap)
 {
+    snapshot_start_env();
     s_play_ev = CreateEventW(NULL, TRUE, FALSE, NULL);
     HANDLE th = CreateThread(NULL, 0, launcher_thread, NULL, 0, NULL);
     if (!th) return 0;

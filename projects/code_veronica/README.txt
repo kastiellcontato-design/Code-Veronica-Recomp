@@ -1,5 +1,6 @@
 NEW IN v1.1.11
 Fixed the texture mods switch (F9): turning it off now returns to the original textures at once, and turning it on again brings them back, without restarting the game. Having the game text set to Portuguese no longer interferes.
+Faster launcher when toggling options and switching tabs. Closing the game window brings the launcher back with your settings, so you can change them and play again; closing the launcher itself while the game runs quits everything.
 Fixed the name of the incendiary grenade in the Portuguese translation.
 Community HD texture pack (optional, separate download) for the US, EU and JP versions: see TEXTURAS-HD-COMUNIDADE.md on GitHub for credits and the download link. It is not part of this ZIP.
 Previous improvements are kept: optional modern controls, remappable analog sticks, HUD, manual reload and equipment shortcuts. No original game files, 3D models, saves or personal settings are bundled.

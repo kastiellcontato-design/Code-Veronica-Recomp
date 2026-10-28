@@ -81,6 +81,7 @@ extern "C" void cv_fps_register_game_update();
 #endif
 #ifdef _WIN32
 extern "C" int cv_focus_pause_poll(void);   /* cv_focus_pause.cpp */
+extern "C" void cv_launcher_relaunch(void);  /* launcher.cpp: the options window again */
 #endif
 extern "C" void pad_phys_rumble_off(void);   /* libs/input/pad_phys.c */
 
@@ -409,6 +410,9 @@ static DWORD WINAPI frame_clock(LPVOID)
                 pad_phys_rumble_off();
                 fflush(nullptr);
 #ifdef _WIN32
+                /* The launcher comes back (a new process), so the settings can
+                 * be changed without opening everything again. */
+                if (!getenv("CV_NO_LAUNCHER")) cv_launcher_relaunch();
                 TerminateProcess(GetCurrentProcess(), 0);
 #else
                 std::_Exit(0);
