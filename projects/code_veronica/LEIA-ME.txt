@@ -1,3 +1,11 @@
+NOVIDADES DA v1.1.9
+HUD de combate opcional com vida, estado de saúde, arma, munição carregada e reserva. Inclui isqueiro, animação de dano, brilho na vida, veneno/gás, escala por resolução e fade após cinco segundos sem ação. Texto e cores usam os limites do inventário original (120/60/30 HP).
+Recarga manual opcional sem abrir o inventário: mire e pressione o comando configurado. Teclado e controle podem ser usados juntos. Depende de munição compatível e das animações nativas; armas sem recarga compatível continuam seguindo as regras do jogo.
+Quatro atalhos de equipamento na gameplay, com configuração e edição dentro do jogo. Segure L1, escolha a direção com o analógico direito; Triângulo edita e X confirma. No teclado: V, I/J/K/L, F e Enter. Todos os comandos são configuráveis na nova aba HUD. Armas já atribuídas trocam de lugar; um espaço vazio permite mover. Só usa equipamentos carregados, sem acessar o baú ou criar itens. Soltar durante a edição cancela; soltar após confirmar equipa e fecha.
+Escolha DXC/FXC em Desempenho → Compilador de shaders. DXC permanece padrão; FXC é uma alternativa para máquinas com texturas ausentes ou incorretas, confirmada no teste da issue #18. A mudança exige reiniciar e os caches são separados. Não é uma garantia de corrigir todo problema gráfico.
+HUD, recarga manual e atalhos são independentes e desligados por padrão. Interface, dicas e notas nos 13 idiomas. Mantidas tradução PT-BR EU/US, sombras dinâmicas, troféus, personagens, saves e correções anteriores. Filtragem anisotrópica forçada continua desativada; granulado ainda exige reiniciar.
+Extraia o ZIP completo e mantenha Code Veronica.exe, bin/ e assets/ juntos. Não inclui jogo, modelos 3D do jogo, saves ou configurações pessoais. Veronica PKG Extractor v1.0.1 permanece em ZIP separado.
+
 NOVIDADES DA v1.1.8
 Removida temporariamente a filtragem anisotropica forcada do launcher e do PC Recomp para evitar bordas brancas/coloridas em configuracoes afetadas. Configuracoes antigas sao ignoradas; a filtragem forcada permanece desligada. As demais funcoes da v1.1.7 foram mantidas.
 

@@ -1,3 +1,11 @@
+NEW IN v1.1.9
+Optional combat HUD: health, condition, weapon, loaded/reserve ammo and lighter icon, damage trail, moving health highlight, poison/gas colors, resolution scaling and five-second idle fade. Health text and colors now match the original inventory thresholds (120/60/30 HP).
+Optional manual reload without the inventory: aim and press your assigned command. Keyboard and controller work together. Compatible ammunition and native animation rules still apply; weapons without a supported reload retain their original behavior.
+Four live equipment shortcuts, editable in game. Hold L1 and use the right stick; Triangle edits and Cross confirms. Keyboard defaults: V, I/J/K/L, F and Enter. Remap every command in the new HUD tab. Already assigned weapons swap slots; empty slots allow moving. Only carried equipment is available. Releasing while editing cancels; releasing after confirmation equips and closes.
+Choose DXC/FXC under Performance → Shader compiler. DXC remains the default; FXC is a compatibility alternative for missing/incorrect textures, confirmed in issue #18 testing. Restart required; separate caches. It is not a universal graphics fix.
+HUD, manual reload and equipment shortcuts are independent and off by default. UI, hints and notes in all 13 languages. Existing EU/US PT-BR, shadows, trophies, characters, saves and fixes retained. Forced anisotropy stays disabled; film grain still requires restart.
+Extract the complete ZIP; keep Code Veronica.exe, bin/ and assets/ together. No game files, game 3D models, saves or personal settings included. Veronica PKG Extractor v1.0.1 is a separate ZIP.
+
 NEW IN v1.1.8
 Temporarily removed forced anisotropic filtering from the launcher and in-game PC Recomp menu to avoid white/colored outlines on affected configurations. Old preferences are ignored; forced anisotropy remains disabled. Other v1.1.7 features are retained.
 

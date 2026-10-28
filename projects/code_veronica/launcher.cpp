@@ -20,6 +20,12 @@
 #endif
 #include <windows.h>
 #include "cv_enhanced_settings.h"
+#include "cv_combat_hud.h"
+#include "cv_manual_reload.h"
+#include "cv_quick_select.h"
+#include "quick_i18n.h"
+#include "cv_shader_i18n.h"
+#include "quick_edit_text.h"
 #include "cv_enhanced_i18n.h"
 #include <windowsx.h>
 #include <objidl.h>
@@ -259,6 +265,7 @@ struct Settings {
     int overlay_items = 3; /* bits of k_overlay_items: FPS and frame time */
     int overlay_corner = 1, overlay_layout = 0;   /* 0 tl, 1 tr, 2 bl, 3 br; 0 a row, 1 a column */
     int overlay_size = 1, overlay_text_only = 0;  /* 0 small, 1 medium, 2 large; 1: no box behind the numbers */
+    int shader_compiler=0; // 0 DXC default, 1 FXC compatibility; restart required
     bool shader_opt[6] = { true, true, true, true, true, true };   /* k_shader_opts, Desempenho page */
     std::wstring tex_dir;              /* texture mods (Mods page); empty: "mods/textures" beside the exe */
     std::wstring tex_dump_dir;         /* where dumps go; empty: <tex_dir>\<version>\dump */
@@ -268,6 +275,9 @@ struct Settings {
     bool battle_unlocked=false;
     bool film_filter=true;
     bool dynamic_shadows=true;
+    bool combat_hud=false;
+    bool manual_reload=false;cv_quick::Config quick;
+    int reload_key='R',reload_button=1;
     bool trophies=true,trophy_notifications=true;
     int trophy_corner=1;
     bool focus_pause=true; // pause while the game window is out of focus (cv_focus_pause.cpp)
@@ -472,6 +482,16 @@ Settings load_settings()
     s.res    = _wtoi(ini_get(L"tela", L"resolucao", L"1").c_str());
     s.aa     = _wtoi(ini_get(L"tela", L"antialias", L"0").c_str());
     s.fps    = _wtoi(ini_get(L"tela", L"fps", L"0").c_str()) == 1;
+    s.quick.on=_wtoi(ini_get(L"jogo",L"atalhos_equipamento",L"0").c_str())!=0;
+    s.quick.key=std::clamp(_wtoi(ini_get(L"jogo",L"atalhos_tecla",L"86").c_str()),0,255);
+    s.quick.button=std::clamp(_wtoi(ini_get(L"jogo",L"atalhos_botao",L"4").c_str()),-1,PB_COUNT-1);
+    s.quick.edit_key=std::clamp(_wtoi(ini_get(L"jogo",L"atalhos_editar_tecla",L"70").c_str()),0,255);s.quick.edit_button=std::clamp(_wtoi(ini_get(L"jogo",L"atalhos_editar_botao",L"3").c_str()),-1,PB_COUNT-1);
+    s.quick.confirm_key=std::clamp(_wtoi(ini_get(L"jogo",L"atalhos_confirmar_tecla",L"13").c_str()),0,255);s.quick.confirm_button=std::clamp(_wtoi(ini_get(L"jogo",L"atalhos_confirmar_botao",L"0").c_str()),-1,PB_COUNT-1);
+    for(int d=0;d<4;d++){auto k=L"atalhos_direcao_"+std::to_wstring(d),i=L"atalhos_item_"+std::to_wstring(d);s.quick.keys[d]=std::clamp(_wtoi(ini_get(L"jogo",k.c_str(),std::to_wstring(s.quick.keys[d]).c_str()).c_str()),0,255);s.quick.items[d]=_wtoi(ini_get(L"jogo",i.c_str(),L"0").c_str());}
+    s.reload_key=std::clamp(_wtoi(ini_get(L"jogo",L"recarga_tecla",L"82").c_str()),0,255);
+    s.reload_button=std::clamp(_wtoi(ini_get(L"jogo",L"recarga_botao",s.region_selected==2?L"8":L"1").c_str()),-1,PB_COUNT-1);
+    s.manual_reload=_wtoi(ini_get(L"jogo",L"recarga_manual",L"0").c_str())!=0;
+    s.combat_hud=_wtoi(ini_get(L"jogo",L"hud_combate",L"0").c_str())!=0;
     s.game_text_ptbr=_wtoi(ini_get(L"jogo",L"texto_ptbr_teste",L"0").c_str())==1;
     s.pose_device=0;   // CPU interpolation only; a saved interpolacao_gpu=1 is ignored
     s.frame_generation=_wtoi(ini_get(L"tela",L"fsr_frame_generation",L"0").c_str())==1;
@@ -545,6 +565,7 @@ Settings load_settings()
     s.overlay = _wtoi(ini_get(L"overlay", L"mostrar", L"0").c_str()) != 0;
     for (int i = 0; i < NSHADER_OPTS; i++)
         s.shader_opt[i] = _wtoi(ini_get(L"shaders", k_shader_opts[i].key, L"1").c_str()) != 0;
+    s.shader_compiler=ini_get(L"shaders",L"compilador",L"dxc")==L"fxc"?1:0;
     s.tex_dir = ini_get(L"texturas", L"pasta", L"");
     s.tex_dump_dir = ini_get(L"texturas", L"pasta_extraidas", L"");
     s.tex_replace = _wtoi(ini_get(L"texturas", L"substituir", L"0").c_str()) != 0;
@@ -606,6 +627,14 @@ void save_settings(const Settings& s)
     ini_set(L"tela", L"contraste", std::to_wstring(s.contrast));
     ini_set(L"tela", L"saturacao", std::to_wstring(s.saturation));
     ini_set(L"tela", L"nitidez", std::to_wstring(s.sharpness));
+    ini_set(L"jogo",L"atalhos_editar_tecla",std::to_wstring(s.quick.edit_key));ini_set(L"jogo",L"atalhos_editar_botao",std::to_wstring(s.quick.edit_button));
+    ini_set(L"jogo",L"atalhos_confirmar_tecla",std::to_wstring(s.quick.confirm_key));ini_set(L"jogo",L"atalhos_confirmar_botao",std::to_wstring(s.quick.confirm_button));
+    ini_set(L"jogo",L"atalhos_equipamento",std::to_wstring(s.quick.on));ini_set(L"jogo",L"atalhos_tecla",std::to_wstring(s.quick.key));ini_set(L"jogo",L"atalhos_botao",std::to_wstring(s.quick.button));
+    for(int d=0;d<4;d++){auto k=L"atalhos_direcao_"+std::to_wstring(d),i=L"atalhos_item_"+std::to_wstring(d);ini_set(L"jogo",k.c_str(),std::to_wstring(s.quick.keys[d]));ini_set(L"jogo",i.c_str(),std::to_wstring(s.quick.items[d]));}
+    ini_set(L"jogo",L"recarga_tecla",std::to_wstring(s.reload_key));
+    ini_set(L"jogo",L"recarga_botao",std::to_wstring(s.reload_button));
+    ini_set(L"jogo",L"recarga_manual",s.manual_reload?L"1":L"0");
+    ini_set(L"jogo",L"hud_combate",s.combat_hud?L"1":L"0");
     ini_set(L"jogo",L"texto_ptbr_teste",std::to_wstring(s.game_text_ptbr));
     ini_set(L"controles", L"layout", std::to_wstring(s.layout));
     ini_set(L"controles", L"vibracao", std::to_wstring(s.rumble));
@@ -649,6 +678,7 @@ void save_settings(const Settings& s)
     ini_set(L"overlay", L"so_texto", std::to_wstring(s.overlay_text_only));
     for (int i = 0; i < NSHADER_OPTS; i++)
         ini_set(L"shaders", k_shader_opts[i].key, s.shader_opt[i] ? L"1" : L"0");
+    ini_set(L"shaders",L"compilador",s.shader_compiler?L"fxc":L"dxc");
     ini_set(L"texturas", L"pasta", s.tex_dir);
     ini_set(L"texturas", L"pasta_extraidas", s.tex_dump_dir);
     ini_set(L"texturas", L"substituir", s.tex_replace ? L"1" : L"0");
@@ -795,12 +825,12 @@ Bitmap* load_png(const char* name)
 }
 
 /* ---------------------------------------------------------------- UI state */
-enum Page { P_INICIO, P_JOGO, P_SAVES, P_CONTROLES, P_ATALHOS, P_PATCHES, P_MODS, P_SRT, P_INVENTARIO, P_DESEMPENHO, P_AVANCADO, P_TROPHIES, P_COUNT };
+enum Page { P_INICIO, P_JOGO, P_SAVES, P_CONTROLES, P_ATALHOS, P_PATCHES, P_MODS, P_SRT, P_INVENTARIO, P_DESEMPENHO, P_AVANCADO, P_TROPHIES, P_HUD, P_COUNT };
 /* Each page's name in the side bar. */
-const int k_nav[P_COUNT] = { S_NAV_HOME, S_NAV_GAME, S_NAV_GAME /* Saves: named by design::SAVES */, S_NAV_CONTROLS, S_NAV_SHORTCUTS, S_NAV_PATCHES, S_NAV_MODS, S_NAV_SRT, S_NAV_ITEMS, S_NAV_PERF, S_NAV_ADVANCED, S_NAV_GAME };
+const int k_nav[P_COUNT] = { S_NAV_HOME, S_NAV_GAME, S_NAV_GAME /* Saves: named by design::SAVES */, S_NAV_CONTROLS, S_NAV_SHORTCUTS, S_NAV_PATCHES, S_NAV_MODS, S_NAV_SRT, S_NAV_ITEMS, S_NAV_PERF, S_NAV_ADVANCED, S_NAV_GAME, S_NAV_GAME };
 /* Side bar order: the game library first. */
-const int k_nav_order[P_COUNT] = { P_JOGO, P_INICIO, P_SAVES, P_CONTROLES, P_ATALHOS, P_PATCHES, P_MODS, P_SRT, P_INVENTARIO, P_TROPHIES, P_DESEMPENHO, P_AVANCADO };
-enum Capture { CAP_NONE, CAP_KEY, CAP_BTN };
+const int k_nav_order[P_COUNT] = { P_JOGO, P_INICIO, P_HUD, P_SAVES, P_CONTROLES, P_ATALHOS, P_PATCHES, P_MODS, P_SRT, P_INVENTARIO, P_TROPHIES, P_DESEMPENHO, P_AVANCADO };
+enum Capture { CAP_NONE, CAP_KEY, CAP_BTN, CAP_RELOAD_KEY, CAP_RELOAD_BTN, CAP_QUICK_KEY, CAP_QUICK_BTN, CAP_QUICK_DIR, CAP_QUICK_EDIT_KEY, CAP_QUICK_EDIT_BTN, CAP_QUICK_CONFIRM_KEY, CAP_QUICK_CONFIRM_BTN };
 
 struct Hit { RectF r; int id; };
 struct UI {
@@ -846,7 +876,7 @@ UI g;
 /* ids */
 enum {
     ID_NAV = 100,               /* + page */
-    ID_DD_MODE = 200, ID_DD_RES = 201, ID_DD_AA = 202, ID_DD_LANG = 203, ID_DD_FPS = 204, ID_DD_SHARP = 206, ID_DD_POSE_DEVICE = 207, ID_DD_FRAME_GEN = 208, ID_DD_VSYNC = 209, ID_DD_FILM = 210, ID_DD_GAME_TEXT = 211, ID_DD_SHADOWS=212, ID_DD_ITEM = 300,  /* + item index */
+    ID_DD_MODE = 200, ID_DD_RES = 201, ID_DD_AA = 202, ID_DD_LANG = 203, ID_DD_FPS = 204, ID_DD_SHARP = 206, ID_DD_POSE_DEVICE = 207, ID_DD_FRAME_GEN = 208, ID_DD_VSYNC = 209, ID_DD_FILM = 210, ID_DD_GAME_TEXT = 211, ID_DD_SHADOWS=212, ID_DD_COMBAT_HUD=213, ID_DD_MANUAL_RELOAD=214, ID_DD_ITEM = 300,  /* + item index */
     ID_DD_UP = 390, ID_DD_DOWN = 391,
     ID_PLAY = 400, ID_RESUME, ID_QUIT,
     ID_GAME_BROWSE = 500, ID_GAME_OPEN, ID_RAP_BROWSE, ID_RAP_OPEN, ID_SAVE_BROWSE, ID_SAVE_OPEN, ID_SAVE_DEFAULT,
@@ -862,13 +892,15 @@ enum {
     ID_OVERLAY = 1400, ID_OVERLAY_ITEM = 1410,                     /* + item */
     ID_PATCH_DIR_BROWSE = 1500, ID_PATCH_DIR_OPEN, ID_PATCH_DIR_CLEAR, ID_FPATCH = 1600,  /* + file patch index */
     ID_LOG_VIEW = 2100, ID_LOG_COPY, ID_LOG_SAVE, ID_LOG_FOLDER,
-    ID_SHADER_OPT = 2200,                                          /* + k_shader_opts index */
+    ID_SHADER_COMPILER=3090, ID_SHADER_OPT = 2200,                                          /* + k_shader_opts index */
     ID_SRT=2400, ID_SRT_PART=2410, ID_DD_SRT_ENEMIES=2420, ID_DD_SRT_CORNER, ID_DD_SRT_LANGUAGE, ID_SRT_SCALE, ID_SRT_OPACITY,
     ID_DD_OV_CORNER = 2450, ID_DD_OV_LAYOUT, ID_DD_SRT_INVPOS, ID_DD_SRT_WINDOW, ID_DD_SRT_BOSSBAR, ID_DD_OV_SIZE, ID_DD_OV_BG,
     ID_TEX_BROWSE = 2300, ID_TEX_OPEN, ID_TEX_REPLACE, ID_TEX_DUMP, ID_TEX_DUMP_BROWSE, ID_TEX_DUMP_OPEN, ID_TEX_ALL, ID_TEX_ALL_RUN, ID_TEX_FORMAT_PNG, ID_TEX_FORMAT_DDS,
     ID_SOCIAL_GITHUB=2580, ID_SOCIAL_YOUTUBE,
     ID_UPD_TOGGLE=2590, ID_UPD_CHECK, ID_UPD_INSTALL, ID_UPD_LATER, ID_UPD_CANCEL, ID_UPD_CLOSE, ID_UPD_NOTES_THUMB, ID_UPD_NOTES_TRACK,
     ID_TROPHY_ENABLE=2800,ID_TROPHY_NOTIFY,ID_TROPHY_RESET,ID_TROPHY_REFRESH,ID_DD_TROPHY_FILTER,ID_DD_TROPHY_CORNER,
+    ID_QUICK_ON=3000,ID_QUICK_KEY,ID_QUICK_BUTTON,ID_QUICK_KEY_CLEAR,ID_QUICK_BUTTON_CLEAR,ID_QUICK_RESET,ID_QUICK_DIR=3010,ID_QUICK_DIR_CLEAR=3020,ID_QUICK_SLOT=3030,ID_QUICK_EDIT_KEY=3040,ID_QUICK_EDIT_BUTTON,ID_QUICK_EDIT_KEY_CLEAR,ID_QUICK_EDIT_BUTTON_CLEAR,ID_QUICK_CONFIRM_KEY,ID_QUICK_CONFIRM_BUTTON,ID_QUICK_CONFIRM_KEY_CLEAR,ID_QUICK_CONFIRM_BUTTON_CLEAR,
+    ID_HUD_ENABLED=2900,ID_HUD_RELOAD,ID_HUD_RELOAD_KEY,ID_HUD_RELOAD_BUTTON,ID_HUD_RELOAD_KEY_CLEAR,ID_HUD_RELOAD_BUTTON_CLEAR,ID_HUD_RELOAD_RESET,
     ID_PAGE_THUMB = 2600, ID_PAGE_TRACK,
 };
 
@@ -1152,7 +1184,7 @@ void section(Graphics& gr, const std::wstring& t, float x, float y, float w, con
 
 
 /* Release shown under the sidebar, beside the credit. Bump it per release. */
-const wchar_t* const k_launcher_version = L"v1.1.8";
+const wchar_t* const k_launcher_version = L"v1.1.9";
 
 /* ---------------------------------------------------------------- updates
  * cv_updater.h does the network and file work on threads of its own, which
@@ -1486,6 +1518,7 @@ void library_art(){
 void nav_icon(Graphics& gr,int page,float x,float y,Color color){
  Pen p(color,1.5f);p.SetLineJoin(LineJoinRound);p.SetStartCap(LineCapRound);p.SetEndCap(LineCapRound);
  if(page==P_INICIO){gr.DrawRectangle(&p,x,y,23.f,15.f);gr.DrawLine(&p,x+11,y+16,x+11,y+21);gr.DrawLine(&p,x+5,y+21,x+18,y+21);}
+ else if(page==P_HUD){gr.DrawArc(&p,x+1,y+1,22.f,22.f,90.f,270.f);gr.DrawArc(&p,x+5,y+5,14.f,14.f,90.f,210.f);gr.DrawLine(&p,x+15,y+19,x+24,y+19);gr.DrawLine(&p,x+19,y+15,x+19,y+23);}
  else if(page==P_TROPHIES){
   // Original compact cup silhouette: rolled rim, curved handles, fluted bowl,
   // narrow stem and stepped pedestal. Drawn as vectors at the sidebar scale.
@@ -1576,7 +1609,7 @@ void draw_social_links(Graphics& gr,const Font& font)
 }
 void draw_sidebar(Graphics& gr,const Font&,const Font&,const Font& nav,const Font& footer_font){
  SolidBrush side(C_SIDE);gr.FillRectangle(&side,0,0,SIDE,H);Pen line(C_FIELD_BD);gr.DrawLine(&line,float(SIDE-1),0.f,float(SIDE-1),float(H));brand(gr,20,22,SIDE-38.f);
- for(int slot=0;slot<P_COUNT;slot++){const int i=k_nav_order[slot];float y=128.f+slot*49;bool active=g.page==i,hot=g.hover==ID_NAV+i;if(active||hot){LinearGradientBrush b(PointF(0,y),PointF(float(SIDE),y),active?Color(255,68,20,28):C_HOVER,C_SIDE);gr.FillRectangle(&b,0.f,y,float(SIDE),45.f);}if(active){SolidBrush b(C_RED);gr.FillRectangle(&b,0.f,y,3.f,45.f);}nav_icon(gr,i,22,y+10,active?C_TEXT:C_DIM);text(gr,i==P_INICIO?lx(design::GRAPHICS):i==P_JOGO?lx(design::GAMES):i==P_SAVES?lx(design::SAVES):i==P_TROPHIES?cv_trophy_text::get(g_lang,cv_trophy_text::Title):T(k_nav[i]),62,y,nav,active?C_TEXT:C_DIM,StringAlignmentNear,SIDE-72.f,45);hit(0,y,SIDE,45,ID_NAV+i);}
+ for(int slot=0;slot<P_COUNT;slot++){const int i=k_nav_order[slot];float y=128.f+slot*45;bool active=g.page==i,hot=g.hover==ID_NAV+i;if(active||hot){LinearGradientBrush b(PointF(0,y),PointF(float(SIDE),y),active?Color(255,68,20,28):C_HOVER,C_SIDE);gr.FillRectangle(&b,0.f,y,float(SIDE),41.f);}if(active){SolidBrush b(C_RED);gr.FillRectangle(&b,0.f,y,3.f,41.f);}nav_icon(gr,i,22,y+10,active?C_TEXT:C_DIM);text(gr,i==P_HUD?std::wstring(L"HUD"):i==P_INICIO?lx(design::GRAPHICS):i==P_JOGO?lx(design::GAMES):i==P_SAVES?lx(design::SAVES):i==P_TROPHIES?cv_trophy_text::get(g_lang,cv_trophy_text::Title):T(k_nav[i]),62,y,nav,active?C_TEXT:C_DIM,StringAlignmentNear,SIDE-72.f,45);hit(0,y,SIDE,41,ID_NAV+i);}
  if(upd_busy())return;   /* the update card takes the foot of the sidebar */
  draw_social_links(gr,footer_font);
  text(gr,T(S_CREDIT_KASTIEL),22,H-62.f,footer_font,C_DIM,StringAlignmentNear,SIDE-38.f,22);text(gr,k_launcher_version,22,H-38.f,footer_font,C_DIM);
@@ -2417,6 +2450,49 @@ void move_srt_preview(int mouse_x,int mouse_y){
     y=cv_srt_layout::normalized(mouse_y+g.page_scroll[P_SRT]-g.srt_grab_y-area.Y,area.Height,panel.Height);
     g.srt_layout_dirty=true;InvalidateRect(g.hwnd,NULL,FALSE);
 }
+std::vector<int> quick_item_choices(){return {0,-1,55,8,9,131,10,5,33,4,32,6,7,3,2,34,142,1,11};}
+std::wstring quick_item_label(int id){if(id==0)return quick_text::get(g_lang,quick_text::Auto);if(id<0)return quick_text::get(g_lang,quick_text::Empty);return cv_srt_i18n::item(id,cv_srt_i18n::Language(g_lang));}
+void draw_hud_page(Graphics& gr,const Font& head,const Font& body,const Font& fsm){
+ using namespace cv_enhanced_text;const float x=SIDE+32.f,w=W-SIDE-64.f,gap=20,cw=(w-gap)/2;
+ section(gr,L"HUD",x,24,w,head);text(gr,get(g_lang,HUDPageHint),x,58,fsm,C_DIM,StringAlignmentNear,w,42);
+ option_card(gr,x,116,w,94,g.s.combat_hud,ID_HUD_ENABLED,get(g_lang,CombatHUD),get(g_lang,HUDHelp),body,fsm);
+ option_card(gr,x,228,w,94,g.s.manual_reload,ID_HUD_RELOAD,get(g_lang,ManualReload),get(g_lang,ReloadHelp),body,fsm);
+ option_card(gr,x,340,w,94,g.s.quick.on,ID_QUICK_ON,quick_text::get(g_lang,quick_text::Title),quick_text::get(g_lang,quick_text::Help),body,fsm);
+ float y=466;
+ auto capture=[&](float bx,float by,float width,int id,int clear,bool active,int value,bool pad){
+  RectF r(bx,by,width-38,38);field(gr,r,g.hover==id,active);const bool has=pad?value>=0:value>0;
+  if(has&&!active){if(pad)btn_glyph(gr,icon_layout(),shown_button(value),r.X+8,r.Y+7,24);else key_glyph(gr,value,r.X+8,r.Y+7,24);}
+  const auto label=active?T(pad?S_PRESS_BTN:S_PRESS_KEY):has?(pad?pb_name(icon_layout(),shown_button(value)):key_name(value)):std::wstring(L"—");
+  text(gr,label,r.X+(has&&!active?39:9),r.Y,body,active?C_RED_HI:C_TEXT,StringAlignmentNear,r.Width-47,r.Height);hit(r.X,r.Y,r.Width,r.Height,id);button(gr,RectF(bx+width-32,by,32,38),L"×",clear,body);
+ };
+ if(g.s.manual_reload){
+  section(gr,get(g_lang,ReloadBindings),x,y,w,body);y+=34;text(gr,get(g_lang,ReloadBindingsHint),x,y,fsm,C_DIM,StringAlignmentNear,w,58);y+=68;
+  text(gr,T(S_COL_KB),x,y,body,C_TEXT,StringAlignmentNear,cw,26);text(gr,T(S_COL_PAD),x+cw+gap,y,body,C_TEXT,StringAlignmentNear,cw,26);y+=32;
+  capture(x,y,cw,ID_HUD_RELOAD_KEY,ID_HUD_RELOAD_KEY_CLEAR,g.cap==CAP_RELOAD_KEY,g.s.reload_key,false);capture(x+cw+gap,y,cw,ID_HUD_RELOAD_BUTTON,ID_HUD_RELOAD_BUTTON_CLEAR,g.cap==CAP_RELOAD_BTN,g.s.reload_button,true);y+=54;
+  button(gr,RectF(x,y,180,34),T(S_RESTORE),ID_HUD_RELOAD_RESET,body);y+=66;
+ }
+ if(g.s.quick.on){
+  section(gr,quick_text::get(g_lang,quick_text::Open),x,y,w,body);y+=37;
+  text(gr,T(S_COL_KB),x,y,fsm,C_DIM,StringAlignmentNear,cw,26);text(gr,T(S_COL_PAD),x+cw+gap,y,fsm,C_DIM,StringAlignmentNear,cw,26);y+=30;
+  capture(x,y,cw,ID_QUICK_KEY,ID_QUICK_KEY_CLEAR,g.cap==CAP_QUICK_KEY,g.s.quick.key,false);capture(x+cw+gap,y,cw,ID_QUICK_BUTTON,ID_QUICK_BUTTON_CLEAR,g.cap==CAP_QUICK_BTN,g.s.quick.button,true);y+=64;
+  section(gr,quick_edit_text::get(g_lang,quick_edit_text::Edit),x,y,w,body);y+=34;
+  text(gr,quick_edit_text::get(g_lang,quick_edit_text::ChooseHelp),x,y,fsm,C_DIM,StringAlignmentNear,w,48);y+=56;
+  capture(x,y,cw,ID_QUICK_EDIT_KEY,ID_QUICK_EDIT_KEY_CLEAR,g.cap==CAP_QUICK_EDIT_KEY,g.s.quick.edit_key,false);capture(x+cw+gap,y,cw,ID_QUICK_EDIT_BUTTON,ID_QUICK_EDIT_BUTTON_CLEAR,g.cap==CAP_QUICK_EDIT_BTN,g.s.quick.edit_button,true);y+=59;
+  section(gr,quick_edit_text::get(g_lang,quick_edit_text::Confirm),x,y,w,body);y+=37;
+  capture(x,y,cw,ID_QUICK_CONFIRM_KEY,ID_QUICK_CONFIRM_KEY_CLEAR,g.cap==CAP_QUICK_CONFIRM_KEY,g.s.quick.confirm_key,false);capture(x+cw+gap,y,cw,ID_QUICK_CONFIRM_BUTTON,ID_QUICK_CONFIRM_BUTTON_CLEAR,g.cap==CAP_QUICK_CONFIRM_BTN,g.s.quick.confirm_button,true);y+=60;
+  text(gr,quick_edit_text::get(g_lang,quick_edit_text::SwapHelp),x,y,fsm,C_DIM,StringAlignmentNear,w,48);y+=61;
+  section(gr,quick_text::get(g_lang,quick_text::Select),x,y,w,body);y+=35;
+  text(gr,quick_text::get(g_lang,quick_text::SelectHelp),x,y,fsm,C_DIM,StringAlignmentNear,w,55);y+=65;
+  const float qw=(w-3*16)/4;
+  for(int d=0;d<4;d++){float bx=x+d*(qw+16);text(gr,quick_text::get(g_lang,quick_text::Up+d),bx,y,body,C_TEXT,StringAlignmentNear,qw,28);capture(bx,y+32,qw,ID_QUICK_DIR+d,ID_QUICK_DIR_CLEAR+d,g.cap==CAP_QUICK_DIR&&g.cap_slot==d,g.s.quick.keys[d],false);}y+=101;
+  section(gr,quick_text::get(g_lang,quick_text::Slots),x,y,w,body);y+=35;text(gr,quick_text::get(g_lang,quick_text::SlotHelp),x,y,fsm,C_DIM,StringAlignmentNear,w,48);y+=58;
+  for(int d=0;d<4;d++){text(gr,quick_text::get(g_lang,quick_text::Up+d),x,y,body,C_TEXT,StringAlignmentNear,100,36);dropdown(gr,RectF(x+115,y,w-115,36),quick_item_label(g.s.quick.items[d]),ID_QUICK_SLOT+d,body);y+=48;}
+  button(gr,RectF(x,y+8,180,34),T(S_RESTORE),ID_QUICK_RESET,body);y+=62;
+ }
+ g_page_end=y+24;
+}
+
+
 void draw_srt(Graphics& gr,const Font& head,const Font& body,const Font& fsm)
 {
     namespace st=cv_srt_layout_text;
@@ -2608,12 +2684,16 @@ void draw_desempenho(Graphics& gr, const Font& head, const Font& body, const Fon
     section(gr, T(S_SH_TITLE), x, y, w, head);
     text(gr, T(S_SH_HINT), x, y + 32, fsm, C_DIM, StringAlignmentNear, w, 20);
     y += 74;
+    text(gr,cv_shader_text::get(g_lang,cv_shader_text::Title),x,y,body,C_TEXT,StringAlignmentNear,w,24);
+    dropdown(gr,RectF(x,y+28,w,34),cv_shader_text::get(g_lang,g.s.shader_compiler?cv_shader_text::FXC:cv_shader_text::DXC),ID_SHADER_COMPILER,body);
+    text(gr,cv_shader_text::get(g_lang,cv_shader_text::Help),x,y+71,fsm,C_DIM,StringAlignmentNear,w,50);y+=138;
     for (int i = 0; i < NSHADER_OPTS; i++) {
         /* Six cards end above the Jogar button (its top is H - 78). */
         option_card(gr, x, y, w, 86, g.s.shader_opt[i], ID_SHADER_OPT + i,
                     T(k_shader_opts[i].title), T(k_shader_opts[i].desc), body, fsm);
         y += 94;
     }
+    g_page_end=std::max(g_page_end,y+16);
 }
 
 /* Mod input and extraction output are independent, using the selected region. */
@@ -2820,6 +2900,7 @@ void paint(HDC hdc)
     gr.SetClip(RectF((float)SIDE, 0.0f, (float)(W - SIDE), PAGE_BOTTOM));
     gr.TranslateTransform(0, -g_page_dy);
     if (g.page == P_INICIO) draw_inicio(gr, fHead, fBody, fCode, fSmall);
+    else if (g.page == P_HUD) draw_hud_page(gr,fHead,fBody,fSmall);
     else if (g.page == P_JOGO) draw_jogo(gr, fHead, fBody, fSmall);
     else if (g.page == P_SAVES) draw_saves(gr, fHead, fBody, fSmall);
     else if (g.page == P_CONTROLES) draw_controles(gr, fHead, fBody, fSmall, fCol);
@@ -2853,6 +2934,10 @@ void paint(HDC hdc)
         else if(g.open_dd==ID_DD_VSYNC){for(int i=0;i<2;i++)items.push_back(vsync_name(i));sel=g.s.vsync;}
         else if (g.open_dd == ID_DD_FPS) { for (int i = 0; i < 2; i++) items.push_back(fps_name(i)); sel = g.s.fps; }
         else if (g.open_dd == ID_DD_GAME_TEXT) {items={ptbr_ui(1),ptbr_ui(2)};sel=g.s.game_text_ptbr;}
+        else if(g.open_dd==ID_DD_MANUAL_RELOAD){items={cv_enhanced_text::get(g_lang,cv_enhanced_text::Off),cv_enhanced_text::get(g_lang,cv_enhanced_text::On)};sel=g.s.manual_reload?1:0;}
+        else if(g.open_dd>=ID_QUICK_SLOT&&g.open_dd<ID_QUICK_SLOT+4){const auto choices=quick_item_choices();sel=0;for(int i=0;i<int(choices.size());i++){items.push_back(quick_item_label(choices[i]));if(choices[i]==g.s.quick.items[g.open_dd-ID_QUICK_SLOT])sel=i;}}
+        else if(g.open_dd==ID_SHADER_COMPILER){items={cv_shader_text::get(g_lang,cv_shader_text::DXC),cv_shader_text::get(g_lang,cv_shader_text::FXC)};sel=g.s.shader_compiler;}
+        else if(g.open_dd==ID_DD_COMBAT_HUD){items={cv_enhanced_text::get(g_lang,cv_enhanced_text::Off),cv_enhanced_text::get(g_lang,cv_enhanced_text::On)};sel=g.s.combat_hud?1:0;}
         else if(g.open_dd==ID_DD_SHADOWS){items={cv_enhanced_text::get(g_lang,cv_enhanced_text::Off),cv_enhanced_text::get(g_lang,cv_enhanced_text::On)};sel=g.s.dynamic_shadows?1:0;}
         else if (g.open_dd == ID_DD_FILM) {items.push_back(cv_enhanced_text::get(g_lang,cv_enhanced_text::Off));items.push_back(cv_enhanced_text::get(g_lang,cv_enhanced_text::On));sel=g.s.film_filter?1:0;}
         else if (g.open_dd == ID_DD_SHARP) { for (int i = 0; i <= 10; i++) items.push_back(sharp_name(i)); sel = g.s.sharpness / 10; }
@@ -3020,7 +3105,7 @@ void apply_live(bool restore_menu = true)
     cv_test_tools_enable(g.s.test_tools);
     cv_item_menu_enable(g.s.items_menu);
     cv_cheats_set(g.s.patch[2],g.s.patch[3]);
-    cv_enhanced_set(8,g.s.music_volume);cv_enhanced_set(9,g.s.sfx_volume);cv_enhanced_set(10,g.s.battle_unlocked);cv_enhanced_set(11,g.s.film_filter);cv_enhanced_set(12,g.s.dynamic_shadows);
+    cv_enhanced_set(8,g.s.music_volume);cv_enhanced_set(9,g.s.sfx_volume);cv_enhanced_set(10,g.s.battle_unlocked);cv_enhanced_set(11,g.s.film_filter);cv_enhanced_set(12,g.s.dynamic_shadows);cv_enhanced_set(13,g.s.combat_hud);cv_enhanced_set(14,g.s.manual_reload);cv_manual_reload_bindings_set(g.s.reload_key,g.s.reload_button);cv_quick::configure(g.s.quick);
     cv_focus_pause_enable(g.s.focus_pause);
     cv_focus_pause_label(T(S_PAUSED));
     if (!g.running) return;
@@ -3199,9 +3284,11 @@ void click(int id)
         if (id == ID_DD_LIST) return;
         if (id >= ID_DD_ITEM && id < ID_DD_ITEM + 64) {
             int i = id - ID_DD_ITEM;
-            if (g.open_dd == ID_DD_MODE) g.s.mode = i;
+            if(g.open_dd>=ID_QUICK_SLOT&&g.open_dd<ID_QUICK_SLOT+4){const auto choices=quick_item_choices();if(i>=0&&i<int(choices.size()))g.s.quick.items[g.open_dd-ID_QUICK_SLOT]=choices[i];}
+            else if (g.open_dd == ID_DD_MODE) g.s.mode = i;
             else if(g.open_dd==ID_DD_TROPHY_CORNER)g.s.trophy_corner=i;
             else if(g.open_dd==ID_DD_TROPHY_FILTER)trophy_filter=i;
+            else if(g.open_dd==ID_SHADER_COMPILER)g.s.shader_compiler=i!=0;
             else if (g.open_dd == ID_DD_RES) g.s.res = i;
             else if (g.open_dd == ID_DD_AA) g.s.aa = i;
             else if (g.open_dd == ID_DD_FPS && !opt30_comparison()) g.s.fps = i;
@@ -3209,6 +3296,8 @@ void click(int id)
             else if(g.open_dd==ID_DD_FRAME_GEN){g.s.frame_generation=i;if(i)g.s.vsync=0;}
             else if(g.open_dd==ID_DD_VSYNC){g.s.vsync=i;if(i&&!g.running)g.s.frame_generation=0;}
             else if (g.open_dd == ID_DD_GAME_TEXT) g.s.game_text_ptbr=i;
+            else if(g.open_dd==ID_DD_MANUAL_RELOAD)g.s.manual_reload=i!=0;
+            else if(g.open_dd==ID_DD_COMBAT_HUD)g.s.combat_hud=i!=0;
             else if(g.open_dd==ID_DD_SHADOWS)g.s.dynamic_shadows=i!=0;
             else if (g.open_dd == ID_DD_FILM) g.s.film_filter = i!=0;
             else if (g.open_dd == ID_DD_SHARP) g.s.sharpness = i * 10;
@@ -3229,13 +3318,30 @@ void click(int id)
         g.open_dd = -1; InvalidateRect(g.hwnd, NULL, FALSE); return;
     }
     if (g.cap != CAP_NONE) { g.cap = CAP_NONE; g.cap_action = -1; }
+    if(id==ID_QUICK_EDIT_KEY||id==ID_QUICK_EDIT_BUTTON||id==ID_QUICK_CONFIRM_KEY||id==ID_QUICK_CONFIRM_BUTTON){g.cap=id==ID_QUICK_EDIT_KEY?CAP_QUICK_EDIT_KEY:id==ID_QUICK_EDIT_BUTTON?CAP_QUICK_EDIT_BTN:id==ID_QUICK_CONFIRM_KEY?CAP_QUICK_CONFIRM_KEY:CAP_QUICK_CONFIRM_BTN;g.cap_since=GetTickCount64();SetFocus(g.hwnd);for(int i=0;i<PAD_PHYS_MAX;i++){PadPhys p{};pad_phys_poll(i,&p);g.pad_prev[i]=p.buttons;}InvalidateRect(g.hwnd,nullptr,FALSE);return;}
+    if(id==ID_QUICK_EDIT_KEY_CLEAR){g.s.quick.edit_key=0;changed();return;}if(id==ID_QUICK_EDIT_BUTTON_CLEAR){g.s.quick.edit_button=-1;changed();return;}
+    if(id==ID_QUICK_CONFIRM_KEY_CLEAR){g.s.quick.confirm_key=0;changed();return;}if(id==ID_QUICK_CONFIRM_BUTTON_CLEAR){g.s.quick.confirm_button=-1;changed();return;}
+    if(id==ID_SHADER_COMPILER){g.open_dd=id;g.dd_scroll=0;InvalidateRect(g.hwnd,nullptr,FALSE);return;}
+    if(id==ID_QUICK_ON){g.s.quick.on=!g.s.quick.on;changed();return;}
+    if(id>=ID_QUICK_SLOT&&id<ID_QUICK_SLOT+4){g.open_dd=id;g.dd_scroll=0;InvalidateRect(g.hwnd,nullptr,FALSE);return;}
+    if(id==ID_QUICK_KEY||id==ID_QUICK_BUTTON||(id>=ID_QUICK_DIR&&id<ID_QUICK_DIR+4)){g.cap=id==ID_QUICK_KEY?CAP_QUICK_KEY:id==ID_QUICK_BUTTON?CAP_QUICK_BTN:CAP_QUICK_DIR;g.cap_slot=id-ID_QUICK_DIR;g.cap_since=GetTickCount64();SetFocus(g.hwnd);for(int i=0;i<PAD_PHYS_MAX;i++){PadPhys p{};pad_phys_poll(i,&p);g.pad_prev[i]=p.buttons;}InvalidateRect(g.hwnd,nullptr,FALSE);return;}
+    if(id==ID_QUICK_KEY_CLEAR){g.s.quick.key=0;changed();return;}if(id==ID_QUICK_BUTTON_CLEAR){g.s.quick.button=-1;changed();return;}
+    if(id>=ID_QUICK_DIR_CLEAR&&id<ID_QUICK_DIR_CLEAR+4){g.s.quick.keys[id-ID_QUICK_DIR_CLEAR]=0;changed();return;}
+    if(id==ID_QUICK_RESET){const auto on=g.s.quick.on;g.s.quick={};g.s.quick.on=on;changed();return;}
+    if(id==ID_HUD_ENABLED){g.s.combat_hud=!g.s.combat_hud;changed();return;}
+    if(id==ID_HUD_RELOAD){g.s.manual_reload=!g.s.manual_reload;changed();return;}
+    if(id==ID_HUD_RELOAD_KEY){g.cap=CAP_RELOAD_KEY;g.cap_since=GetTickCount64();SetFocus(g.hwnd);InvalidateRect(g.hwnd,nullptr,FALSE);return;}
+    if(id==ID_HUD_RELOAD_BUTTON){g.cap=CAP_RELOAD_BTN;g.cap_since=GetTickCount64();for(int i=0;i<PAD_PHYS_MAX;i++){PadPhys p{};pad_phys_poll(i,&p);g.pad_prev[i]=p.buttons;}InvalidateRect(g.hwnd,nullptr,FALSE);return;}
+    if(id==ID_HUD_RELOAD_KEY_CLEAR){g.s.reload_key=0;changed();return;}
+    if(id==ID_HUD_RELOAD_BUTTON_CLEAR){g.s.reload_button=-1;changed();return;}
+    if(id==ID_HUD_RELOAD_RESET){g.s.reload_key='R';g.s.reload_button=g.s.region_selected==2?PB_L3:PB_EAST;changed();return;}
     if (id >= ID_NAV && id < ID_NAV + P_COUNT) {
         g.page = (Page)(id - ID_NAV); g.cache_msg.clear(); g.log_msg.clear();
         if (g.page == P_PATCHES) scan_patch_dir();   /* the folder may have new files */
         if (g.page == P_MODS) g.tex_rep = -1;        /* count the textures again */
     }
     else if (id >= ID_PATCH && id < ID_PATCH + NPATCHES) { g.s.patch[id - ID_PATCH] ^= true; changed(); }
-    else if (id == ID_DD_SHADOWS || id == ID_DD_GAME_TEXT || id == ID_DD_TROPHY_CORNER || id == ID_DD_TROPHY_FILTER || id == ID_DD_FILM || id == ID_DD_MODE || id == ID_DD_RES || id == ID_DD_AA || id == ID_DD_FPS || id == ID_DD_POSE_DEVICE || id == ID_DD_FRAME_GEN || id == ID_DD_VSYNC || id == ID_DD_SHARP || id == ID_DD_LANG || id==ID_DD_SRT_ENEMIES || id==ID_DD_SRT_CORNER || id==ID_DD_SRT_LANGUAGE || id == ID_DD_OV_CORNER || id == ID_DD_OV_LAYOUT || id == ID_DD_OV_SIZE || id == ID_DD_OV_BG || id == ID_DD_SRT_INVPOS || id == ID_DD_SRT_WINDOW || id == ID_DD_SRT_BOSSBAR) {
+    else if (id == ID_DD_MANUAL_RELOAD || id == ID_DD_COMBAT_HUD || id == ID_DD_SHADOWS || id == ID_DD_GAME_TEXT || id == ID_DD_TROPHY_CORNER || id == ID_DD_TROPHY_FILTER || id == ID_DD_FILM || id == ID_DD_MODE || id == ID_DD_RES || id == ID_DD_AA || id == ID_DD_FPS || id == ID_DD_POSE_DEVICE || id == ID_DD_FRAME_GEN || id == ID_DD_VSYNC || id == ID_DD_SHARP || id == ID_DD_LANG || id==ID_DD_SRT_ENEMIES || id==ID_DD_SRT_CORNER || id==ID_DD_SRT_LANGUAGE || id == ID_DD_OV_CORNER || id == ID_DD_OV_LAYOUT || id == ID_DD_OV_SIZE || id == ID_DD_OV_BG || id == ID_DD_SRT_INVPOS || id == ID_DD_SRT_WINDOW || id == ID_DD_SRT_BOSSBAR) {
         g.open_dd = id; g.dd_scroll = 0;
         if (id == ID_DD_LANG && g_lang_pick >= 0)   /* open with the chosen language in view */
             for (int i = 0; i < LANG_COUNT; i++)
@@ -3423,6 +3529,7 @@ int logical_y(int y){RECT c{};GetClientRect(g.hwnd,&c);return int(double(y)*H/st
 LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp)
 {
     switch (m) {
+    case WM_APP+450:{int pins[4];for(int d=0;d<4;d++){pins[d]=int((uint32_t(wp)>>(d*8))&255)-1;if(pins[d]!=-1&&!cv_quick::equipable(pins[d]))return 0;}for(int d=0;d<4;d++)g.s.quick.items[d]=pins[d];save_settings(g.s);InvalidateRect(h,nullptr,FALSE);return 0;}
     case WM_PC_SETTINGS_READ: return g.s.mode | (g.s.res << 4) | (g.s.aa << 8) | ((g.s.brightness + 80) << 10) | ((g.s.contrast - 50) << 18);
     case WM_PC_SETTINGS_READ_SATURATION: return g.s.saturation;
     case WM_PC_SETTINGS_READ_EFFECTS: return g.s.sharpness;
@@ -3439,6 +3546,8 @@ LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp)
         else if(wp==9&&lp>=0&&lp<=100)g.s.sfx_volume=int(lp);
         else if(wp==10&&lp>=0&&lp<=1)g.s.battle_unlocked=lp!=0;
         else if(wp==11&&lp>=0&&lp<=1)g.s.film_filter=lp!=0;
+        else if(wp==14&&lp>=0&&lp<=1)g.s.manual_reload=lp!=0;
+        else if(wp==13&&lp>=0&&lp<=1)g.s.combat_hud=lp!=0;
         else if(wp==12&&lp>=0&&lp<=1)g.s.dynamic_shadows=lp!=0;
         else return 0;
         save_settings(g.s); KillTimer(h, 2); apply_live(false);
@@ -3536,6 +3645,12 @@ LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp)
             else if (wp == VK_RETURN && g_upd.step == UPD_OFFER) click(ID_UPD_INSTALL);
             return 0;
         }
+        if(g.cap==CAP_QUICK_EDIT_KEY||g.cap==CAP_QUICK_CONFIRM_KEY){if(wp==VK_ESCAPE){g.cap=CAP_NONE;InvalidateRect(h,nullptr,FALSE);return 0;}const int vk=vk_from_msg(wp,lp);if(g.cap==CAP_QUICK_EDIT_KEY)g.s.quick.edit_key=vk;else g.s.quick.confirm_key=vk;g.cap=CAP_NONE;changed();return 0;}
+        if((g.cap==CAP_QUICK_EDIT_BTN||g.cap==CAP_QUICK_CONFIRM_BTN)&&wp==VK_ESCAPE){g.cap=CAP_NONE;InvalidateRect(h,nullptr,FALSE);return 0;}
+        if(g.cap==CAP_QUICK_KEY||g.cap==CAP_QUICK_DIR){if(wp==VK_ESCAPE){g.cap=CAP_NONE;InvalidateRect(h,nullptr,FALSE);return 0;}const int vk=vk_from_msg(wp,lp);if(g.cap==CAP_QUICK_KEY)g.s.quick.key=vk;else if(g.cap_slot>=0&&g.cap_slot<4)g.s.quick.keys[g.cap_slot]=vk;g.cap=CAP_NONE;changed();return 0;}
+        if(g.cap==CAP_QUICK_BTN&&wp==VK_ESCAPE){g.cap=CAP_NONE;InvalidateRect(h,nullptr,FALSE);return 0;}
+        if(g.cap==CAP_RELOAD_KEY){if(wp==VK_ESCAPE){g.cap=CAP_NONE;InvalidateRect(h,nullptr,FALSE);return 0;}g.s.reload_key=vk_from_msg(wp,lp);g.cap=CAP_NONE;changed();return 0;}
+        if(g.cap==CAP_RELOAD_BTN&&wp==VK_ESCAPE){g.cap=CAP_NONE;InvalidateRect(h,nullptr,FALSE);return 0;}
         if (g.cap == CAP_KEY) {
             if (wp == VK_ESCAPE) { g.cap = CAP_NONE; InvalidateRect(h, NULL, FALSE); return 0; }
             int vk = vk_from_msg(wp, lp);
@@ -3638,6 +3753,12 @@ LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp)
         }
         s_shortcut_xbox=kind==PAD_KIND_XINPUT;
         g.pad_status = st; g.pad_count = cnt; g.pad_kind = kind;
+        if((g.cap==CAP_QUICK_EDIT_KEY||g.cap==CAP_QUICK_CONFIRM_KEY)&&GetTickCount64()-g.cap_since>10000){g.cap=CAP_NONE;redraw=true;}
+        if(g.cap==CAP_QUICK_EDIT_BTN||g.cap==CAP_QUICK_CONFIRM_BTN){for(int i=0;i<PAD_PHYS_MAX;i++){PadPhys p{};pad_phys_poll(i,&p);uint32_t pressed=p.buttons&~g.pad_prev[i];g.pad_prev[i]=p.buttons;for(int b=0;b<PB_COUNT;b++)if(pressed&(1u<<b)){if(g.cap==CAP_QUICK_EDIT_BTN)g.s.quick.edit_button=b;else g.s.quick.confirm_button=b;g.cap=CAP_NONE;changed();return 0;}}if(GetTickCount64()-g.cap_since>10000){g.cap=CAP_NONE;redraw=true;}}
+        if((g.cap==CAP_QUICK_KEY||g.cap==CAP_QUICK_DIR)&&GetTickCount64()-g.cap_since>10000){g.cap=CAP_NONE;redraw=true;}
+        if(g.cap==CAP_QUICK_BTN){for(int i=0;i<PAD_PHYS_MAX;i++){PadPhys p{};pad_phys_poll(i,&p);uint32_t pressed=p.buttons&~g.pad_prev[i];g.pad_prev[i]=p.buttons;for(int b=0;b<PB_COUNT;b++)if(pressed&(1u<<b)){g.s.quick.button=b;g.cap=CAP_NONE;changed();return 0;}}if(GetTickCount64()-g.cap_since>10000){g.cap=CAP_NONE;redraw=true;}}
+        if(g.cap==CAP_RELOAD_KEY&&GetTickCount64()-g.cap_since>10000){g.cap=CAP_NONE;redraw=true;}
+        if(g.cap==CAP_RELOAD_BTN){for(int i=0;i<PAD_PHYS_MAX;i++){PadPhys p{};pad_phys_poll(i,&p);uint32_t pressed=p.buttons&~g.pad_prev[i];g.pad_prev[i]=p.buttons;for(int b=0;b<PB_COUNT;b++)if(pressed&(1u<<b)){g.s.reload_button=b;g.cap=CAP_NONE;changed();return 0;}}if(GetTickCount64()-g.cap_since>10000){g.cap=CAP_NONE;redraw=true;}}
         if (g.cap == CAP_BTN) {
             for (int i = 0; i < PAD_PHYS_MAX; i++) {
                 PadPhys p; pad_phys_poll(i, &p);
@@ -3866,8 +3987,8 @@ void start_game()
     set_env("CV_PTBR_ASSET_ROOT",s.game_text_ptbr?narrow(text_root.wstring()):"");
     /* Match the tested normal CMD when opening the executable directly.
      * An explicit compiler override remains available to diagnostic launchers. */
-    const char* compiler_env=std::getenv("SHADER_COMPILER");
-    if(!compiler_env||!*compiler_env)set_env("SHADER_COMPILER","dxc");
+    set_env("SHADER_COMPILER",s.shader_compiler?"fxc":"dxc");
+    std::fprintf(stderr,"[SUPPORT-SHADERS] requested=%s; change requires restart; separate compiler caches\n",s.shader_compiler?"fxc":"dxc");
     /* SPU task threads are reused instead of one CreateThread per task
      * (~2000 tasks/s in the heavy JP room): ~50 -> ~53 real FPS uncapped.
      * An explicit SPU_TASK_POOL=0 still selects the old detached threads. */
@@ -3980,7 +4101,7 @@ DWORD WINAPI launcher_thread(void*)
     GdiplusStartupInput gsi; ULONG_PTR gtok;
     GdiplusStartup(&gtok, &gsi, NULL);
     g.s = load_settings();
-    cv_enhanced_set(8,g.s.music_volume);cv_enhanced_set(9,g.s.sfx_volume);cv_enhanced_set(10,g.s.battle_unlocked);cv_enhanced_set(11,g.s.film_filter);cv_enhanced_set(12,g.s.dynamic_shadows);
+    cv_enhanced_set(8,g.s.music_volume);cv_enhanced_set(9,g.s.sfx_volume);cv_enhanced_set(10,g.s.battle_unlocked);cv_enhanced_set(11,g.s.film_filter);cv_enhanced_set(12,g.s.dynamic_shadows);cv_enhanced_set(13,g.s.combat_hud);cv_enhanced_set(14,g.s.manual_reload);cv_manual_reload_bindings_set(g.s.reload_key,g.s.reload_button);cv_quick::configure(g.s.quick);
     init_social_links();
     for(int i=0;i<2;i++)g.social_urls[i]=social_url(i);
     cv_test_tools_enable(g.s.test_tools);
@@ -4112,6 +4233,22 @@ extern "C" int cv_pc_settings_effects_read(void)
     }
     return cv_pc_fallback_effects;
 }
+extern "C" void cv_quick_pins_save(uint32_t packed){
+ if(g.hwnd&&PostMessageW(g.hwnd,WM_APP+450,WPARAM(packed),0))return;
+ for(int d=0;d<4;d++){auto key=L"atalhos_item_"+std::to_wstring(d);const int id=int((packed>>(d*8))&255)-1;ini_set(L"jogo",key.c_str(),std::to_wstring(id));}
+}
+extern "C" void cv_pc_settings_quick_read(void){auto settings=load_settings();cv_quick::configure(settings.quick);}
+extern "C" void cv_pc_settings_reload_bindings_read(void){
+ const int key=std::clamp(_wtoi(ini_get(L"jogo",L"recarga_tecla",L"82").c_str()),0,255);
+#ifdef CV_REGION_JP
+ const wchar_t* fallback=L"8";
+#else
+ const wchar_t* fallback=L"1";
+#endif
+ const int button=std::clamp(_wtoi(ini_get(L"jogo",L"recarga_botao",fallback).c_str()),-1,PB_COUNT-1);cv_manual_reload_bindings_set(key,button);
+}
+extern "C" int cv_pc_settings_reload_read(void){return _wtoi(ini_get(L"jogo",L"recarga_manual",L"0").c_str())!=0;}
+extern "C" int cv_pc_settings_hud_read(void){return _wtoi(ini_get(L"jogo",L"hud_combate",L"0").c_str())!=0;}
 extern "C" int cv_pc_settings_shadows_read(void){
  if(g.hwnd&&IsWindow(g.hwnd))return cv_enhanced_get(12);
  return _wtoi(ini_get(L"tela",L"sombras_dinamicas",L"1").c_str())!=0;
@@ -4123,10 +4260,12 @@ extern "C" int cv_pc_settings_film_read(void){
 }
 extern "C" void cv_pc_settings_change(int which,int value)
 {
-    static const int maximum[]={4,2,2,160,130,200,100,4,100,100,1,1,1};
+    static const int maximum[]={4,2,2,160,130,200,100,4,100,100,1,1,1,1,1};
     if(which==7)return; // Prevent stale callers from re-enabling retired anisotropy.
-    if (which<0 || which>=13 || value<0 || value>maximum[which] || (which==6 && value%10!=0)) return;
+    if (which<0 || which>=15 || value<0 || value>maximum[which] || (which==6 && value%10!=0)) return;
     if (g.hwnd && IsWindow(g.hwnd)) { SendMessageW(g.hwnd,WM_PC_SETTINGS_CHANGE,WPARAM(which),LPARAM(value)); return; }
+    if(which==14){cv_enhanced_set(14,value);ini_set(L"jogo",L"recarga_manual",std::to_wstring(value));return;}
+    if(which==13){cv_enhanced_set(13,value);ini_set(L"jogo",L"hud_combate",std::to_wstring(value));return;}
     if(which==12){cv_enhanced_set(12,value);ini_set(L"tela",L"sombras_dinamicas",std::to_wstring(value));return;}
     if(which==11){cv_enhanced_set(11,value);ini_set(L"tela",L"filtro_filme",std::to_wstring(value));return;}
     if(which>=8){cv_enhanced_set(which,value);ini_set(which==10?L"extras":L"audio",which==8?L"musica":which==9?L"efeitos":L"battle_game",std::to_wstring(value));return;}

@@ -191,6 +191,18 @@ static void pad_map_load(void)
 /* A launcher's options menu, while the game runs: new mapping (applies on the
  * next poll) and input hold-off while the menu has the focus. */
 int g_pad_block;
+static volatile LONG cv_hud_bits,cv_hud_tick,cv_reload_raw,cv_reload_raw_tick;
+#include "pad_gameplay_filters.h"
+static int (*s_gameplay_key_filter)(int);
+static unsigned (*s_gameplay_button_filter)(unsigned);
+static int (*s_gameplay_right_stick_filter)(void);
+void cellpad_gameplay_filters_set(int (*key)(int),unsigned (*buttons)(unsigned),int (*right_stick)(void)){
+    s_gameplay_key_filter=key;s_gameplay_button_filter=buttons;s_gameplay_right_stick_filter=right_stick;
+}
+static volatile LONG cv_quick_axes;
+uint32_t cv_quick_select_stick(void){return GetTickCount()-(DWORD)InterlockedCompareExchange(&cv_reload_raw_tick,0,0)<250?(uint32_t)InterlockedCompareExchange(&cv_quick_axes,0,0):0x8080;}
+uint32_t cv_manual_reload_physical_buttons(void){return GetTickCount()-(DWORD)InterlockedCompareExchange(&cv_reload_raw_tick,0,0)<250?(uint32_t)InterlockedCompareExchange(&cv_reload_raw,0,0):0;}
+uint32_t cv_combat_hud_pad(void){DWORD now=GetTickCount();return now-(DWORD)InterlockedCompareExchange(&cv_hud_tick,0,0)<250?(uint32_t)InterlockedCompareExchange(&cv_hud_bits,0,0):0;}
 int g_pad_shortcut_chords; /* opt-in by the title launcher */
 #include "pad_shortcut_gate.h"
 void cellpad_set_map(const int* btn, const int* key)   /* [PA_COUNT][PAD_BTN_SLOTS], [PA_COUNT][PAD_KEY_SLOTS] */
@@ -247,7 +259,7 @@ static void pad_poll_keyboard(void)
     const unsigned reserved=pad_keyboard_reserved_keys();
     for (int a = 0; a < PA_COUNT; a++)
         for (int k = 0; k < PAD_KEY_SLOTS; k++)
-            if (s_map_key[a][k] > 0 && pad_keyboard_key_down(reserved,(unsigned)s_map_key[a][k],GetAsyncKeyState(s_map_key[a][k]) & 0x8000)) btns |= k_action_bit[a];
+            if (s_map_key[a][k] > 0 && (!s_gameplay_key_filter || !s_gameplay_key_filter(s_map_key[a][k])) && pad_keyboard_key_down(reserved,(unsigned)s_map_key[a][k],GetAsyncKeyState(s_map_key[a][k]) & 0x8000)) btns |= k_action_bit[a];
     if (!hs->connected) {   /* no controller: the keyboard is the whole pad */
         hs->buttons = 0;
         hs->analog_lx = hs->analog_ly = hs->analog_rx = hs->analog_ry = 128;
@@ -304,6 +316,7 @@ static void pad_poll_xinput(void)
             hs->trigger_l2 = hs->trigger_r2 = 0;
             continue;
         }
+        if(i==0){InterlockedExchange(&cv_quick_axes,(LONG)(0x10000|p.rx|(p.ry<<8)));InterlockedExchange(&cv_reload_raw,(LONG)p.buttons);InterlockedExchange(&cv_reload_raw_tick,(LONG)GetTickCount());}
         hs->connected = 1;
         if (g_pad_shortcut_chords && pad_shortcut_gate(&shortcut_held[i],p.buttons)) {
             /* Launcher polls the unmodified physical state independently. */
@@ -314,6 +327,7 @@ static void pad_poll_xinput(void)
             if(p.buttons)s_last_input=p.kind;
             continue;
         }
+        if(s_gameplay_button_filter)p.buttons=s_gameplay_button_filter(p.buttons);if(s_gameplay_right_stick_filter&&s_gameplay_right_stick_filter())p.rx=p.ry=128;
         u16 btns = 0;
         for (int a = 0; a < PA_COUNT; a++)
             for (int k = 0; k < PAD_BTN_SLOTS; k++)
@@ -888,6 +902,7 @@ skip_inject: ;
     }  /* end connected block */
 
 emit:
+    if(port_no==0){InterlockedExchange(&cv_hud_bits,(LONG)((data->button[CELL_PAD_BTN_OFFSET_DIGITAL2]<<8)|data->button[CELL_PAD_BTN_OFFSET_DIGITAL1]));InterlockedExchange(&cv_hud_tick,(LONG)GetTickCount());}
     /* A non-zero len means "here is a CHANGE packet" -- the constant is literally
      * named CELL_PAD_LEN_CHANGE_DEFAULT. Hardware reports len = 0 once the port
      * has nothing new, and titles DRAIN on that: The Simpsons Arcade Game's

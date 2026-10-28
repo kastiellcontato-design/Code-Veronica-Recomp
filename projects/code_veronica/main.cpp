@@ -34,14 +34,26 @@
 #include "cv_version.h"
 #include "cv_enhanced_settings.h"
 #include "cv_srt.h"
+#include "cv_combat_hud.h"
+#include "cv_manual_reload.h"
+#include "cv_quick_select.h"
+#include "../../libs/input/pad_gameplay_filters.h"
+static int cv_gameplay_filter_key(int key){return cv_manual_reload_key_consumed(key)||cv_quick::key_consumed(key);}
+static unsigned cv_gameplay_filter_buttons(unsigned buttons){return cv_quick::filter_buttons(cv_manual_reload_filter_buttons(buttons));}
+static int cv_gameplay_filter_stick(){return cv_quick::consumes_stick();}
+
+extern "C" int cv_pc_settings_hud_read(void);
+extern "C" int cv_pc_settings_reload_read(void);
+extern "C" void cv_pc_settings_reload_bindings_read(void);
+extern "C" void cv_pc_settings_quick_read(void);
 
 /* The Win32 names -- Sleep, GetTickCount64, CreateThread, InterlockedIncrement,
  * VirtualAlloc, the scalar typedefs -- from one place. On Windows this is a
  * passthrough to <windows.h>; off Windows the toolkit's shim supplies the same
  * names over pthreads and mmap, so the call sites below are written once. */
 #include "win32_compat.h"
-#include "../../libs/video/rsx_fifo_idle.h"
-#include "../../libs/video/rsx_fifo_probe.h"
+#include "D:\ps3recomp\libs/video/rsx_fifo_idle.h"
+#include "D:\ps3recomp\libs/video/rsx_fifo_probe.h"
 #include "host_thread_name.h"
 
 #include <stdint.h>
@@ -523,7 +535,8 @@ int main(int argc, char** argv)
       } }
     /* Xbox button icons: the game's own Xbox 360 art, swapped in per archive. */
     cv_button_icons_init();
-    g_rsx_srt_hook = cv_srt_quads;
+    cellpad_gameplay_filters_set(cv_gameplay_filter_key,cv_gameplay_filter_buttons,cv_gameplay_filter_stick);
+    g_rsx_srt_hook = cv_combat_hud_quads;
     g_rsx_srt_sprites_hook = cv_srt_sprites;
     /* The switchable sites lifted into this build (projects/code_veronica/
      * patches.json, this version's sites): a patch file with the same write
@@ -577,6 +590,10 @@ int main(int argc, char** argv)
 #pragma comment(lib, "winmm.lib")
     cv_enhanced_set(11,cv_pc_settings_film_read());
     cv_enhanced_set(12,cv_pc_settings_shadows_read());
+    cv_enhanced_set(13,cv_pc_settings_hud_read());
+    cv_pc_settings_quick_read();
+    cv_pc_settings_reload_bindings_read();
+    cv_enhanced_set(14,cv_pc_settings_reload_read());
     cv_enhanced_apply_startup();
     derive_vfs_root(eboot_path.c_str());
     const char* trophy_root=ppu_vfs_root;

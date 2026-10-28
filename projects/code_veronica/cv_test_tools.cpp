@@ -16,6 +16,8 @@
 #include "cv_launcher_controls.h"
 #include "cv_test_tools_i18n.h"
 #include "cv_items.h"
+#include "cv_manual_reload.h"
+#include "cv_quick_select.h"
 #ifdef _WIN32
 #include <commctrl.h>
 #include <dwmapi.h>
@@ -478,6 +480,8 @@ void cv_test_tools_show(HWND owner,const std::wstring& game,int lang,int opening
 }
 void TEST_FRAME(ppu_context* ctx) {
     cv_save_library_frame(ctx,enabled&&active_game()&&!tool_load&&!tool_save);
+    cv_quick::frame(ctx);
+    if(!cv_quick::consumes_stick())cv_manual_reload_frame(ctx);
     cv_items::frame();   // the F6 item menu's one write, between game frames
     if(enabled) {
         bool valid=active_game()&&!tool_load;ready=valid;

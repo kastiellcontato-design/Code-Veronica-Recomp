@@ -14,7 +14,7 @@ static HWND menu_foreground(){return keyboard_focused?reinterpret_cast<HWND>(1):
 
 static std::array<unsigned char, 16 * 1024 * 1024> memory;
 static std::array<int,8> settings={4,2,1,160,0,0,70,4};
-static std::array<int,5> enhanced={100,100,0,1,1};
+static std::array<int,7> enhanced={100,100,0,1,1,0,0};
 static int language=1,device=100;
 static PadPhys test_pad{};
 static int test_360_layout=-1;
@@ -86,12 +86,14 @@ std::filesystem::path appearance_system_directory(const std::filesystem::path& p
 }
 int main(){
  ppu_context ctx{};ctx.gpr[1]=0x8000;CV_FN_MENU_RESET(&ctx);pc_open=true;pc_tab=0;pc_row=8;read_settings();
- assert(kSettingCount==9&&values[7]==1&&values[8]==1);
+ assert(kSettingCount==11&&values[7]==1&&values[8]==1);
  auto press=[&](unsigned input,unsigned repeat){ctx.gpr[3]=0;ctx.gpr[4]=1;vm_write32(kInput,input);vm_write32(kRepeat,repeat);CV_FN_MENU_INPUT(&ctx);};
  press(0,kRight);assert(enhanced[3]==0&&changes.back()==std::make_pair(11,0));
  press(0,kLeft);assert(enhanced[3]==1&&changes.back()==std::make_pair(11,1));
  pc_row=9;press(0,kRight);assert(enhanced[4]==0&&changes.back()==std::make_pair(12,0));
  press(0,kLeft);assert(enhanced[4]==1&&changes.back()==std::make_pair(12,1));
+ pc_row=10;press(0,kRight);assert(enhanced[5]==1&&changes.back()==std::make_pair(13,1));press(0,kLeft);
+ pc_row=11;press(0,kRight);assert(enhanced[6]==1&&changes.back()==std::make_pair(14,1));press(0,kLeft);
  for(int row=1;row<=kSettingCount;row++){
   pc_row=row;press(0,kRight);assert(changes.back().first!=7);draw_settings(&ctx);
  }

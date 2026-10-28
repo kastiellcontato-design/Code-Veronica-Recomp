@@ -59,9 +59,9 @@ int pc_row=0;
 cv_appearance::AppearancePreview appearance_preview;
 bool appearance_assets_attempted=false;
 unsigned appearance_choice=0;
-constexpr int kSettingCount=9, kResetColorsRow=kSettingCount+1;
+constexpr int kSettingCount=11, kResetColorsRow=kSettingCount+1;
 constexpr int kBackRow=kResetColorsRow+1, kPcRowCount=kBackRow+1;
-std::array<int,kSettingCount> values={1,0,0,80,50,100,0,1,1}; // neutral brightness, contrast and saturation
+std::array<int,kSettingCount> values={1,0,0,80,50,100,0,1,1,0,0}; // neutral brightness, contrast and saturation
 int pc_adjust_direction=0;
 ULONGLONG pc_adjust_started=0;
 
@@ -105,7 +105,7 @@ void sound(const ppu_context* caller,int id) {
 }
 void read_settings() {
     const int packed=cv_pc_settings_read(),effects=cv_pc_settings_effects_read();
-    values={ (packed>>4)&7, (packed>>8)&3, packed&3, (packed>>10)&255, (packed>>18)&255, cv_pc_settings_saturation_read(), effects&127,cv_enhanced_get(11),cv_enhanced_get(12) };
+    values={ (packed>>4)&7, (packed>>8)&3, packed&3, (packed>>10)&255, (packed>>18)&255, cv_pc_settings_saturation_read(), effects&127,cv_enhanced_get(11),cv_enhanced_get(12),cv_enhanced_get(13),cv_enhanced_get(14) };
     values[0]=std::clamp(values[0],0,4); values[1]=std::clamp(values[1],0,2); values[2]=std::clamp(values[2],0,2);
     values[3]=std::clamp(values[3],0,160); values[4]=std::clamp(values[4],0,130); values[5]=std::clamp(values[5],0,200);
     values[6]=std::clamp(values[6],0,100)/10*10;
@@ -242,7 +242,7 @@ void draw_settings(const ppu_context* caller) {
     draw_tabs(batch);
     if(pc_tab){draw_extra(batch);batch.submit(caller);auto work=call_context(caller);invoke(&work,CV_FN_MENU_FRAME);return;}
     using namespace cv_enhanced_text;
-    const std::string labels[]={tr(Resolution),tr(AA),tr(Mode),tr(Brightness),tr(Contrast),tr(Saturation),tr(Sharpness),tr(FilmFilter),tr(DynamicShadows),tr(Reset),tr(Back)};
+    const std::string labels[]={tr(Resolution),tr(AA),tr(Mode),tr(Brightness),tr(Contrast),tr(Saturation),tr(Sharpness),tr(FilmFilter),tr(DynamicShadows),tr(CombatHUD),tr(ManualReload),tr(Reset),tr(Back)};
     char brightness[24],contrast[24],saturation[24],sharpness[24];
     std::snprintf(brightness,sizeof brightness,"%+d%%",-80+values[3]);
     std::snprintf(contrast,sizeof contrast,"%d%%",50+values[4]);
@@ -250,7 +250,7 @@ void draw_settings(const ppu_context* caller) {
     if(values[6])std::snprintf(sharpness,sizeof sharpness,"%d%%",values[6]);
     else std::snprintf(sharpness,sizeof sharpness,"%s",off.c_str());
     const std::string on=tr(On);
-    const char* current[]={resolution[values[0]],aa[values[1]],mode[values[2]],brightness,contrast,saturation,sharpness,values[7]?on.c_str():off.c_str(),values[8]?on.c_str():off.c_str()};
+    const char* current[]={resolution[values[0]],aa[values[1]],mode[values[2]],brightness,contrast,saturation,sharpness,values[7]?on.c_str():off.c_str(),values[8]?on.c_str():off.c_str(),values[9]?on.c_str():off.c_str(),values[10]?on.c_str():off.c_str()};
     if(!appearance_assets_attempted) {
         appearance_assets_attempted=true;
         const char* root=std::getenv("PS3_VFS_ROOT");
@@ -276,7 +276,7 @@ void draw_settings(const ppu_context* caller) {
     appearance_preview.select(appearance_choice);
     appearance_preview.append(batch.quads,384,125,240,280);
     batch.text(appearance_preview.error().empty()?tr(cv_enhanced_text::Preview):tr(cv_enhanced_text::NoPreview),504,408,0xCFDCCEB1,.47f,true);
-    batch.text(pc_row==8?tr(RestartApply):pc_row==9?tr(ShadowHelp):cv_appearance::status(),320,425,0xCFDCCEB1,.40f,true);
+    batch.text(pc_row==8?tr(RestartApply):pc_row==9?tr(ShadowHelp):pc_row==10?tr(HUDHelp):pc_row==11?tr(ReloadHelp):cv_appearance::status(),320,425,0xCFDCCEB1,.40f,true);
     batch.text(tr(cv_enhanced_text::Adjust),320,443,0xBFCFCFCF,.53f,true);
     batch.submit(caller);
     auto work=call_context(caller);invoke(&work,CV_FN_MENU_FRAME);

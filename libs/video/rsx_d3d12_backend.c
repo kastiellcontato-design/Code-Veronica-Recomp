@@ -3739,7 +3739,8 @@ static BOOL CALLBACK shader_compiler_init(PINIT_ONCE once, PVOID arg, PVOID* con
         snprintf(s_shader_cache_dir, sizeof s_shader_cache_dir, "shader_cache/lighter-probe1");
     const char* requested = getenv("SHADER_COMPILER");
     if (!requested || _stricmp(requested, "dxc")) {
-        fprintf(stderr, "[SHADER] compiler: FXC (default)%c", 10);
+        snprintf(s_shader_cache_dir,sizeof s_shader_cache_dir,"shader_cache/fxc-compat1");
+        fprintf(stderr, "[SHADER] compiler: FXC (compatibility); cache=%s%c",s_shader_cache_dir,10);
         return TRUE;
     }
     D3D12_FEATURE_DATA_SHADER_MODEL model = { D3D_SHADER_MODEL_6_0 };

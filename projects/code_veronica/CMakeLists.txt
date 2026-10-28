@@ -233,6 +233,9 @@ add_executable(${PROJECT_NAME}
     launcher.cpp
     cv_texture_export.cpp
     cv_srt.cpp
+    cv_combat_hud.cpp
+    cv_manual_reload.cpp
+    cv_quick_select.cpp
     cv_srt_data.cpp
     cv_cheats.cpp
     cv_enhanced_settings.cpp
@@ -853,4 +856,15 @@ if(WIN32)
  set_target_properties(code_veronica_translation_patch_tests PROPERTIES CXX_STANDARD 20)
  target_compile_options(code_veronica_translation_patch_tests PRIVATE /UNDEBUG)
  target_link_libraries(code_veronica_translation_patch_tests PRIVATE bcrypt)
+endif()
+
+# HUD artwork is independent of the original inventory/SRT atlas.
+add_custom_command(TARGET MyGameRecomp POST_BUILD
+ COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_CURRENT_SOURCE_DIR}/hud-weapons" "$<TARGET_FILE_DIR:MyGameRecomp>/assets/hud-weapons")
+
+# Regression for the HUD/inventory Caution mismatch, independent of a game dump.
+add_executable(code_veronica_hud_health_tests EXCLUDE_FROM_ALL tests/test_hud_health.cpp)
+target_include_directories(code_veronica_hud_health_tests PRIVATE "${PS3RECOMP_DIR}/libs/video")
+if(MSVC)
+ target_compile_options(code_veronica_hud_health_tests PRIVATE /UNDEBUG)
 endif()
