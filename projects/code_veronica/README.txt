@@ -1,3 +1,9 @@
+NEW IN v1.1.11
+Fixed the texture mods switch (F9): turning it off now returns to the original textures at once, and turning it on again brings them back, without restarting the game. Having the game text set to Portuguese no longer interferes.
+Fixed the name of the incendiary grenade in the Portuguese translation.
+Community HD texture pack (optional, separate download) for the US, EU and JP versions: see TEXTURAS-HD-COMUNIDADE.md on GitHub for credits and the download link. It is not part of this ZIP.
+Previous improvements are kept: optional modern controls, remappable analog sticks, HUD, manual reload and equipment shortcuts. No original game files, 3D models, saves or personal settings are bundled.
+
 NEW IN v1.1.10
 Optional modern movement relative to the fixed camera, retaining direction across camera cuts. Enable in game: Options > Recomp Settings > Gameplay > Movement style > Modern. Switch during gameplay; Classic remains the default and your choice is saved.
 Launcher Controls now includes four directions for each analog stick, with icons and keyboard/controller remapping. Modern mode walks at low stick tilt and automatically runs at higher tilt. Keyboard defaults: WASD for the left stick and arrow keys for the D-pad. The D-pad walks; keys assigned to the left stick simulate full tilt. Saved mappings are preserved; Restore defaults applies this new layout. The right stick is also remappable.

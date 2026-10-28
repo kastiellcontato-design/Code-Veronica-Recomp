@@ -57,6 +57,6 @@ def main():
         print(f'DONE {region}: {exe}',flush=True)
     results['Code Veronica.exe']=sha(OUT/'Code Veronica.exe')
     if kept!={n:sha(PORT/'build-release/bin'/n) for n in names}:raise RuntimeError('Local normal files changed')
-    (OUT/('build-result-'+next(iter(selected))+'.json' if len(selected)==1 else 'build-result.json')).write_text(json.dumps(dict(distribution=True,version='v1.1.10',executables=results,normal_preserved=kept),indent=2),encoding='utf-8')
+    (OUT/('build-result-'+next(iter(selected))+'.json' if len(selected)==1 else 'build-result.json')).write_text(json.dumps(dict(distribution=True,version='v1.1.11',executables=results,normal_preserved=kept),indent=2),encoding='utf-8')
     print('PASS: all three GUI distribution builds completed; normal local files unchanged',flush=True)
 if __name__=='__main__':main()

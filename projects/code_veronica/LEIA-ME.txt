@@ -1,3 +1,9 @@
+NOVIDADES DA v1.1.11
+Corrigido o liga/desliga das texturas (F9): ao desligar, as texturas voltam ao original na hora, e ao ligar de novo elas voltam, sem precisar reiniciar o jogo. Texto em português do jogo ligado não atrapalha mais.
+Corrigido o nome da granada incendiária na tradução em português.
+Pacote de texturas HD da comunidade (opcional, download separado) para as versões americana, europeia e japonesa: veja TEXTURAS-HD-COMUNIDADE.md no GitHub, com créditos e link. Não vem neste ZIP.
+Mantidas as melhorias anteriores: controle moderno opcional, análogicos remapeáveis, HUD, recarga manual e atalhos de equipamento. Não inclui arquivos originais do jogo, modelos 3D, saves ou configurações pessoais.
+
 NOVIDADES DA v1.1.10
 Controle moderno opcional, com movimento relativo à câmera fixa e continuidade da direção nos cortes. Ative dentro do jogo: Options > Recomp Settings > Jogabilidade > Estilo de movimento > Moderno. Pode alternar durante a partida; Clássico continua como padrão, e a escolha é salva.
 No launcher, Controles agora inclui as quatro direções de cada analógico, com ícones e mapeamento para teclado ou controle. No Moderno, pouca inclinação do analógico permite caminhar e inclinação maior corre automaticamente. Padrão do teclado: WASD no analógico esquerdo e setas no D-pad. O D-pad permite caminhar; teclas atribuídas ao analógico esquerdo simulam inclinação máxima. Os mapeamentos salvos são preservados; Restaurar padrões aplica esse novo esquema. O analógico direito também é configurável.
