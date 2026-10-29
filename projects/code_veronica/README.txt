@@ -1,5 +1,6 @@
 NEW IN v1.1.11
 Fixed the texture mods switch (F9): turning it off now returns to the original textures at once, and turning it on again brings them back, without restarting the game. Having the game text set to Portuguese no longer interferes.
+The in-game Modern movement option now says the gameplay is similar to Resident Evil HD Remaster and Resident Evil 0 HD Remaster. The in-game Recomp Settings menu follows the game text: Portuguese with the PT-BR translation on, English otherwise.
 Faster launcher when toggling options and switching tabs. Closing the game window brings the launcher back with your settings, so you can change them and play again; closing the launcher itself while the game runs quits everything.
 Fixed the name of the incendiary grenade in the Portuguese translation.
 Community HD texture pack (optional, separate download) for the US, EU and JP versions: see TEXTURAS-HD-COMUNIDADE.md on GitHub for credits and the download link. It is not part of this ZIP.

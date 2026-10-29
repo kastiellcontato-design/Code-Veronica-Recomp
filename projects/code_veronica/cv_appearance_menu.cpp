@@ -198,7 +198,10 @@ void draw_extra(cv_menu_text::TextBatch& batch){
   }else if(pc_tab==2&&row==0)batch.text("< "+tr(cv_enhanced_get(10)?On:Off)+" >",444,y,color,.64f,false,162);
   if(pc_tab==2&&row==1)batch.text("< "+modern_text(cv_modern_get()?2:1)+" >",444,y,color,.64f,false,162);
  }
- batch.text(pc_tab==2&&pc_row==1?modern_text(3):tr(pc_tab==1?MusicHelp:BattleHelp),320,386,0xCFDCCEB1,.51f,true,570);
+ if(pc_tab==2&&pc_row==1){   /* two lines: how it moves, and which games it follows */
+  batch.text(modern_text(3),320,363,0xCFDCCEB1,.51f,true,570);
+  batch.text(modern_text(4),320,386,0xCFDCCEB1,.51f,true,570);
+ }else batch.text(tr(pc_tab==1?MusicHelp:BattleHelp),320,386,0xCFDCCEB1,.51f,true,570);
  batch.text(tr(Adjust),320,417,0xBFCFCFCF,.5f,true);
 }
 bool extra_input(uint32_t input,uint32_t repeat){

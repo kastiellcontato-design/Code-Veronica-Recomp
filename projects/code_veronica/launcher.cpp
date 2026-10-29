@@ -201,7 +201,8 @@ void set_lang_pick(int pick)
 {
     g_lang_pick = pick;
     g_lang = pick < 0 ? system_lang() : pick;
-    cv_enhanced_language_set(g_lang);
+    /* The Recomp Settings menu inside the game does not follow this language:
+     * see refresh_game_menu_language(). */
 }
 std::wstring Tf(int id, int n)                   /* a text with one %d */
 {
@@ -3121,8 +3122,15 @@ void rumble_test()
     SetTimer(g.hwnd, 7, 400, NULL);
 }
 
+/* The game always runs with English as its system language; the only other
+ * text it shows is the PT-BR translation. The options added inside the game
+ * follow the same rule (Portuguese with the translation on, English
+ * otherwise, also on the Japanese version), not the launcher's language. */
+void refresh_game_menu_language() { cv_enhanced_language_set(g.s.game_text_ptbr ? 0 : 1); }
+
 void apply_live(bool restore_menu = true)
 {
+    refresh_game_menu_language();
     set_rumble_env();
     cv_trophies::options(g.s.trophies,g.s.trophy_notifications,g_lang);
     cv_trophy_popup::corner(g.s.trophy_corner);
@@ -4132,6 +4140,7 @@ void start_game()
     set_env_default("VP_NOFIXPROJ", "1");
     set_env_default("GCM_PARK_GRACE_MS", "5000");
     set_env_default("PS3_TITLE", "Resident Evil Code: Veronica X");
+    refresh_game_menu_language();
     g.running = true;
     g.applied_mode = s.mode; g.applied_res = s.res; g.applied_aa = s.aa;
     g_rsx_menu_hook = menu_hook;
@@ -4147,6 +4156,7 @@ DWORD WINAPI launcher_thread(void*)
     GdiplusStartupInput gsi; ULONG_PTR gtok;
     GdiplusStartup(&gtok, &gsi, NULL);
     g.s = load_settings();
+    refresh_game_menu_language();
     cv_enhanced_set(8,g.s.music_volume);cv_enhanced_set(9,g.s.sfx_volume);cv_enhanced_set(10,g.s.battle_unlocked);cv_enhanced_set(11,g.s.film_filter);cv_enhanced_set(12,g.s.dynamic_shadows);cv_enhanced_set(13,g.s.combat_hud);cv_enhanced_set(14,g.s.manual_reload);cv_manual_reload_bindings_set(g.s.reload_key,g.s.reload_button);cv_quick::configure(g.s.quick);
     init_social_links();
     for(int i=0;i<2;i++)g.social_urls[i]=social_url(i);

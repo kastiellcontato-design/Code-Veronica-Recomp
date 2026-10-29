@@ -3,6 +3,7 @@
 ## English
 
 - **Texture mods switch (F9) fixed:** turning the mod off now returns to the original textures at once, and turning it on again brings the mod textures back, without restarting the game. This also works when the game text is set to Brazilian Portuguese, which used to keep already-loaded mod textures on screen.
+- **Modern movement description:** the in-game option now says the gameplay is similar to Resident Evil HD Remaster and Resident Evil 0 HD Remaster. The Recomp Settings menu inside the game now follows the game text: Portuguese with the PT-BR translation on, English otherwise (also on the Japanese version), instead of the launcher language.
 - **Faster launcher:** turning options on or off and switching tabs no longer waits on the settings file being rewritten key by key (about 140 ms per click before, about 12 ms now), and the Mods tab no longer recounts a large texture folder on every visit.
 - **The launcher stays available after the game:** closing the game window brings the launcher back, with your settings, so you can change them and play again. Closing the launcher itself while the game runs still quits everything.
 - **Portuguese translation:** the incendiary grenade name is corrected in this package.
@@ -21,6 +22,7 @@ No original game files, game 3D models, saves or personal settings are bundled. 
 ## Português
 
 - **Liga/desliga das texturas (F9) corrigido:** ao desligar, as texturas voltam ao original na hora, e ao ligar de novo as do mod voltam, sem reiniciar o jogo. Também funciona com o texto do jogo em português do Brasil, que antes mantinha na tela as texturas do mod já carregadas.
+- **Descrição do movimento moderno:** a opção dentro do jogo agora diz que a jogabilidade é parecida com a de Resident Evil HD Remaster e Resident Evil 0 HD Remaster. O menu Recomp Settings dentro do jogo agora segue o texto do jogo: português com a tradução PT-BR ligada e inglês nos demais casos (também na versão japonesa), e não mais o idioma do launcher.
 - **Launcher mais rápido:** ligar e desligar opções e trocar de aba não espera mais o arquivo de configurações ser reescrito chave por chave (cerca de 140 ms por clique antes, cerca de 12 ms agora), e a aba Mods não recalcula mais uma pasta grande de texturas a cada visita.
 - **O launcher continua disponível depois do jogo:** ao fechar a janela do jogo, o launcher volta, com as suas configurações, para você mudar e jogar de novo. Fechar o próprio launcher durante o jogo ainda fecha tudo.
 - **Tradução em português:** o nome da granada incendiária está corrigido neste pacote.
