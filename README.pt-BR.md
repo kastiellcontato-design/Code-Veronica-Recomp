@@ -18,16 +18,17 @@ Rejogue a versão de PS3 no PC. Treine rotas com SRT nativo, seleção de salas 
 > [!IMPORTANT]
 > **Nenhum arquivo do jogo está incluído.** Este repositório e os seus lançamentos trazem só o port: nenhum dado do jogo, nenhum executável do jogo e nenhum código gerado a partir dele. Você precisa ter a **sua própria cópia original** do jogo de PS3 (versão da PSN). *Resident Evil*, *Code: Veronica* e todos os nomes, personagens e imagens relacionados são marcas e direitos autorais da **Capcom**. Este é um projeto de fã. Ele **não tem ligação com a Capcom nem com a Sony Interactive Entertainment, nem é autorizado ou endossado por elas**.
 
-## Downloads — v1.1.10
+## Downloads — v1.1.11
 
-Modo moderno opcional no estilo de **Resident Evil HD Remaster** e **Resident Evil 0 HD Remaster**, com analógicos configuráveis. Novo padrão do teclado: **WASD no analógico esquerdo e setas no D-pad**. Ative em **Recomp Settings → Jogabilidade → Estilo de movimento**; Clássico continua como padrão. Configurações salvas são preservadas; use **Restaurar padrões** para aplicar o novo esquema.
+Novidades da v1.1.11: um **pacote de texturas HD** pronto (imagens em 4K de **ewgeha**, **SonicB00M** e **JuanchoTexHD**, adaptadas para este projeto por Kastiel) para as versões americana, europeia e japonesa, com os créditos em [TEXTURAS-HD-COMUNIDADE.md](projects/code_veronica/TEXTURAS-HD-COMUNIDADE.md); um **launcher mais rápido** que agora **volta quando você fecha a janela do jogo**; o **liga/desliga das texturas (F9) corrigido**; e a opção de movimento moderno agora informa que a jogabilidade é parecida com a de Resident Evil HD Remaster e Resident Evil 0 HD Remaster. Modo moderno opcional no estilo de **Resident Evil HD Remaster** e **Resident Evil 0 HD Remaster**, com analógicos configuráveis. Novo padrão do teclado: **WASD no analógico esquerdo e setas no D-pad**. Ative em **Recomp Settings → Jogabilidade → Estilo de movimento**; Clássico continua como padrão. Configurações salvas são preservadas; use **Restaurar padrões** para aplicar o novo esquema.
 
-[**RE Code Veronica Recomp Release v1.1.10**](https://github.com/kastieloficial/RE-Code-Veronica-PS3-HD-Recomp-PC/releases/tag/v1.1.10)
+[**RE Code Veronica Recomp Release v1.1.11**](https://github.com/kastieloficial/RE-Code-Veronica-PS3-HD-Recomp-PC/releases/tag/v1.1.11)
 
 | Download | Conteúdo |
 |---|---|
-| [CodeVeronica-PC-v1.1.10.zip](https://github.com/kastieloficial/RE-Code-Veronica-PS3-HD-Recomp-PC/releases/download/v1.1.10/CodeVeronica-PC-v1.1.10.zip) | Port para Windows com launcher e suporte EU/JP/US. Extraia tudo e abra **Code Veronica.exe**. |
-| [Veronica-PKG-Extractor-v1.0.1.zip](https://github.com/kastieloficial/RE-Code-Veronica-PS3-HD-Recomp-PC/releases/download/v1.1.10/Veronica-PKG-Extractor-v1.0.1.zip) | Ferramenta para preparar seu próprio PKG, em ZIP separado e sem alterações nesta versão. A extração pelo RPCS3 também é compatível. |
+| [CodeVeronica-PC-v1.1.11.zip](https://github.com/kastieloficial/RE-Code-Veronica-PS3-HD-Recomp-PC/releases/download/v1.1.11/CodeVeronica-PC-v1.1.11.zip) | Port para Windows com launcher e suporte EU/JP/US. Extraia tudo e abra **Code Veronica.exe**. |
+| [Veronica-PKG-Extractor-v1.0.1.zip](https://github.com/kastieloficial/RE-Code-Veronica-PS3-HD-Recomp-PC/releases/download/v1.1.11/Veronica-PKG-Extractor-v1.0.1.zip) | Ferramenta para preparar seu próprio PKG, em ZIP separado e sem alterações nesta versão. A extração pelo RPCS3 também é compatível. |
+| [Pacote de texturas HD (Google Drive)](https://drive.google.com/file/d/1t6yVG1yEC5dl3Td6jT4rhFj1EEwmbsAZ/view?usp=sharing) | Texturas HD da comunidade, opcionais, para as versões americana, europeia e japonesa, adaptadas para este projeto. Créditos, canais e instruções: [TEXTURAS-HD-COMUNIDADE.md](projects/code_veronica/TEXTURAS-HD-COMUNIDADE.md). |
 | [CodeVeronica-LiveSplit-Speedrun-v1.0.zip](https://github.com/kastiellcontato-design/Code-Veronica-Recomp/releases/download/v1.0/CodeVeronica-LiveSplit-Speedrun-v1.0.zip) | Splits Any%/S-Rank e instruções do LiveSplit da publicação anterior. |
 
 Inclui instruções em português e inglês. Arquivos e licenças do jogo original não estão incluídos. [Releases](https://github.com/kastieloficial/RE-Code-Veronica-PS3-HD-Recomp-PC/releases).

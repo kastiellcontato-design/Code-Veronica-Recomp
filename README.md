@@ -18,16 +18,17 @@ Replay the PS3 version on PC. Practice routes with a native SRT, room selection 
 > [!IMPORTANT]
 > **No game files are included.** This repository and its releases contain only the port: no game data, no game executable and no code generated from it. You need your **own original copy** of the PS3 game (PSN release). *Resident Evil*, *Code: Veronica* and all related names, characters and images are trademarks and copyrights of **Capcom**. This is a fan project. It is **not affiliated with, authorized or endorsed by Capcom or Sony Interactive Entertainment**.
 
-## Downloads — v1.1.10
+## Downloads — v1.1.11
 
-Optional modern controls inspired by **Resident Evil HD Remaster** and **Resident Evil 0 HD Remaster**, with remappable analog sticks, are now available. Keyboard defaults: **WASD for the left stick, arrow keys for the D-pad**. Enable Modern under **Recomp Settings → Gameplay → Movement style**; Classic remains the default. Saved mappings are preserved; use **Restore defaults** to adopt the new keyboard layout.
+New in v1.1.11: a ready-made **HD texture pack** (4K-class images by **ewgeha**, **SonicB00M** and **JuanchoTexHD**, adapted to this project by Kastiel) for the US, EU and JP versions, with credits in [TEXTURAS-HD-COMUNIDADE.md](projects/code_veronica/TEXTURAS-HD-COMUNIDADE.md); a **faster launcher** that now **comes back when you close the game window**; the **F9 texture switch fixed**; and the Modern movement option now says its gameplay is similar to Resident Evil HD Remaster and Resident Evil 0 HD Remaster. Optional modern controls inspired by **Resident Evil HD Remaster** and **Resident Evil 0 HD Remaster**, with remappable analog sticks, are now available. Keyboard defaults: **WASD for the left stick, arrow keys for the D-pad**. Enable Modern under **Recomp Settings → Gameplay → Movement style**; Classic remains the default. Saved mappings are preserved; use **Restore defaults** to adopt the new keyboard layout.
 
-[**RE Code Veronica Recomp Release v1.1.10**](https://github.com/kastieloficial/RE-Code-Veronica-PS3-HD-Recomp-PC/releases/tag/v1.1.10)
+[**RE Code Veronica Recomp Release v1.1.11**](https://github.com/kastieloficial/RE-Code-Veronica-PS3-HD-Recomp-PC/releases/tag/v1.1.11)
 
 | Download | Contents |
 |---|---|
-| [CodeVeronica-PC-v1.1.10.zip](https://github.com/kastieloficial/RE-Code-Veronica-PS3-HD-Recomp-PC/releases/download/v1.1.10/CodeVeronica-PC-v1.1.10.zip) | Windows port with launcher and EU/JP/US support. Extract everything and open **Code Veronica.exe**. |
-| [Veronica-PKG-Extractor-v1.0.1.zip](https://github.com/kastieloficial/RE-Code-Veronica-PS3-HD-Recomp-PC/releases/download/v1.1.10/Veronica-PKG-Extractor-v1.0.1.zip) | Separate, unchanged PKG preparation tool for your own game; RPCS3 extraction is also supported. |
+| [CodeVeronica-PC-v1.1.11.zip](https://github.com/kastieloficial/RE-Code-Veronica-PS3-HD-Recomp-PC/releases/download/v1.1.11/CodeVeronica-PC-v1.1.11.zip) | Windows port with launcher and EU/JP/US support. Extract everything and open **Code Veronica.exe**. |
+| [Veronica-PKG-Extractor-v1.0.1.zip](https://github.com/kastieloficial/RE-Code-Veronica-PS3-HD-Recomp-PC/releases/download/v1.1.11/Veronica-PKG-Extractor-v1.0.1.zip) | Separate, unchanged PKG preparation tool for your own game; RPCS3 extraction is also supported. |
+| [HD texture pack (Google Drive)](https://drive.google.com/file/d/1t6yVG1yEC5dl3Td6jT4rhFj1EEwmbsAZ/view?usp=sharing) | Optional community HD textures for the US, EU and JP versions, adapted to this project. Credits, channels and install steps: [TEXTURAS-HD-COMUNIDADE.md](projects/code_veronica/TEXTURAS-HD-COMUNIDADE.md). |
 | [CodeVeronica-LiveSplit-Speedrun-v1.0.zip](https://github.com/kastiellcontato-design/Code-Veronica-Recomp/releases/download/v1.0/CodeVeronica-LiveSplit-Speedrun-v1.0.zip) | Previous LiveSplit Any%/S-Rank split lists and setup instructions. |
 
 English and Portuguese instructions are included. Original game files and licenses are not included. [Releases](https://github.com/kastieloficial/RE-Code-Veronica-PS3-HD-Recomp-PC/releases).
